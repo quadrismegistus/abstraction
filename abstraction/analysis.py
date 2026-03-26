@@ -243,10 +243,55 @@ def get_score_columns(df):
 
 
 # ---------------------------------------------------------------------------
-# Quadratic fit: score ~ β₀ + β₁·year + β₂·year²
+# Corpus dummy matrix
 # ---------------------------------------------------------------------------
 
-def fit_quadratic(years, scores):
+def _make_dummies(groups):
+    """Build a dummy matrix from group labels (dropping the first level)."""
+    groups = np.asarray(groups)
+    levels = sorted(set(groups))
+    if len(levels) <= 1:
+        return np.zeros((len(groups), 0))
+    # drop first level (reference category)
+    dummies = np.column_stack([
+        (groups == lvl).astype(float) for lvl in levels[1:]
+    ])
+    return dummies
+
+
+def _ols_with_pvalue(X, s, coef_idx):
+    """Fit OLS, return (beta, p-value, R²) for coefficient at coef_idx."""
+    try:
+        beta, residuals, rank, sv = np.linalg.lstsq(X, s, rcond=None)
+    except np.linalg.LinAlgError:
+        return None, np.nan, np.nan
+
+    s_pred = X @ beta
+    ss_res = np.sum((s - s_pred) ** 2)
+    ss_tot = np.sum((s - s.mean()) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    n, p = X.shape
+    if n > p:
+        mse = ss_res / (n - p)
+        try:
+            cov = mse * np.linalg.inv(X.T @ X)
+            se = np.sqrt(cov[coef_idx, coef_idx])
+            t_stat = beta[coef_idx] / se
+            pval = 2 * stats.t.sf(abs(t_stat), n - p)
+        except np.linalg.LinAlgError:
+            pval = np.nan
+    else:
+        pval = np.nan
+
+    return beta, pval, r2
+
+
+# ---------------------------------------------------------------------------
+# Quadratic fit: score ~ β₀ + β₁·year + β₂·year² [+ corpus dummies]
+# ---------------------------------------------------------------------------
+
+def fit_quadratic(years, scores, groups=None):
     """Fit a quadratic model and return summary statistics.
 
     Parameters
@@ -255,6 +300,8 @@ def fit_quadratic(years, scores):
         Year values.
     scores : array-like
         Score values (e.g. abstractness).
+    groups : array-like, optional
+        Corpus/group labels for fixed-effect dummies.
 
     Returns
     -------
@@ -263,6 +310,7 @@ def fit_quadratic(years, scores):
     mask = np.isfinite(years) & np.isfinite(scores)
     y = np.asarray(years)[mask].astype(float)
     s = np.asarray(scores)[mask].astype(float)
+    g = np.asarray(groups)[mask] if groups is not None else None
     if len(y) < 10:
         return _empty_quad()
 
@@ -270,32 +318,18 @@ def fit_quadratic(years, scores):
     y_center = y.mean()
     yc = y - y_center
 
+    # design matrix: [intercept, year, year², corpus_dummies...]
     X = np.column_stack([np.ones(len(yc)), yc, yc ** 2])
-    try:
-        beta, residuals, rank, sv = np.linalg.lstsq(X, s, rcond=None)
-    except np.linalg.LinAlgError:
+    if g is not None:
+        dummies = _make_dummies(g)
+        if dummies.shape[1] > 0:
+            X = np.column_stack([X, dummies])
+
+    beta, beta2_p, r2 = _ols_with_pvalue(X, s, coef_idx=2)
+    if beta is None:
         return _empty_quad()
 
-    b0, b1, b2 = beta
-    s_pred = X @ beta
-    ss_res = np.sum((s - s_pred) ** 2)
-    ss_tot = np.sum((s - s.mean()) ** 2)
-    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-
-    # p-value for β₂
-    n = len(y)
-    p = X.shape[1]
-    if n > p:
-        mse = ss_res / (n - p)
-        try:
-            cov = mse * np.linalg.inv(X.T @ X)
-            se_b2 = np.sqrt(cov[2, 2])
-            t_stat = b2 / se_b2
-            beta2_p = 2 * stats.t.sf(abs(t_stat), n - p)
-        except np.linalg.LinAlgError:
-            beta2_p = np.nan
-    else:
-        beta2_p = np.nan
+    b0, b1, b2 = beta[0], beta[1], beta[2]
 
     # peak year (vertex of parabola)
     peak_year = -b1 / (2 * b2) + y_center if b2 != 0 else np.nan
@@ -307,7 +341,7 @@ def fit_quadratic(years, scores):
         "quad_beta2_p": beta2_p,
         "quad_peak_year": peak_year,
         "quad_r2": r2,
-        "quad_n": n,
+        "quad_n": len(y),
     }
 
 
@@ -322,7 +356,8 @@ def _empty_quad():
 # Piecewise linear fit: two slopes joined at a breakpoint
 # ---------------------------------------------------------------------------
 
-def fit_piecewise(years, scores, break_year=None, search_range=(1650, 1850), search_step=10):
+def fit_piecewise(years, scores, groups=None, break_year=None,
+                  search_range=(1650, 1850), search_step=10):
     """Fit a piecewise linear model with one breakpoint.
 
     Parameters
@@ -331,6 +366,8 @@ def fit_piecewise(years, scores, break_year=None, search_range=(1650, 1850), sea
         Year values.
     scores : array-like
         Score values.
+    groups : array-like, optional
+        Corpus/group labels for fixed-effect dummies.
     break_year : int, optional
         Fixed breakpoint. If None, searches for the best fit.
     search_range : tuple
@@ -346,11 +383,12 @@ def fit_piecewise(years, scores, break_year=None, search_range=(1650, 1850), sea
     mask = np.isfinite(years) & np.isfinite(scores)
     y = np.asarray(years)[mask].astype(float)
     s = np.asarray(scores)[mask].astype(float)
+    g = np.asarray(groups)[mask] if groups is not None else None
     if len(y) < 20:
         return _empty_piecewise()
 
     if break_year is not None:
-        return _fit_piecewise_at(y, s, break_year)
+        return _fit_piecewise_at(y, s, break_year, g)
 
     # grid search for best breakpoint
     best = None
@@ -361,34 +399,62 @@ def fit_piecewise(years, scores, break_year=None, search_range=(1650, 1850), sea
         n_after = np.sum(y > by)
         if n_before < 10 or n_after < 10:
             continue
-        result = _fit_piecewise_at(y, s, by)
+        result = _fit_piecewise_at(y, s, by, g)
         if result["pw_r2"] > best_r2:
             best_r2 = result["pw_r2"]
             best = result
     return best if best is not None else _empty_piecewise()
 
 
-def _fit_piecewise_at(y, s, break_year):
-    """Fit piecewise linear at a specific breakpoint."""
+def _fit_piecewise_at(y, s, break_year, groups=None):
+    """Fit piecewise linear at a specific breakpoint, with optional corpus dummies.
+
+    Model: score ~ slope_before * year_before + slope_after * year_after + corpus_dummies
+    where year_before = year if year <= break, else 0 (and vice versa).
+    """
     before = y <= break_year
     after = y > break_year
-    n_before = before.sum()
-    n_after = after.sum()
+    n_before = int(before.sum())
+    n_after = int(after.sum())
 
     if n_before < 5 or n_after < 5:
         return _empty_piecewise()
 
-    # fit each segment
-    slope_b, intercept_b, r_b, p_b, se_b = stats.linregress(y[before], s[before])
-    slope_a, intercept_a, r_a, p_a, se_a = stats.linregress(y[after], s[after])
+    # Design matrix: [intercept, year_before, year_after, dummies...]
+    # year_before = year - break for year <= break, 0 otherwise
+    # year_after = year - break for year > break, 0 otherwise
+    yb = np.where(before, y - break_year, 0.0)
+    ya = np.where(after, y - break_year, 0.0)
+    X = np.column_stack([np.ones(len(y)), yb, ya])
+    if groups is not None:
+        dummies = _make_dummies(groups)
+        if dummies.shape[1] > 0:
+            X = np.column_stack([X, dummies])
 
-    # overall R² of the piecewise model
-    s_pred = np.empty_like(s)
-    s_pred[before] = intercept_b + slope_b * y[before]
-    s_pred[after] = intercept_a + slope_a * y[after]
+    try:
+        beta, residuals, rank, sv = np.linalg.lstsq(X, s, rcond=None)
+    except np.linalg.LinAlgError:
+        return _empty_piecewise()
+
+    slope_b, slope_a = beta[1], beta[2]
+    s_pred = X @ beta
     ss_res = np.sum((s - s_pred) ** 2)
     ss_tot = np.sum((s - s.mean()) ** 2)
     r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
+
+    # p-values for the two slope coefficients
+    n, p = X.shape
+    p_b, p_a = np.nan, np.nan
+    if n > p:
+        mse = ss_res / (n - p)
+        try:
+            cov = mse * np.linalg.inv(X.T @ X)
+            se_b = np.sqrt(cov[1, 1])
+            se_a = np.sqrt(cov[2, 2])
+            p_b = 2 * stats.t.sf(abs(slope_b / se_b), n - p)
+            p_a = 2 * stats.t.sf(abs(slope_a / se_a), n - p)
+        except np.linalg.LinAlgError:
+            pass
 
     return {
         "pw_break_year": break_year,
@@ -398,8 +464,8 @@ def _fit_piecewise_at(y, s, break_year):
         "pw_slope_after_p": p_a,
         "pw_r2": r2,
         "pw_n": len(y),
-        "pw_n_before": int(n_before),
-        "pw_n_after": int(n_after),
+        "pw_n_before": n_before,
+        "pw_n_after": n_after,
     }
 
 
@@ -422,11 +488,18 @@ DEFAULT_AGG_BIN = 10  # aggregate by decade
 
 def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
             min_year=DEFAULT_MIN_YEAR, max_year=DEFAULT_MAX_YEAR,
-            agg_bin=DEFAULT_AGG_BIN, min_texts_per_bin=3, **kw):
+            agg_bin=DEFAULT_AGG_BIN, min_texts_per_bin=3,
+            corpus_col=None, **kw):
     """Run both quadratic and piecewise fits on a scored DataFrame.
 
     By default, aggregates scores by decade before fitting, giving each
     time period equal weight regardless of how many texts it contains.
+
+    When corpus_col is provided, includes corpus fixed effects (dummy
+    variables) to absorb baseline differences between corpora. In this
+    mode, aggregation is by (decade, corpus) to preserve corpus identity,
+    and the regressions estimate the shared time trend after controlling
+    for corpus-level intercepts.
 
     Parameters
     ----------
@@ -443,35 +516,54 @@ def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
         Set to None to fit on individual texts.
     min_texts_per_bin : int
         Drop bins with fewer texts than this.
+    corpus_col : str, optional
+        Column with corpus labels. If provided, includes corpus fixed
+        effects in the regression to control for baseline differences.
 
     Returns
     -------
     dict combining quadratic and piecewise results, plus metadata.
     """
-    sub = df[[year_col, score_col]].copy()
+    keep_cols = [year_col, score_col]
+    if corpus_col and corpus_col in df.columns:
+        keep_cols.append(corpus_col)
+    sub = df[keep_cols].copy()
     sub[year_col] = pd.to_numeric(sub[year_col], errors="coerce")
-    sub = sub.dropna()
+    sub = sub.dropna(subset=[year_col, score_col])
     if min_year is not None:
         sub = sub[sub[year_col] >= min_year]
     if max_year is not None:
         sub = sub[sub[year_col] <= max_year]
 
     n_texts = len(sub)
+    groups = None
 
     if agg_bin is not None and len(sub) > 0:
-        sub = sub.copy()
         sub["_bin"] = (sub[year_col] // agg_bin) * agg_bin
-        agg = sub.groupby("_bin").agg(
-            score=(score_col, "mean"),
-            n_texts=(score_col, "count"),
-        ).reset_index()
-        agg = agg[agg.n_texts >= min_texts_per_bin]
-        years = agg["_bin"].values.astype(float)
-        scores = agg["score"].values
+        if corpus_col and corpus_col in sub.columns:
+            # aggregate by (decade, corpus) to preserve corpus identity
+            agg = sub.groupby(["_bin", corpus_col]).agg(
+                score=(score_col, "mean"),
+                n_texts=(score_col, "count"),
+            ).reset_index()
+            agg = agg[agg.n_texts >= min_texts_per_bin]
+            years = agg["_bin"].values.astype(float)
+            scores = agg["score"].values
+            groups = agg[corpus_col].values
+        else:
+            agg = sub.groupby("_bin").agg(
+                score=(score_col, "mean"),
+                n_texts=(score_col, "count"),
+            ).reset_index()
+            agg = agg[agg.n_texts >= min_texts_per_bin]
+            years = agg["_bin"].values.astype(float)
+            scores = agg["score"].values
         n_bins = len(agg)
     else:
         years = sub[year_col].values
         scores = sub[score_col].values
+        if corpus_col and corpus_col in sub.columns:
+            groups = sub[corpus_col].values
         n_bins = len(sub)
 
     result = {"score_col": score_col, "n_texts": n_texts, "n_bins": n_bins}
@@ -482,8 +574,11 @@ def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
         result["year_min"] = np.nan
         result["year_max"] = np.nan
 
-    result.update(fit_quadratic(years, scores))
-    result.update(fit_piecewise(years, scores, **kw))
+    if groups is not None:
+        result["n_corpora"] = len(set(groups))
+
+    result.update(fit_quadratic(years, scores, groups=groups))
+    result.update(fit_piecewise(years, scores, groups=groups, **kw))
     return result
 
 
@@ -551,11 +646,14 @@ def fit_arc_by_genre(df, score_col="Abs-Conc.Median.median",
 
 
 def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
-                         scores_dir=None, version="v7", min_texts=30, **kw):
+                         scores_dir=None, version="v7", min_texts=30,
+                         corpus_fixed_effects=True, **kw):
     """Load all scored corpora, harmonize genres, and fit arc per genre.
 
     Pools texts across corpora by harmonized genre, then fits one arc
-    per genre. Returns a DataFrame of results.
+    per genre. When corpus_fixed_effects=True (default), includes corpus
+    dummy variables to absorb baseline differences between corpora.
+    Returns a DataFrame of results.
     """
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
@@ -579,6 +677,8 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
         return pd.DataFrame()
 
     combined = pd.concat(all_dfs, ignore_index=True)
+    if corpus_fixed_effects:
+        kw["corpus_col"] = "corpus_name"
     return fit_arc_by_genre(combined, score_col=score_col,
                             min_texts=min_texts, **kw)
 
@@ -589,8 +689,10 @@ def summarize_arc(result):
     corpus = result.get("corpus", "?")
     n_texts = result.get('n_texts', result.get('n', '?'))
     n_bins = result.get('n_bins', '')
+    n_corpora = result.get('n_corpora', '')
     bin_str = f", {n_bins} bins" if n_bins and n_bins != n_texts else ""
-    lines.append(f"=== {corpus} ({n_texts} texts{bin_str}, {result.get('year_min', '?')}-{result.get('year_max', '?')}) ===")
+    corp_str = f", {n_corpora} corpora" if n_corpora else ""
+    lines.append(f"=== {corpus} ({n_texts} texts{bin_str}{corp_str}, {result.get('year_min', '?')}-{result.get('year_max', '?')}) ===")
 
     # quadratic
     b2 = result.get("quad_beta2", np.nan)
