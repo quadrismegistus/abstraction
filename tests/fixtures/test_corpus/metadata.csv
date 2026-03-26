@@ -1,0 +1,4 @@
+id,author,title,year,major_genre
+text1,Jane Austen,Pride and Prejudice,1813,Novel
+text2,Herman Melville,Moby-Dick,1851,Novel
+subdir/text3,Virginia Woolf,To the Lighthouse,1927,Novel
