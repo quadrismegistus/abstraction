@@ -215,11 +215,16 @@ def _empty_piecewise():
 
 DEFAULT_MIN_YEAR = 1600
 DEFAULT_MAX_YEAR = 2000
+DEFAULT_AGG_BIN = 10  # aggregate by decade
 
 
 def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
-            min_year=DEFAULT_MIN_YEAR, max_year=DEFAULT_MAX_YEAR, **kw):
+            min_year=DEFAULT_MIN_YEAR, max_year=DEFAULT_MAX_YEAR,
+            agg_bin=DEFAULT_AGG_BIN, min_texts_per_bin=3, **kw):
     """Run both quadratic and piecewise fits on a scored DataFrame.
+
+    By default, aggregates scores by decade before fitting, giving each
+    time period equal weight regardless of how many texts it contains.
 
     Parameters
     ----------
@@ -231,6 +236,11 @@ def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
         Column name for the year.
     min_year, max_year : int, optional
         Restrict analysis to a year range.
+    agg_bin : int or None
+        Bin size in years for aggregation (default 10 = decades).
+        Set to None to fit on individual texts.
+    min_texts_per_bin : int
+        Drop bins with fewer texts than this.
 
     Returns
     -------
@@ -242,11 +252,26 @@ def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
     if max_year is not None:
         sub = sub[sub[year_col] <= max_year]
 
-    years = sub[year_col].values
-    scores = sub[score_col].values
+    n_texts = len(sub)
 
-    result = {"score_col": score_col, "n": len(sub)}
-    if len(sub) > 0:
+    if agg_bin is not None and len(sub) > 0:
+        sub = sub.copy()
+        sub["_bin"] = (sub[year_col] // agg_bin) * agg_bin
+        agg = sub.groupby("_bin").agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        years = agg["_bin"].values.astype(float)
+        scores = agg["score"].values
+        n_bins = len(agg)
+    else:
+        years = sub[year_col].values
+        scores = sub[score_col].values
+        n_bins = len(sub)
+
+    result = {"score_col": score_col, "n_texts": n_texts, "n_bins": n_bins}
+    if len(years) > 0:
         result["year_min"] = int(years.min())
         result["year_max"] = int(years.max())
     else:
@@ -295,7 +320,10 @@ def summarize_arc(result):
     """Format an arc result dict as a human-readable string."""
     lines = []
     corpus = result.get("corpus", "?")
-    lines.append(f"=== {corpus} ({result.get('n', '?')} texts, {result.get('year_min', '?')}-{result.get('year_max', '?')}) ===")
+    n_texts = result.get('n_texts', result.get('n', '?'))
+    n_bins = result.get('n_bins', '')
+    bin_str = f", {n_bins} bins" if n_bins and n_bins != n_texts else ""
+    lines.append(f"=== {corpus} ({n_texts} texts{bin_str}, {result.get('year_min', '?')}-{result.get('year_max', '?')}) ===")
 
     # quadratic
     b2 = result.get("quad_beta2", np.nan)
