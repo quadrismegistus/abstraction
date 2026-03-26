@@ -267,6 +267,15 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
             return htid
         _try_merge(None, meta["id"].apply(_htid_to_path))
 
+        # 3-segment→2-segment: "chi/086/546157" -> "chi/086546157"
+        # (freqs walk produces 3-level paths but metadata uses 2-level)
+        def _collapse_3seg(sid):
+            parts = sid.split("/")
+            if len(parts) == 3:
+                return f"{parts[0]}/{parts[1]}{parts[2]}"
+            return sid
+        _try_merge(score_ids.apply(_collapse_3seg))
+
     if harmonize:
         merged = harmonize_genre(merged, corpus_name=corpus_name)
     if "year" in merged.columns:
@@ -535,7 +544,7 @@ EXCLUDE_CORPORA = {
 # Keys are snake_case corpus names; values are (min_year, max_year).
 # Use None for an open bound, e.g. ("chicago", (None, 1930)).
 CORPUS_YEAR_RANGE = {
-    # "corpus_name": (min_year, max_year),
+    "chadwyck": (1500, 1900),
 }
 
 
