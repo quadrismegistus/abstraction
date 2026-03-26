@@ -356,9 +356,13 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
 # ---------------------------------------------------------------------------
 
 
+_YLABEL_CONC = "Abstractness \u2212 Concreteness\n(corpus-adjusted)"
+_YLABEL_ABS = "Concreteness \u2212 Abstractness\n(corpus-adjusted)"
+
+
 def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
-             show_lines=False, show_se=True,
-             ylabel="Abstractness − Concreteness (corpus-adjusted)",
+             show_lines=False, show_se=True, invert=False,
+             ylabel=None,
              save_to=None, width=10, height=6):
     """Plot corpus-adjusted arc from adjust_scores() output.
 
@@ -376,8 +380,16 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
     show_se : bool
         If True and fitted_se column exists, show ±1 SE ribbon around
         the fitted trend line.
+    invert : bool
+        If True, negate scores so that higher = more abstract.
     """
     df = adj_df.copy()
+    if invert:
+        for col in ("score", "adjusted", "fitted"):
+            if col in df.columns:
+                df[col] = -df[col]
+    if ylabel is None:
+        ylabel = _YLABEL_ABS if invert else _YLABEL_CONC
     has_corpus = "corpus" in df.columns
 
     p9.options.figure_size = (width, height)
@@ -447,7 +459,8 @@ def plot_arc_by_genre(combined_df, genres=None,
                       score_col="Abs-Conc.Median.median",
                       model="quadratic", show_raw=False,
                       show_lines=False, show_facet=True,
-                      show_se=True, save_to=None,
+                      show_se=True, invert=False,
+                      ylabel=None, save_to=None,
                       ncol=2, width=14, height=None, **adjust_kw):
     """Plot adjusted arcs for multiple genres.
 
@@ -469,6 +482,8 @@ def plot_arc_by_genre(combined_df, genres=None,
         If True (default), show each genre in a separate facet panel,
         colored by corpus. If False, plot all genres on one panel,
         colored by genre and shaped by corpus.
+    invert : bool
+        If True, negate scores so that higher = more abstract.
     ncol : int
         Number of columns in facet grid (only used when show_facet=True).
     """
@@ -493,6 +508,12 @@ def plot_arc_by_genre(combined_df, genres=None,
         return None
 
     df = pd.concat(panels, ignore_index=True)
+    if invert:
+        for col in ("score", "adjusted", "fitted"):
+            if col in df.columns:
+                df[col] = -df[col]
+    if ylabel is None:
+        ylabel = _YLABEL_ABS if invert else _YLABEL_CONC
     has_corpus = "corpus" in df.columns
     has_n = "n_texts" in df.columns
 
@@ -594,7 +615,7 @@ def plot_arc_by_genre(combined_df, genres=None,
                             inherit_aes=False)
 
     fig += p9.xlab("Year")
-    fig += p9.ylab("Abstractness − Concreteness\n(corpus-adjusted)")
+    fig += p9.ylab(ylabel)
 
     if save_to:
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
