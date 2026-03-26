@@ -13,17 +13,18 @@ def cmd_score_corpus(args):
     import os
     from .config import PATH_CORPORA, SCORES_DIR
     from .scoring import score_corpus_freqs
-    from .utils import save_df
 
     corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    df = score_corpus_freqs(corpus_dir)
+    out_dir = os.path.join(SCORES_DIR, "v7")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{args.corpus}.csv")
+    if args.force and os.path.exists(out_path):
+        os.remove(out_path)
+    df = score_corpus_freqs(corpus_dir, output_path=out_path)
     if len(df):
-        os.makedirs(SCORES_DIR, exist_ok=True)
-        out_path = os.path.join(SCORES_DIR, f"{args.corpus}.pkl")
-        save_df(df, out_path)
         print(f"Scored {len(df)} texts -> {out_path}")
     else:
         print(f"No freqs files found in {corpus_dir}/freqs/")

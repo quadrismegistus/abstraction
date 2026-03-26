@@ -1,8 +1,20 @@
+import json
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from abstraction.scoring import score_freqs, score_words
+from abstraction.scoring import (
+    score_freqs,
+    score_words,
+    _walk_freqs,
+    _score_freqs_allnorms,
+    _get_csv_columns,
+    _load_done_ids,
+    score_corpus_freqs,
+    score_all_corpora,
+)
 
 
 class TestScoreFreqs:
@@ -85,3 +97,287 @@ class TestScoreWords:
         self._patch_norms(monkeypatch)
         df = score_words("rock face virtue justice")
         assert list(df["position"]) == sorted(df["position"].tolist())
+
+
+# ---------------------------------------------------------------------------
+# Helpers for corpus-level scoring tests
+# ---------------------------------------------------------------------------
+
+def _make_fake_allnorms():
+    """Return a small allnorms DataFrame indexed by word."""
+    return pd.DataFrame(
+        {
+            "Conc.Brys": {"rock": 4.5, "virtue": 1.2, "face": 3.8},
+            "Imag.MRC": {"rock": 5.0, "virtue": 2.1, "face": 4.0},
+        }
+    )
+
+
+def _write_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+# ---------------------------------------------------------------------------
+# _walk_freqs
+# ---------------------------------------------------------------------------
+
+
+class TestWalkFreqs:
+    def test_flat_files(self, tmp_path):
+        freqs = tmp_path / "freqs"
+        freqs.mkdir()
+        (freqs / "text001.json").write_text("{}")
+        (freqs / "text002.json").write_text("{}")
+        result = dict(_walk_freqs(str(freqs)))
+        assert set(result.keys()) == {"text001", "text002"}
+        for v in result.values():
+            assert v.endswith(".json")
+
+    def test_nested_dirs_slash_ids(self, tmp_path):
+        freqs = tmp_path / "freqs"
+        sub = freqs / "subdir"
+        sub.mkdir(parents=True)
+        (sub / "abc.json").write_text("{}")
+        result = dict(_walk_freqs(str(freqs)))
+        assert "subdir/abc" in result
+
+    def test_non_json_ignored(self, tmp_path):
+        freqs = tmp_path / "freqs"
+        freqs.mkdir()
+        (freqs / "notes.txt").write_text("hello")
+        (freqs / "data.csv").write_text("a,b")
+        (freqs / "real.json").write_text("{}")
+        result = dict(_walk_freqs(str(freqs)))
+        assert list(result.keys()) == ["real"]
+
+    def test_empty_dir(self, tmp_path):
+        freqs = tmp_path / "freqs"
+        freqs.mkdir()
+        assert list(_walk_freqs(str(freqs))) == []
+
+
+# ---------------------------------------------------------------------------
+# _score_freqs_allnorms
+# ---------------------------------------------------------------------------
+
+
+class TestScoreFreqsAllnorms:
+    def test_normal_case(self, tmp_path):
+        path = tmp_path / "t.json"
+        _write_json(str(path), {"rock": 2, "virtue": 3})
+        allnorms = _make_fake_allnorms()
+        scores = _score_freqs_allnorms(str(path), allnorms)
+        expected_conc = (4.5 * 2 + 1.2 * 3) / 5
+        expected_imag = (5.0 * 2 + 2.1 * 3) / 5
+        assert abs(scores["Conc.Brys"] - expected_conc) < 1e-6
+        assert abs(scores["Imag.MRC"] - expected_imag) < 1e-6
+
+    def test_empty_freqs(self, tmp_path):
+        path = tmp_path / "empty.json"
+        _write_json(str(path), {})
+        allnorms = _make_fake_allnorms()
+        assert _score_freqs_allnorms(str(path), allnorms) == {}
+
+    def test_invalid_json(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text("not json at all")
+        allnorms = _make_fake_allnorms()
+        assert _score_freqs_allnorms(str(path), allnorms) == {}
+
+    def test_words_not_in_norms(self, tmp_path):
+        path = tmp_path / "unknown.json"
+        _write_json(str(path), {"xyzzy": 10, "qqq": 5})
+        allnorms = _make_fake_allnorms()
+        assert _score_freqs_allnorms(str(path), allnorms) == {}
+
+    def test_mixed_known_unknown(self, tmp_path):
+        path = tmp_path / "mix.json"
+        _write_json(str(path), {"rock": 1, "xyzzy": 100})
+        allnorms = _make_fake_allnorms()
+        scores = _score_freqs_allnorms(str(path), allnorms)
+        # only rock matched, count=1
+        assert abs(scores["Conc.Brys"] - 4.5) < 1e-6
+
+    def test_case_insensitive(self, tmp_path):
+        path = tmp_path / "upper.json"
+        _write_json(str(path), {"ROCK": 1, "Virtue": 1})
+        allnorms = _make_fake_allnorms()
+        scores = _score_freqs_allnorms(str(path), allnorms)
+        expected = (4.5 + 1.2) / 2
+        assert abs(scores["Conc.Brys"] - expected) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# _get_csv_columns
+# ---------------------------------------------------------------------------
+
+
+class TestGetCsvColumns:
+    def test_id_first_then_sorted(self):
+        allnorms = _make_fake_allnorms()
+        cols = _get_csv_columns(allnorms)
+        assert cols[0] == "id"
+        assert cols[1:] == sorted(allnorms.columns.tolist())
+
+    def test_single_column(self):
+        allnorms = pd.DataFrame({"Z.Score": {"a": 1.0}})
+        assert _get_csv_columns(allnorms) == ["id", "Z.Score"]
+
+
+# ---------------------------------------------------------------------------
+# _load_done_ids
+# ---------------------------------------------------------------------------
+
+
+class TestLoadDoneIds:
+    def test_existing_file(self, tmp_path):
+        csv_path = tmp_path / "done.csv"
+        csv_path.write_text("id,score\nabc,1.0\ndef,2.0\n")
+        ids = _load_done_ids(str(csv_path))
+        assert ids == {"abc", "def"}
+
+    def test_missing_file(self, tmp_path):
+        csv_path = tmp_path / "nonexistent.csv"
+        assert _load_done_ids(str(csv_path)) == set()
+
+    def test_empty_file(self, tmp_path):
+        csv_path = tmp_path / "empty.csv"
+        csv_path.write_text("")
+        assert _load_done_ids(str(csv_path)) == set()
+
+    def test_header_only(self, tmp_path):
+        csv_path = tmp_path / "header.csv"
+        csv_path.write_text("id,score\n")
+        ids = _load_done_ids(str(csv_path))
+        assert ids == set()
+
+
+# ---------------------------------------------------------------------------
+# score_corpus_freqs
+# ---------------------------------------------------------------------------
+
+
+class TestScoreCorpusFreqs:
+    def _setup_corpus(self, tmp_path):
+        """Create a fake corpus dir with freqs/ containing two JSON files."""
+        corpus = tmp_path / "my_corpus"
+        freqs = corpus / "freqs"
+        freqs.mkdir(parents=True)
+        _write_json(str(freqs / "text1.json"), {"rock": 2, "virtue": 3})
+        _write_json(str(freqs / "text2.json"), {"face": 4})
+        return str(corpus)
+
+    def test_in_memory(self, tmp_path):
+        corpus_dir = self._setup_corpus(tmp_path)
+        allnorms = _make_fake_allnorms()
+        df = score_corpus_freqs(corpus_dir, allnorms=allnorms)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 2
+        assert "id" in df.columns
+        assert set(df["id"]) == {"text1", "text2"}
+
+    def test_with_output_path(self, tmp_path):
+        corpus_dir = self._setup_corpus(tmp_path)
+        allnorms = _make_fake_allnorms()
+        out = str(tmp_path / "scores.csv")
+        df = score_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out)
+        assert os.path.exists(out)
+        saved = pd.read_csv(out)
+        assert len(saved) == 2
+        assert set(saved["id"]) == {"text1", "text2"}
+
+    def test_resumability_no_duplicates(self, tmp_path):
+        corpus_dir = self._setup_corpus(tmp_path)
+        allnorms = _make_fake_allnorms()
+        out = str(tmp_path / "scores.csv")
+        # first run
+        score_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out)
+        # second run (should skip existing IDs)
+        score_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out)
+        saved = pd.read_csv(out)
+        assert len(saved) == 2  # no duplicates
+
+    def test_no_freqs_dir(self, tmp_path):
+        corpus_dir = str(tmp_path / "empty_corpus")
+        os.makedirs(corpus_dir)
+        allnorms = _make_fake_allnorms()
+        df = score_corpus_freqs(corpus_dir, allnorms=allnorms)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 0
+
+    def test_columns_match_allnorms(self, tmp_path):
+        corpus_dir = self._setup_corpus(tmp_path)
+        allnorms = _make_fake_allnorms()
+        df = score_corpus_freqs(corpus_dir, allnorms=allnorms)
+        expected_cols = _get_csv_columns(allnorms)
+        assert list(df.columns) == expected_cols
+
+
+# ---------------------------------------------------------------------------
+# score_all_corpora
+# ---------------------------------------------------------------------------
+
+
+class TestScoreAllCorpora:
+    def _setup_corpora_dir(self, tmp_path):
+        """Create a fake corpora directory with two corpus subdirs."""
+        corpora = tmp_path / "corpora"
+        for name in ["corpus_a", "corpus_b"]:
+            freqs = corpora / name / "freqs"
+            freqs.mkdir(parents=True)
+            _write_json(str(freqs / "t1.json"), {"rock": 1})
+        # corpus_c has no freqs dir — should be skipped
+        (corpora / "corpus_c").mkdir(parents=True)
+        return str(corpora)
+
+    def test_basic(self, tmp_path, monkeypatch):
+        corpora_dir = self._setup_corpora_dir(tmp_path)
+        allnorms = _make_fake_allnorms()
+        monkeypatch.setattr("abstraction.scoring.get_allnorms", lambda: allnorms)
+        out_dir = str(tmp_path / "scores")
+        results = score_all_corpora(corpora_dir=corpora_dir, output_dir=out_dir)
+        assert "corpus_a" in results
+        assert "corpus_b" in results
+        assert "corpus_c" not in results
+        assert len(results["corpus_a"]) == 1
+        # CSVs were written under v7/
+        assert os.path.exists(os.path.join(out_dir, "v7", "corpus_a.csv"))
+
+    def test_force_flag(self, tmp_path, monkeypatch):
+        corpora_dir = self._setup_corpora_dir(tmp_path)
+        allnorms = _make_fake_allnorms()
+        monkeypatch.setattr("abstraction.scoring.get_allnorms", lambda: allnorms)
+        out_dir = str(tmp_path / "scores")
+        # first run
+        score_all_corpora(corpora_dir=corpora_dir, output_dir=out_dir)
+        csv_path = os.path.join(out_dir, "v7", "corpus_a.csv")
+        mtime1 = os.path.getmtime(csv_path)
+        # second run with force — should re-score
+        import time; time.sleep(0.05)
+        score_all_corpora(corpora_dir=corpora_dir, output_dir=out_dir, force=True)
+        mtime2 = os.path.getmtime(csv_path)
+        assert mtime2 > mtime1
+        # still only one row (no duplicates from force)
+        df = pd.read_csv(csv_path)
+        assert len(df) == 1
+
+    def test_symlink_dedup(self, tmp_path, monkeypatch):
+        """Corpora whose freqs/ resolve to the same realpath are deduplicated."""
+        corpora = tmp_path / "corpora"
+        real_freqs = corpora / "real_corpus" / "freqs"
+        real_freqs.mkdir(parents=True)
+        _write_json(str(real_freqs / "t1.json"), {"rock": 1})
+        # create a second corpus whose freqs/ is a symlink to the first
+        alias = corpora / "alias_corpus"
+        alias.mkdir(parents=True)
+        os.symlink(str(real_freqs), str(alias / "freqs"))
+
+        allnorms = _make_fake_allnorms()
+        monkeypatch.setattr("abstraction.scoring.get_allnorms", lambda: allnorms)
+        out_dir = str(tmp_path / "scores")
+        results = score_all_corpora(corpora_dir=str(corpora), output_dir=out_dir)
+        # only one of the two should be scored (first in sorted order)
+        scored_names = [n for n, df in results.items() if len(df) > 0]
+        assert len(scored_names) == 1

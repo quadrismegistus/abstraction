@@ -18,5 +18,10 @@ data/
 # Project instructions (per-machine)
 CLAUDE.md
 
+# Coverage
+coverage.xml
+htmlcov/
+.coverage
+
 # Jupyter
 .ipynb_checkpoints/

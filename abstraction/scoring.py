@@ -219,8 +219,26 @@ def _score_freqs_allnorms(path, allnorms):
     return scores[col_counts > 0].to_dict()
 
 
-def score_corpus_freqs(corpus_dir, allnorms=None):
+def _get_csv_columns(allnorms):
+    """Return the canonical column order for score CSVs."""
+    return ["id"] + sorted(allnorms.columns.tolist())
+
+
+def _load_done_ids(csv_path):
+    """Read the 'id' column from an existing score CSV, or return empty set."""
+    if not os.path.exists(csv_path):
+        return set()
+    try:
+        return set(pd.read_csv(csv_path, usecols=["id"])["id"])
+    except Exception:
+        return set()
+
+
+def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
     """Score all freqs/*.json files in a corpus directory against all norms.
+
+    If output_path is provided, appends rows to a CSV incrementally and
+    skips IDs that are already present. This makes the function resumable.
 
     Parameters
     ----------
@@ -228,6 +246,9 @@ def score_corpus_freqs(corpus_dir, allnorms=None):
         Path to a corpus directory containing a freqs/ subdirectory.
     allnorms : DataFrame, optional
         Pre-loaded allnorms DataFrame. Loaded automatically if not provided.
+    output_path : str, optional
+        Path to a CSV file for incremental output. If None, returns results
+        in memory only.
 
     Returns
     -------
@@ -240,17 +261,47 @@ def score_corpus_freqs(corpus_dir, allnorms=None):
     if allnorms is None:
         allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+    columns = _get_csv_columns(allnorms)
+
+    # check what's already done
+    done_ids = _load_done_ids(output_path) if output_path else set()
+
+    # open CSV for appending
+    csv_file = None
+    writer = None
+    if output_path:
+        file_exists = os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        csv_file = open(output_path, "a", newline="")
+        import csv
+        writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore")
+        if not file_exists:
+            writer.writeheader()
+
     rows = []
-    for text_id, path in _walk_freqs(freqs_dir):
-        scores = _score_freqs_allnorms(path, allnorms)
-        if scores:
-            scores["id"] = text_id
-            rows.append(scores)
+    try:
+        for text_id, path in _walk_freqs(freqs_dir):
+            if text_id in done_ids:
+                continue
+            scores = _score_freqs_allnorms(path, allnorms)
+            if scores:
+                scores["id"] = text_id
+                rows.append(scores)
+                if writer:
+                    writer.writerow(scores)
+    finally:
+        if csv_file:
+            csv_file.close()
+
+    if not rows and not done_ids:
+        return pd.DataFrame()
+
+    # return full DataFrame (existing + new)
+    if output_path and done_ids:
+        return pd.read_csv(output_path)
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    cols = ["id"] + [c for c in df.columns if c != "id"]
-    return df[cols]
+    return df[columns]
 
 
 def score_all_corpora(
@@ -260,9 +311,10 @@ def score_all_corpora(
 ):
     """Score all corpora that have freqs/ folders.
 
-    Saves one parquet per corpus to output_dir. Deduplicates corpora
-    whose freqs/ directories resolve to the same real path (e.g. hathi
-    subcorpora sharing a symlinked freqs/ tree).
+    Saves one CSV per corpus to output_dir/v7/, appending incrementally.
+    Resumable: skips already-scored text IDs within each corpus.
+    Deduplicates corpora whose freqs/ directories resolve to the same
+    real path (e.g. hathi subcorpora sharing a symlinked freqs/ tree).
 
     Parameters
     ----------
@@ -271,12 +323,13 @@ def score_all_corpora(
     output_dir : str
         Where to save per-corpus score files.
     force : bool
-        If False, skip corpora that already have a saved score file.
+        If True, delete existing CSVs and re-score from scratch.
 
     Returns
     -------
     dict of {corpus_name: DataFrame}
     """
+    output_dir = os.path.join(output_dir, "v7")
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
@@ -296,50 +349,61 @@ def score_all_corpora(
         seen_realpaths[real] = name
         corpora.append((name, corpus_dir))
 
-    # collect all (corpus_name, text_id, path) triples for a single progress bar
+    # collect all (corpus_name, text_id, path) triples, skipping done IDs
     all_files = []
-    skip_corpora = set()
+    done_counts = {}
     for name, corpus_dir in corpora:
-        out_path = os.path.join(output_dir, f"{name}.pkl")
-        if not force and os.path.exists(out_path):
-            skip_corpora.add(name)
-            continue
+        out_path = os.path.join(output_dir, f"{name}.csv")
+        if force and os.path.exists(out_path):
+            os.remove(out_path)
+        done_ids = _load_done_ids(out_path)
+        done_counts[name] = len(done_ids)
         freqs_dir = os.path.join(corpus_dir, "freqs")
         for text_id, path in _walk_freqs(freqs_dir):
-            all_files.append((name, text_id, path))
+            if text_id not in done_ids:
+                all_files.append((name, text_id, path))
+        if done_ids:
+            print(f"  {name}: {len(done_ids)} already done, {sum(1 for n, _, _ in all_files if n == name)} remaining")
 
-    results = {}
-    for name in skip_corpora:
-        out_path = os.path.join(output_dir, f"{name}.pkl")
-        print(f"  {name}: already scored, loading")
-        results[name] = read_df(out_path)
+    # open one CSV writer per corpus
+    import csv
+    columns = _get_csv_columns(allnorms)
+    writers = {}
+    file_handles = {}
 
-    # score all files with a single progress bar
-    corpus_rows = {}
+    def get_writer(name):
+        if name not in writers:
+            out_path = os.path.join(output_dir, f"{name}.csv")
+            file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+            fh = open(out_path, "a", newline="")
+            w = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
+            if not file_exists:
+                w.writeheader()
+            writers[name] = w
+            file_handles[name] = fh
+        return writers[name]
+
+    # score with a single progress bar
     pbar = tqdm(all_files, desc="Scoring", unit="file")
-    for name, text_id, path in pbar:
-        pbar.set_postfix_str(name, refresh=False)
-        scores = _score_freqs_allnorms(path, allnorms)
-        if scores:
-            scores["id"] = text_id
-            corpus_rows.setdefault(name, []).append(scores)
+    try:
+        for name, text_id, path in pbar:
+            pbar.set_postfix_str(name, refresh=False)
+            scores = _score_freqs_allnorms(path, allnorms)
+            if scores:
+                scores["id"] = text_id
+                get_writer(name).writerow(scores)
+    finally:
+        for fh in file_handles.values():
+            fh.close()
 
-    # assemble and save per-corpus DataFrames
-    for name, corpus_dir in corpora:
-        if name in skip_corpora:
-            continue
-        rows = corpus_rows.get(name, [])
-        if rows:
-            df = pd.DataFrame(rows)
-            cols = ["id"] + [c for c in df.columns if c != "id"]
-            df = df[cols]
-            out_path = os.path.join(output_dir, f"{name}.pkl")
-            save_df(df, out_path)
-            print(f"  {name}: scored {len(df)} texts")
+    # load and return results
+    results = {}
+    for name, _ in corpora:
+        out_path = os.path.join(output_dir, f"{name}.csv")
+        if os.path.exists(out_path):
+            results[name] = pd.read_csv(out_path)
         else:
-            df = pd.DataFrame()
-            print(f"  {name}: no valid freqs files")
-        results[name] = df
+            results[name] = pd.DataFrame()
     return results
 
 
