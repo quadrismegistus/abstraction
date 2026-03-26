@@ -564,7 +564,7 @@ def count_all_corpora(
         Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
     """
     if output_dir is None:
-        output_dir = DIST_DIR
+        output_dir = COUNT_DIR
     output_dir = os.path.join(output_dir, "v1")
     os.makedirs(output_dir, exist_ok=True)
 

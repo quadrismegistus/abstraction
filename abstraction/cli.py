@@ -53,14 +53,14 @@ def cmd_count_corpora(args):
 
 def cmd_count_corpus(args):
     import os
-    from .config import PATH_CORPORA, DIST_DIR
+    from .config import PATH_CORPORA, COUNT_DIR
     from .scoring import count_corpus_freqs
 
     corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    out_dir = os.path.join(DIST_DIR, "v1")
+    out_dir = os.path.join(COUNT_DIR, "v1")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{args.corpus}.csv")
     if args.force and os.path.exists(out_path):
