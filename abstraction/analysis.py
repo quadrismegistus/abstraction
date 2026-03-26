@@ -9,7 +9,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from .config import SCORES_DIR, PATH_CORPORA
+import json
+from .config import COUNT_DIR, SCORES_DIR, PATH_CORPORA
 from .corpus import load_corpus, _camel_to_snake
 from .tokenize import tokenize_agnostic
 from .utils import read_df
@@ -1309,3 +1310,313 @@ def summarize_arc(result):
         lines.append("  Piecewise: insufficient data")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Count-based analysis (proportions from z-score bin counts)
+# ---------------------------------------------------------------------------
+
+def _load_counts_jsonl(path):
+    """Load a JSONL counts file into a list of dicts."""
+    records = []
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return records
+
+
+def pct_in_range(rec, norm="Abs-Conc.Median.median", lo=None, hi=None):
+    """Compute the proportion of words in a z-score range for one text.
+
+    Parameters
+    ----------
+    rec : dict
+        A single JSONL record with norm -> {bin_edge: count} structure.
+    norm : str
+        Norm column name.
+    lo, hi : float, optional
+        Z-score bounds (inclusive). If lo is None, no lower bound.
+        If hi is None, no upper bound.
+
+    Returns
+    -------
+    float or NaN — proportion of words in [lo, hi].
+    """
+    bins = rec.get(norm)
+    if not bins:
+        return np.nan
+    total = 0
+    in_range = 0
+    for edge_str, count in bins.items():
+        edge = float(edge_str)
+        total += count
+        if (lo is None or edge <= lo) if hi is None else \
+           (hi is None or edge > hi) if lo is None else \
+           False:
+            pass
+        # Simpler logic:
+        include = True
+        if hi is not None and edge > hi:
+            include = False
+        if lo is not None and edge <= lo:
+            include = False
+        if include:
+            in_range += count
+    if total == 0:
+        return np.nan
+    return in_range / total
+
+
+def pct_abstract(rec, norm="Abs-Conc.Median.median", cutoff=-1.0):
+    """Proportion of words with z-score ≤ cutoff (abstract words)."""
+    bins = rec.get(norm)
+    if not bins:
+        return np.nan
+    total = sum(bins.values())
+    if total == 0:
+        return np.nan
+    abstract = sum(c for e, c in bins.items() if float(e) <= cutoff)
+    return abstract / total
+
+
+def pct_concrete(rec, norm="Abs-Conc.Median.median", cutoff=1.0):
+    """Proportion of words with z-score > cutoff (concrete words)."""
+    bins = rec.get(norm)
+    if not bins:
+        return np.nan
+    total = sum(bins.values())
+    if total == 0:
+        return np.nan
+    concrete = sum(c for e, c in bins.items() if float(e) > cutoff)
+    return concrete / total
+
+
+def load_counts(corpus_name, counts_dir=None, version="v1",
+                norm="Abs-Conc.Median.median", cutoff=-1.0,
+                harmonize=True):
+    """Load counts for a corpus, compute pct_abstract, merge with metadata.
+
+    Returns a DataFrame with columns: id, pct_abstract, year,
+    genre_harmonized, corpus_name, etc.
+    """
+    if counts_dir is None:
+        counts_dir = os.path.join(COUNT_DIR, version)
+    snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
+    path = os.path.join(counts_dir, f"{snake}.jsonl")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No counts file: {path}")
+
+    records = _load_counts_jsonl(path)
+    rows = []
+    for rec in records:
+        pa = pct_abstract(rec, norm=norm, cutoff=cutoff)
+        pc = pct_concrete(rec, norm=norm, cutoff=-cutoff)
+        total = sum(rec.get(norm, {}).values())
+        rows.append({
+            "id": rec["id"],
+            "pct_abstract": pa,
+            "pct_concrete": pc,
+            "n_words": total,
+        })
+    df = pd.DataFrame(rows)
+
+    # Merge with metadata (same logic as load_scores)
+    corpus = load_corpus(corpus_name)
+    meta = corpus.metadata
+    id_col = _find_id_col(meta)
+    if id_col != "id":
+        meta = meta.rename(columns={id_col: "id"})
+    df["id"] = df["id"].astype(str)
+    meta["id"] = meta["id"].astype(str)
+    merged = df.merge(meta, on="id", how="inner")
+
+    if harmonize:
+        merged = harmonize_genre(merged, corpus_name=corpus_name)
+    if snake == "chadwyck_poetry":
+        merged = _fix_chadwyck_poetry_year(merged)
+    if "year" in merged.columns:
+        merged["year"] = pd.to_numeric(merged["year"], errors="coerce")
+        merged = _apply_year_range(merged, snake)
+    return merged
+
+
+def load_all_counts(counts_dir=None, version="v1",
+                    norm="Abs-Conc.Median.median", cutoff=-1.0,
+                    exclude=EXCLUDE_CORPORA):
+    """Load counts for all corpora, return a combined DataFrame.
+
+    Each text gets pct_abstract and pct_concrete at the given cutoff.
+    """
+    if counts_dir is None:
+        counts_dir = os.path.join(COUNT_DIR, version)
+    if not os.path.isdir(counts_dir):
+        raise FileNotFoundError(f"No counts directory: {counts_dir}")
+
+    all_dfs = []
+    iterr = tqdm(sorted(os.listdir(counts_dir)))
+    for fn in iterr:
+        if not fn.endswith(".jsonl"):
+            continue
+        corpus_name = fn.removesuffix(".jsonl")
+        iterr.set_description(f"Loading {corpus_name}")
+        if corpus_name in exclude:
+            continue
+        try:
+            df = load_counts(corpus_name, counts_dir=counts_dir,
+                             version=version, norm=norm, cutoff=cutoff)
+            df["corpus_name"] = corpus_name
+            all_dfs.append(df)
+        except Exception as e:
+            print(f"  Skipping {corpus_name}: {e}")
+            continue
+
+    if not all_dfs:
+        return pd.DataFrame()
+    combined = pd.concat(all_dfs, ignore_index=True)
+    if "year" in combined.columns:
+        combined["year"] = pd.to_numeric(combined["year"], errors="coerce")
+    return combined
+
+
+def report_arc_counts(combined_df=None, genres=None,
+                      norm="Abs-Conc.Median.median", cutoff=-1.0,
+                      corpus_col="corpus_name",
+                      min_year=DEFAULT_MIN_YEAR, max_year=2020,
+                      agg_bin=10, min_texts_per_bin=3,
+                      search_range=(1650, 1850), search_step=10,
+                      print_result=True):
+    """Report piecewise arc statistics using count-based proportions.
+
+    Uses pct_abstract (proportion of words ≤ cutoff) as the score,
+    giving ratio-scale values where ratios are meaningful.
+
+    Parameters
+    ----------
+    combined_df : DataFrame, optional
+        Pre-loaded from load_all_counts(). If None, loads automatically.
+    genres : list, optional
+        Genres to report. Default: Fiction, Poetry, Periodical.
+    cutoff : float
+        Z-score cutoff for "abstract" words (default -1.0).
+    print_result : bool
+        If True, print prose summary.
+
+    Returns
+    -------
+    DataFrame with one row per genre.
+    """
+    if combined_df is None:
+        combined_df = load_all_counts(norm=norm, cutoff=cutoff)
+
+    if genres is None:
+        genres = ["Fiction", "Poetry", "Periodical"]
+
+    score_col = "pct_abstract"
+    rows = []
+    prose_lines = []
+
+    for genre in genres:
+        gdf = combined_df[combined_df["genre_harmonized"] == genre].copy()
+        gdf["year"] = pd.to_numeric(gdf["year"], errors="coerce")
+        gdf = gdf.dropna(subset=["year", score_col])
+        gdf = gdf[(gdf["year"] >= min_year) & (gdf["year"] <= max_year)]
+        if len(gdf) < 30:
+            continue
+
+        gdf["decade"] = (gdf["year"] // agg_bin) * agg_bin
+
+        # Raw decade means
+        dec_mean = gdf.groupby("decade")[score_col].mean()
+        dec_n = gdf.groupby("decade")[score_col].count()
+
+        # Piecewise fit with corpus fixed effects on decade-corpus bins
+        adj = adjust_scores(gdf, score_col=score_col, corpus_col=corpus_col,
+                            min_year=min_year, max_year=max_year,
+                            agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+                            model="piecewise")
+        if adj.empty:
+            continue
+        adj_dec = adj.groupby("year")["adjusted"].mean()
+
+        peak_yr = int(adj_dec.idxmax())
+        before = adj_dec[adj_dec.index <= peak_yr]
+        after = adj_dec[adj_dec.index >= peak_yr]
+        start_yr = int(before.idxmin())
+        end_yr = int(after.idxmin())
+
+        # Piecewise stats
+        sub = gdf[["year", score_col, corpus_col]].copy()
+        sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
+        agg = sub.groupby(["_bin", corpus_col]).agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        y = agg["_bin"].values.astype(float)
+        s = agg["score"].values
+        g = agg[corpus_col].values
+        pw = fit_piecewise(y, s, groups=g,
+                           search_range=search_range,
+                           search_step=search_step)
+
+        # Raw values at key decades (as percentages)
+        pct_start = dec_mean.get(start_yr, np.nan) * 100
+        pct_peak = dec_mean.get(peak_yr, np.nan) * 100
+        pct_end = dec_mean.get(end_yr, np.nan) * 100
+
+        # Ratios — these are meaningful because proportions have a real zero
+        peak_vs_start = pct_peak / pct_start if pct_start > 0 else np.nan
+        peak_vs_end = pct_peak / pct_end if pct_end > 0 else np.nan
+        start_vs_end = pct_start / pct_end if pct_end > 0 else np.nan
+
+        rows.append({
+            "genre": genre,
+            "breakpoint": pw["pw_break_year"],
+            "start_decade": start_yr,
+            "peak_decade": peak_yr,
+            "end_decade": end_yr,
+            "pct_start": pct_start,
+            "pct_peak": pct_peak,
+            "pct_end": pct_end,
+            "peak_vs_start": peak_vs_start,
+            "peak_vs_end": peak_vs_end,
+            "start_vs_end": start_vs_end,
+            "slope_before": pw["pw_slope_before"],
+            "slope_before_p": pw["pw_slope_before_p"],
+            "slope_after": pw["pw_slope_after"],
+            "slope_after_p": pw["pw_slope_after_p"],
+            "r2": pw["pw_r2"],
+            "n_texts": len(gdf),
+            "n_texts_start": int(dec_n.get(start_yr, 0)),
+            "n_texts_peak": int(dec_n.get(peak_yr, 0)),
+            "n_texts_end": int(dec_n.get(end_yr, 0)),
+        })
+
+        if print_result:
+            prose_lines.append(
+                f"{genre}: {pct_peak:.1f}% of words are abstract in the "
+                f"{peak_yr}s (peak) vs {pct_start:.1f}% in the {start_yr}s "
+                f"and {pct_end:.1f}% in the {end_yr}s. "
+                f"Peak is {peak_vs_start:.1f}x the {start_yr}s "
+                f"and {peak_vs_end:.1f}x the {end_yr}s. "
+                f"Piecewise breakpoint at {int(pw['pw_break_year'])}; "
+                f"R² = {pw['pw_r2']:.3f}; "
+                f"n = {len(gdf):,} texts."
+            )
+
+    df = pd.DataFrame(rows)
+
+    if print_result and prose_lines:
+        print()
+        for line in prose_lines:
+            print(line)
+            print()
+        print(f"(Abstract words defined as z ≤ {cutoff}; "
+              f"proportions are frequency-weighted.)")
+
+    return df

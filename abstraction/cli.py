@@ -73,6 +73,22 @@ def cmd_count_corpus(args):
         print(f"No freqs files found in {corpus_dir}/freqs/")
 
 
+def cmd_report_arc_counts(args):
+    from .analysis import report_arc_counts
+    genres = args.genres.split(",") if args.genres else None
+    df = report_arc_counts(
+        genres=genres,
+        norm=args.norm,
+        cutoff=args.cutoff,
+        min_year=args.min_year,
+        max_year=args.max_year,
+        print_result=True,
+    )
+    if args.csv:
+        df.to_csv(args.csv, index=False)
+        print(f"\nSaved to {args.csv}")
+
+
 def cmd_report_arc(args):
     from .analysis import report_arc
     genres = args.genres.split(",") if args.genres else None
@@ -119,9 +135,18 @@ def main():
     p.add_argument("--force", action="store_true", help="Re-count even if output exists")
     p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
 
-    # report-arc: piecewise arc report with ratios
+    # report-arc: piecewise arc report with ratios (score-based)
     p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
     p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
+    p.add_argument("--min-year", type=int, default=1600)
+    p.add_argument("--max-year", type=int, default=2020)
+    p.add_argument("--csv", default=None, help="Save results to CSV")
+
+    # report-arc-counts: piecewise arc report with count-based proportions
+    p = sub.add_parser("report-arc-counts", help="Report arc statistics using word proportions")
+    p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
+    p.add_argument("--cutoff", type=float, default=-1.0, help="Z-score cutoff for abstract words (default: -1.0)")
+    p.add_argument("--norm", default="Abs-Conc.Median.median", help="Norm column")
     p.add_argument("--min-year", type=int, default=1600)
     p.add_argument("--max-year", type=int, default=2020)
     p.add_argument("--csv", default=None, help="Save results to CSV")
@@ -141,6 +166,8 @@ def main():
         cmd_count_corpus(args)
     elif args.command == "report-arc":
         cmd_report_arc(args)
+    elif args.command == "report-arc-counts":
+        cmd_report_arc_counts(args)
     else:
         parser.print_help()
         sys.exit(1)
