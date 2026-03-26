@@ -357,6 +357,7 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
 
 
 def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
+             show_lines=False,
              ylabel="Abstractness − Concreteness (corpus-adjusted)",
              save_to=None, width=10, height=6):
     """Plot corpus-adjusted arc from adjust_scores() output.
@@ -370,6 +371,8 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
         If True, show raw (unadjusted) corpus points in light color.
     show_corpus : bool
         If True and corpus column exists, color points by corpus.
+    show_lines : bool
+        If True, draw lines connecting points within each corpus.
     """
     df = adj_df.copy()
     has_corpus = "corpus" in df.columns
@@ -389,9 +392,17 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
     if show_raw and has_corpus:
         fig += p9.geom_point(p9.aes(x="year", y="score", color="corpus"),
                              alpha=0.15, size=1.5)
+        if show_lines:
+            fig += p9.geom_line(p9.aes(x="year", y="score", color="corpus",
+                                       group="corpus"),
+                                alpha=0.15, size=0.5)
 
     # Adjusted points
     fig += p9.geom_point(alpha=0.6, size=2.5)
+
+    # Lines connecting adjusted points within each corpus
+    if show_lines and has_corpus:
+        fig += p9.geom_line(p9.aes(group="corpus"), alpha=0.4, size=0.5)
 
     # Fitted trend line
     trend = df[["year", "fitted"]].drop_duplicates().sort_values("year")
@@ -413,7 +424,8 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
 
 def plot_arc_by_genre(combined_df, genres=None,
                       score_col="Abs-Conc.Median.median",
-                      model="quadratic", save_to=None,
+                      model="quadratic", show_raw=False,
+                      show_lines=False, save_to=None,
                       ncol=2, width=14, height=None, **adjust_kw):
     """Plot adjusted arcs for multiple genres as faceted panels.
 
@@ -426,6 +438,10 @@ def plot_arc_by_genre(combined_df, genres=None,
         Genres to include. If None, uses all genres with enough data.
     model : str
         "quadratic" or "piecewise" — passed to adjust_scores.
+    show_raw : bool
+        If True, show raw (unadjusted) corpus points in light color.
+    show_lines : bool
+        If True, draw lines connecting points within each corpus.
     ncol : int
         Number of columns in facet grid.
     """
@@ -466,7 +482,22 @@ def plot_arc_by_genre(combined_df, genres=None,
     fig += p9.theme_classic()
     fig += p9.theme(legend_position="bottom",
                     strip_text=p9.element_text(size=11, weight="bold"))
+
+    # Raw points (before adjustment) as faint background
+    if show_raw and has_corpus:
+        fig += p9.geom_point(p9.aes(x="year", y="score", color="corpus"),
+                             alpha=0.15, size=1)
+        if show_lines:
+            fig += p9.geom_line(p9.aes(x="year", y="score", color="corpus",
+                                       group="corpus"),
+                                alpha=0.15, size=0.5)
+
+    # Adjusted points
     fig += p9.geom_point(alpha=0.5, size=1.5)
+
+    # Lines connecting adjusted points within each corpus
+    if show_lines and has_corpus:
+        fig += p9.geom_line(p9.aes(group="corpus"), alpha=0.4, size=0.5)
 
     # Fitted trend per genre
     trend = df[["year", "fitted", "genre"]].drop_duplicates().sort_values("year")
