@@ -30,6 +30,15 @@ def cmd_score_corpus(args):
         print(f"No freqs files found in {corpus_dir}/freqs/")
 
 
+def cmd_check_freqs(args):
+    from .corpus import check_freqs_coverage
+    df = check_freqs_coverage(corpus_name=args.corpus)
+    df = df.sort_values("pct_coverage", ascending=False)
+    # format for display
+    df["coverage"] = df["pct_coverage"].apply(lambda x: f"{x:.1f}%")
+    print(df[["corpus", "n_metadata", "n_freqs", "n_overlap", "coverage"]].to_string(index=False))
+
+
 def cmd_fix_hathi_englit(args):
     from .corpus import fix_hathi_englit
     genres = tuple(args.genres.split(","))
@@ -49,6 +58,10 @@ def main():
     p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
 
+    # check-freqs: check metadata-to-freqs coverage
+    p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
+    p.add_argument("corpus", nargs="?", default=None, help="Corpus name (default: all)")
+
     # fix-hathi-englit: unpack TSV archives into freqs JSONs
     p = sub.add_parser("fix-hathi-englit", help="Unpack hathi_englit TSV archives into freqs JSONs")
     p.add_argument("--genres", default="fiction,poetry", help="Comma-separated genres (default: fiction,poetry)")
@@ -58,6 +71,8 @@ def main():
         cmd_score_corpora(args)
     elif args.command == "score-corpus":
         cmd_score_corpus(args)
+    elif args.command == "check-freqs":
+        cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":
         cmd_fix_hathi_englit(args)
     else:

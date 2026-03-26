@@ -178,6 +178,96 @@ def fix_hathi_englit(genres=("fiction", "poetry"), root=PATH_CORPORA):
     print(f"Done: {total_new} new, {total_skipped} already existed")
 
 
+# ---------------------------------------------------------------------------
+# Freqs coverage check
+# ---------------------------------------------------------------------------
+
+def check_freqs_coverage(corpus_name=None, root=PATH_CORPORA):
+    """Check how many metadata IDs have corresponding freqs JSON files.
+
+    Parameters
+    ----------
+    corpus_name : str, optional
+        Single corpus to check. If None, checks all corpora with freqs/ dirs.
+    root : str
+        Path to corpora directory.
+
+    Returns
+    -------
+    DataFrame with columns: corpus, n_metadata, n_freqs, n_overlap, pct_coverage
+    """
+    from .scoring import _walk_freqs
+
+    if corpus_name:
+        names = [_camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name]
+    else:
+        names = sorted(d for d in os.listdir(root)
+                       if os.path.isdir(os.path.join(root, d, "freqs")))
+
+    rows = []
+    for name in tqdm(names, desc="Checking coverage"):
+        corpus_dir = os.path.join(root, name)
+        freqs_dir = os.path.join(corpus_dir, "freqs")
+        if not os.path.isdir(freqs_dir):
+            continue
+
+        # load metadata IDs — try multiple columns, keep best overlap
+        meta_id_sets = {}
+        try:
+            c = Corpus(name, root=root)
+            meta = c.metadata
+            for col in ["id", "htid"]:
+                if col in meta.columns:
+                    meta_id_sets[col] = set(meta[col].dropna().astype(str))
+        except Exception:
+            pass
+        meta_ids = meta_id_sets.get("id", meta_id_sets.get("htid", set()))
+
+        # collect freqs IDs
+        freqs_ids = {tid for tid, _ in _walk_freqs(freqs_dir)}
+
+        # try direct overlap
+        overlap = meta_ids & freqs_ids
+
+        # try ID normalizations across all available ID columns
+        for id_set in meta_id_sets.values():
+            if not id_set:
+                continue
+            # direct
+            direct = id_set & freqs_ids
+            if len(direct) > len(overlap):
+                overlap = direct
+                meta_ids = id_set
+
+            # slash→dot
+            freqs_ids_dot = {fid.replace("/", ".", 1) for fid in freqs_ids}
+            overlap_dot = id_set & freqs_ids_dot
+            if len(overlap_dot) > len(overlap):
+                overlap = overlap_dot
+                meta_ids = id_set
+
+            # htid→path format: "nyp.334330..." -> "nyp/334/330..."
+            as_freqs = set()
+            for mid in id_set:
+                if "." in mid:
+                    prefix, rest = mid.split(".", 1)
+                    as_freqs.add(f"{prefix}/{rest[:3]}/{rest[3:]}")
+            overlap_htid = as_freqs & freqs_ids
+            if len(overlap_htid) > len(overlap):
+                overlap = overlap_htid
+                meta_ids = id_set
+
+        rows.append({
+            "corpus": name,
+            "n_metadata": len(meta_ids),
+            "n_freqs": len(freqs_ids),
+            "n_overlap": len(overlap),
+            "pct_coverage": len(overlap) / len(meta_ids) * 100 if meta_ids else 0,
+        })
+
+    return pd.DataFrame(rows)
+
+
 def pmap_iter(func, items, num_proc=1, desc=None):
     """Parallel map yielding results as they complete."""
     if num_proc <= 1:
