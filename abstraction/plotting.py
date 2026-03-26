@@ -379,26 +379,34 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
 
     p9.options.figure_size = (width, height)
 
+    has_n = "n_texts" in df.columns
+
     # Main layer: adjusted points
+    aes_kw = {"x": "year", "y": "adjusted"}
     if has_corpus and show_corpus:
-        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted", color="corpus"))
-    else:
-        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted"))
+        aes_kw["color"] = "corpus"
+    if has_n:
+        aes_kw["size"] = "n_texts"
+    fig = p9.ggplot(df, p9.aes(**aes_kw))
 
     fig += p9.theme_classic()
     fig += p9.theme(legend_position="right" if has_corpus and show_corpus else "none")
+    if has_n:
+        fig += p9.scale_size_continuous(range=(1, 6), name="Texts")
 
     # Raw points (before adjustment) as faint background
     if show_raw and has_corpus:
-        fig += p9.geom_point(p9.aes(x="year", y="score", color="corpus"),
-                             alpha=0.15, size=1.5)
+        raw_aes = {"x": "year", "y": "score", "color": "corpus"}
+        if has_n:
+            raw_aes["size"] = "n_texts"
+        fig += p9.geom_point(p9.aes(**raw_aes), alpha=0.15)
         if show_lines:
             fig += p9.geom_line(p9.aes(x="year", y="score", color="corpus",
                                        group="corpus"),
                                 alpha=0.15, size=0.5)
 
     # Adjusted points
-    fig += p9.geom_point(alpha=0.6, size=2.5)
+    fig += p9.geom_point(alpha=0.6)
 
     # Lines connecting adjusted points within each corpus
     if show_lines and has_corpus:
@@ -474,26 +482,34 @@ def plot_arc_by_genre(combined_df, genres=None,
 
     p9.options.figure_size = (width, height)
 
+    has_n = "n_texts" in df.columns
+
+    aes_kw = {"x": "year", "y": "adjusted"}
     if has_corpus:
-        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted", color="corpus"))
-    else:
-        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted"))
+        aes_kw["color"] = "corpus"
+    if has_n:
+        aes_kw["size"] = "n_texts"
+    fig = p9.ggplot(df, p9.aes(**aes_kw))
 
     fig += p9.theme_classic()
     fig += p9.theme(legend_position="bottom",
                     strip_text=p9.element_text(size=11, weight="bold"))
+    if has_n:
+        fig += p9.scale_size_continuous(range=(0.5, 4), name="Texts")
 
     # Raw points (before adjustment) as faint background
     if show_raw and has_corpus:
-        fig += p9.geom_point(p9.aes(x="year", y="score", color="corpus"),
-                             alpha=0.15, size=1)
+        raw_aes = {"x": "year", "y": "score", "color": "corpus"}
+        if has_n:
+            raw_aes["size"] = "n_texts"
+        fig += p9.geom_point(p9.aes(**raw_aes), alpha=0.15)
         if show_lines:
             fig += p9.geom_line(p9.aes(x="year", y="score", color="corpus",
                                        group="corpus"),
                                 alpha=0.15, size=0.5)
 
     # Adjusted points
-    fig += p9.geom_point(alpha=0.5, size=1.5)
+    fig += p9.geom_point(alpha=0.5)
 
     # Lines connecting adjusted points within each corpus
     if show_lines and has_corpus:
