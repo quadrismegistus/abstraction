@@ -916,6 +916,23 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
             return pd.DataFrame()
         fitted, adjusted, fitted_se = fit_result
 
+    elif model == "cubic":
+        y_center = y.mean()
+        yc = y - y_center
+
+        # Design matrix: [intercept, year, year², year³, corpus_dummies...]
+        X_trend = np.column_stack([np.ones(len(yc)), yc, yc ** 2, yc ** 3])
+        if g is not None:
+            dummies = _make_dummies(g)
+            X = np.column_stack([X_trend, dummies]) if dummies.shape[1] > 0 else X_trend
+        else:
+            X = X_trend
+
+        fit_result = _fit_and_adjust(X_trend, X, s, 4)
+        if fit_result is None:
+            return pd.DataFrame()
+        fitted, adjusted, fitted_se = fit_result
+
     elif model == "piecewise":
         # First find the best breakpoint
         pw_result = fit_piecewise(y, s, groups=g)
@@ -940,7 +957,7 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
             return pd.DataFrame()
         fitted, adjusted, fitted_se = fit_result
     else:
-        raise ValueError(f"Unknown model: {model!r} (use 'quadratic' or 'piecewise')")
+        raise ValueError(f"Unknown model: {model!r} (use 'quadratic', 'cubic', or 'piecewise')")
 
     # Build result DataFrame
     result = pd.DataFrame({
