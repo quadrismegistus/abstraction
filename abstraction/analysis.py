@@ -538,6 +538,8 @@ EXCLUDE_CORPORA = {
     "dta",          # German
     "evans_tcp0",   # duplicate of evans_tcp
     "oldbailey0",   # duplicate of oldbailey
+    "txtlab",
+    "fanfic"
 }
 
 # Per-corpus year bounds to filter outlier texts.
@@ -545,6 +547,7 @@ EXCLUDE_CORPORA = {
 # Use None for an open bound, e.g. ("chicago", (None, 1930)).
 CORPUS_YEAR_RANGE = {
     "chadwyck": (1500, 1900),
+    "chadwyck_poetry": (1500, 1999),
 }
 
 
@@ -868,6 +871,34 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
     if len(y) < 10:
         return pd.DataFrame()
 
+    def _fit_and_adjust(X_trend, X, s, n_trend_cols):
+        """Fit OLS, return (fitted, adjusted, fitted_se)."""
+        try:
+            beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
+        except np.linalg.LinAlgError:
+            return None
+        fitted = X_trend @ beta[:n_trend_cols]
+        if X.shape[1] > n_trend_cols:
+            corpus_effect = X[:, n_trend_cols:] @ beta[n_trend_cols:]
+        else:
+            corpus_effect = np.zeros(len(s))
+        adjusted = s - corpus_effect
+
+        # Standard error of the fitted trend
+        resid = s - X @ beta
+        n, p = X.shape
+        mse = (resid ** 2).sum() / max(n - p, 1)
+        try:
+            XtX_inv = np.linalg.inv(X.T @ X)
+        except np.linalg.LinAlgError:
+            XtX_inv = np.linalg.pinv(X.T @ X)
+        # Variance of fitted = X_trend @ Cov(beta_trend) @ X_trend'
+        # but beta_trend covariance is the top-left block of mse * (X'X)^-1
+        cov_trend = mse * XtX_inv[:n_trend_cols, :n_trend_cols]
+        # Per-point SE: sqrt(x_i @ cov_trend @ x_i')
+        fitted_se = np.sqrt(np.sum((X_trend @ cov_trend) * X_trend, axis=1))
+        return fitted, adjusted, fitted_se
+
     if model == "quadratic":
         y_center = y.mean()
         yc = y - y_center
@@ -880,19 +911,10 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         else:
             X = X_trend
 
-        try:
-            beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
-        except np.linalg.LinAlgError:
+        fit_result = _fit_and_adjust(X_trend, X, s, 3)
+        if fit_result is None:
             return pd.DataFrame()
-
-        # Fitted trend (shared time component only)
-        fitted = X_trend @ beta[:3]
-        # Corpus effects: contribution of dummy variables
-        if g is not None and X.shape[1] > 3:
-            corpus_effect = X[:, 3:] @ beta[3:]
-        else:
-            corpus_effect = np.zeros(len(s))
-        adjusted = s - corpus_effect
+        fitted, adjusted, fitted_se = fit_result
 
     elif model == "piecewise":
         # First find the best breakpoint
@@ -913,17 +935,10 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         else:
             X = X_trend
 
-        try:
-            beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
-        except np.linalg.LinAlgError:
+        fit_result = _fit_and_adjust(X_trend, X, s, 3)
+        if fit_result is None:
             return pd.DataFrame()
-
-        fitted = X_trend @ beta[:3]
-        if g is not None and X.shape[1] > 3:
-            corpus_effect = X[:, 3:] @ beta[3:]
-        else:
-            corpus_effect = np.zeros(len(s))
-        adjusted = s - corpus_effect
+        fitted, adjusted, fitted_se = fit_result
     else:
         raise ValueError(f"Unknown model: {model!r} (use 'quadratic' or 'piecewise')")
 
@@ -933,6 +948,7 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         "score": s,
         "adjusted": adjusted,
         "fitted": fitted,
+        "fitted_se": fitted_se,
         "n_texts": agg_masked["n_texts"].values,
     })
     if g is not None:

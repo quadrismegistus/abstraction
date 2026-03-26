@@ -357,7 +357,7 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
 
 
 def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
-             show_lines=False,
+             show_lines=False, show_se=True,
              ylabel="Abstractness − Concreteness (corpus-adjusted)",
              save_to=None, width=10, height=6):
     """Plot corpus-adjusted arc from adjust_scores() output.
@@ -366,13 +366,16 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
     ----------
     adj_df : DataFrame
         Output of analysis.adjust_scores(). Must have columns:
-        year, score, adjusted, fitted, and optionally corpus.
+        year, score, adjusted, fitted, and optionally corpus, fitted_se.
     show_raw : bool
         If True, show raw (unadjusted) corpus points in light color.
     show_corpus : bool
         If True and corpus column exists, color points by corpus.
     show_lines : bool
         If True, draw lines connecting points within each corpus.
+    show_se : bool
+        If True and fitted_se column exists, show ±1 SE ribbon around
+        the fitted trend line.
     """
     df = adj_df.copy()
     has_corpus = "corpus" in df.columns
@@ -412,8 +415,18 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
     if show_lines and has_corpus:
         fig += p9.geom_line(p9.aes(group="corpus"), alpha=0.4, size=0.5)
 
-    # Fitted trend line
-    trend = df[["year", "fitted"]].drop_duplicates().sort_values("year")
+    # Fitted trend line (with optional SE ribbon)
+    has_se = "fitted_se" in df.columns
+    trend_cols = ["year", "fitted"]
+    if has_se:
+        trend_cols.append("fitted_se")
+    trend = df[trend_cols].drop_duplicates().sort_values("year")
+    if show_se and has_se:
+        trend["_lo"] = trend["fitted"] - trend["fitted_se"]
+        trend["_hi"] = trend["fitted"] + trend["fitted_se"]
+        fig += p9.geom_ribbon(p9.aes(x="year", ymin="_lo", ymax="_hi"),
+                              data=trend, fill="black", alpha=0.15,
+                              inherit_aes=False)
     fig += p9.geom_line(p9.aes(x="year", y="fitted"),
                         data=trend, color="black", size=1.2,
                         inherit_aes=False)
@@ -434,7 +447,7 @@ def plot_arc_by_genre(combined_df, genres=None,
                       score_col="Abs-Conc.Median.median",
                       model="quadratic", show_raw=False,
                       show_lines=False, show_facet=True,
-                      save_to=None,
+                      show_se=True, save_to=None,
                       ncol=2, width=14, height=None, **adjust_kw):
     """Plot adjusted arcs for multiple genres.
 
@@ -508,6 +521,8 @@ def plot_arc_by_genre(combined_df, genres=None,
         aes_kw["color"] = "genre"
         if use_shape:
             aes_kw["shape"] = "corpus"
+        else:
+            aes_kw["shape"] = "genre"
     if has_n:
         aes_kw["size"] = "n_texts"
 
@@ -541,25 +556,41 @@ def plot_arc_by_genre(combined_df, genres=None,
             fig += p9.geom_line(p9.aes(**raw_line_aes), alpha=0.15, size=0.5)
 
     # Adjusted points
-    fig += p9.geom_point(alpha=0.5)
+    fig += p9.geom_point(alpha=0.35)
 
     # Lines connecting adjusted points within each corpus (and genre)
     if show_lines and has_corpus:
         line_aes = {"group": "_grp"}
         if not show_facet:
             line_aes["color"] = "genre"
-        fig += p9.geom_line(p9.aes(**line_aes), alpha=0.4, size=0.5)
+        fig += p9.geom_line(p9.aes(**line_aes), alpha=0.25, size=0.5)
 
-    # Fitted trend per genre
-    trend = df[["year", "fitted", "genre"]].drop_duplicates().sort_values("year")
+    # Fitted trend per genre (with optional SE ribbon)
+    has_se = "fitted_se" in df.columns
+    trend_cols = ["year", "fitted", "genre"]
+    if has_se:
+        trend_cols.append("fitted_se")
+    trend = df[trend_cols].drop_duplicates().sort_values("year")
+    if show_se and has_se:
+        trend["_lo"] = trend["fitted"] - trend["fitted_se"]
+        trend["_hi"] = trend["fitted"] + trend["fitted_se"]
     if show_facet:
+        if show_se and has_se:
+            fig += p9.geom_ribbon(p9.aes(x="year", ymin="_lo", ymax="_hi"),
+                                  data=trend, fill="black", alpha=0.15,
+                                  inherit_aes=False)
         fig += p9.geom_line(p9.aes(x="year", y="fitted"),
                             data=trend, color="black", size=1,
                             inherit_aes=False)
         fig += p9.facet_wrap("genre", ncol=ncol, scales="free_y")
     else:
-        fig += p9.geom_line(p9.aes(x="year", y="fitted", color="genre"),
-                            data=trend, size=1, linetype="dashed",
+        if show_se and has_se:
+            fig += p9.geom_ribbon(p9.aes(x="year", ymin="_lo", ymax="_hi",
+                                         fill="genre"),
+                                  data=trend, alpha=0.15,
+                                  inherit_aes=False)
+        fig += p9.geom_line(p9.aes(x="year", y="fitted", color="genre", linetype="genre"),
+                            data=trend, size=1,
                             inherit_aes=False)
 
     fig += p9.xlab("Year")
