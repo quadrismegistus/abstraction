@@ -448,7 +448,9 @@ def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
     -------
     dict combining quadratic and piecewise results, plus metadata.
     """
-    sub = df[[year_col, score_col]].dropna()
+    sub = df[[year_col, score_col]].copy()
+    sub[year_col] = pd.to_numeric(sub[year_col], errors="coerce")
+    sub = sub.dropna()
     if min_year is not None:
         sub = sub[sub[year_col] >= min_year]
     if max_year is not None:
