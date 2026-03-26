@@ -221,16 +221,51 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
     if id_col != "id":
         meta = meta.rename(columns={id_col: "id"})
 
+    # Ensure both ID columns are strings
+    scores["id"] = scores["id"].astype(str)
+    meta["id"] = meta["id"].astype(str)
+
     # Try direct merge first
     merged = scores.merge(meta, on="id", how="inner")
 
-    # If merge is poor, try slash↔dot normalization (hathi ID format mismatch)
-    if len(merged) < len(scores) * 0.1 and len(scores) > 0:
-        scores_norm = scores.copy()
-        scores_norm["id"] = scores_norm["id"].str.replace("/", ".", n=1)
-        merged_norm = scores_norm.merge(meta, on="id", how="inner")
-        if len(merged_norm) > len(merged):
-            merged = merged_norm
+    # Try progressively more aggressive normalizations if merge is poor
+    def _try_merge(score_ids, meta_ids_col=None):
+        nonlocal merged
+        s = scores.copy()
+        m = meta
+        if score_ids is not None:
+            s["id"] = score_ids
+        if meta_ids_col is not None:
+            m = meta.copy()
+            m["id"] = meta_ids_col
+        candidate = s.merge(m, on="id", how="inner")
+        if len(candidate) > len(merged):
+            merged = candidate
+
+    if len(merged) < len(scores) * 0.5 and len(scores) > 0:
+        score_ids = scores["id"]
+
+        # slash→dot (hathi)
+        _try_merge(score_ids.str.replace("/", ".", n=1))
+
+        # zero-padded numeric (chicago): meta "1" -> scores "00000001"
+        sample_sid = score_ids.iloc[0]
+        if sample_sid.isdigit() and len(sample_sid) > 4:
+            pad_len = len(sample_sid)
+            _try_merge(None, meta["id"].apply(
+                lambda x: str(x).split(".")[0].zfill(pad_len) if str(x).replace(".", "").isdigit() else x
+            ))
+
+        # underscore↔space (gildedage)
+        _try_merge(None, meta["id"].str.replace("_", " "))
+
+        # htid→path: "nyp.334330..." -> "nyp/334/330..."
+        def _htid_to_path(htid):
+            if "." in htid:
+                prefix, rest = htid.split(".", 1)
+                return f"{prefix}/{rest[:3]}/{rest[3:]}"
+            return htid
+        _try_merge(None, meta["id"].apply(_htid_to_path))
 
     if harmonize:
         merged = harmonize_genre(merged, corpus_name=corpus_name)

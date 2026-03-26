@@ -236,17 +236,47 @@ def check_freqs_coverage(corpus_name=None, root=PATH_CORPORA):
         for id_set in meta_id_sets.values():
             if not id_set:
                 continue
+
             # direct
             direct = id_set & freqs_ids
             if len(direct) > len(overlap):
                 overlap = direct
                 meta_ids = id_set
 
+            # str(meta) vs str(freqs) — catches numeric ID mismatches
+            id_set_str = {str(x) for x in id_set}
+            overlap_str = id_set_str & freqs_ids
+            if len(overlap_str) > len(overlap):
+                overlap = overlap_str
+                meta_ids = id_set
+
+            # zero-padded numeric: meta "1" -> freqs "00000001"
+            if freqs_ids:
+                sample_fid = next(iter(freqs_ids))
+                if sample_fid.isdigit() and len(sample_fid) > 4:
+                    pad_len = len(sample_fid)
+                    id_set_padded = set()
+                    for mid in id_set:
+                        s = str(mid).split(".")[0]  # strip any decimal
+                        if s.isdigit():
+                            id_set_padded.add(s.zfill(pad_len))
+                    overlap_pad = id_set_padded & freqs_ids
+                    if len(overlap_pad) > len(overlap):
+                        overlap = overlap_pad
+                        meta_ids = id_set
+
             # slash→dot
             freqs_ids_dot = {fid.replace("/", ".", 1) for fid in freqs_ids}
             overlap_dot = id_set & freqs_ids_dot
             if len(overlap_dot) > len(overlap):
                 overlap = overlap_dot
+                meta_ids = id_set
+
+            # underscore↔space (gildedage)
+            id_set_nouscore = {mid.replace("_", " ") for mid in id_set}
+            overlap_space = id_set_nouscore & freqs_ids
+            if len(overlap_space) > len(overlap):
+                overlap = overlap_space
                 meta_ids = id_set
 
             # htid→path format: "nyp.334330..." -> "nyp/334/330..."
