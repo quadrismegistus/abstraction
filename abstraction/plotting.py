@@ -357,8 +357,38 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
 # ---------------------------------------------------------------------------
 
 
-_YLABEL_CONC = "<< More abstract | More concrete >>\n(corpus-adjusted)"
-_YLABEL_ABS = "<< More concrete | More abstract >>\n(corpus-adjusted)"
+_YLABEL_CONC = "<< More abstract | More concrete >>"#\n(corpus-adjusted)"
+_YLABEL_ABS = "<< More concrete | More abstract >>"#\n(corpus-adjusted)"
+
+
+def arc_caption(combined_df, genres=None):
+    """Generate a caption string summarizing texts per genre and corpus.
+
+    Parameters
+    ----------
+    combined_df : DataFrame
+        Combined scored DataFrame with genre_harmonized and corpus_name columns.
+    genres : list, optional
+        Genres to include. If None, uses all genres present.
+
+    Returns
+    -------
+    str
+        Caption like "Fiction (45,231 texts: hathi_englit 30,102, chadwyck 5,012, ...); ..."
+    """
+    df = combined_df.copy()
+    if genres is not None:
+        df = df[df["genre_harmonized"].isin(genres)]
+
+    parts = []
+    for genre in sorted(df["genre_harmonized"].dropna().unique()):
+        gdf = df[df["genre_harmonized"] == genre]
+        corpus_counts = gdf["corpus_name"].value_counts()
+        corpus_str = ", ".join(
+            f"{name} {count:,}" for name, count in corpus_counts.items()
+        )
+        parts.append(f"{genre} ({len(gdf):,} texts: {corpus_str})")
+    return "; ".join(parts)
 
 
 def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
@@ -646,9 +676,9 @@ def plot_arc_by_genre(combined_df, genres=None,
                                   color="red", se=True, alpha=0.15,
                                   inherit_aes=False, data=df)
         else:
-            fig += p9.geom_smooth(p9.aes(x="year", y="adjusted", color="genre"),
+            fig += p9.geom_smooth(p9.aes(x="year", y="adjusted", color="genre", linetype="genre"),
                                   method="loess", span=loess_span,
-                                  se=True, alpha=0.1, linetype="solid",
+                                  se=True, alpha=0.15,
                                   inherit_aes=False, data=df)
 
     if show_facet:
