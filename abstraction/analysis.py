@@ -4,7 +4,7 @@ of abstract language across literary history.
 """
 
 import os
-
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -634,16 +634,32 @@ def fit_arc_corpus(corpus_name, score_col="Abs-Conc.Median.median", **kw):
 
 
 def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
+                        combined_df=None,
                         scores_dir=None, version="v7",
                         exclude=EXCLUDE_CORPORA, **kw):
-    """Fit arc for all scored corpora. Returns a DataFrame of results."""
+    """Fit arc for all scored corpora. Returns a DataFrame of results.
+
+    Parameters
+    ----------
+    combined_df : DataFrame, optional
+        Pre-loaded combined DataFrame (e.g. from load_all_scored()).
+        If provided, skips loading from disk.
+    """
+    if combined_df is not None:
+        results = []
+        for corpus_name, cdf in combined_df.groupby("corpus_name"):
+            result = fit_arc(cdf, score_col=score_col, **kw)
+            result["corpus"] = corpus_name
+            results.append(result)
+        return pd.DataFrame(results)
+
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
     if not os.path.isdir(scores_dir):
         raise FileNotFoundError(f"No scores directory: {scores_dir}")
 
     results = []
-    for fn in sorted(os.listdir(scores_dir)):
+    for fn in tqdm(sorted(os.listdir(scores_dir))):
         if not fn.endswith(".csv"):
             continue
         corpus_name = fn.removesuffix(".csv")
@@ -692,6 +708,7 @@ def fit_arc_by_genre(df, score_col="Abs-Conc.Median.median",
 
 
 def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
+                         combined_df=None,
                          scores_dir=None, version="v7", min_texts=30,
                          corpus_fixed_effects=True,
                          exclude=EXCLUDE_CORPORA, **kw):
@@ -701,31 +718,21 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
     per genre. When corpus_fixed_effects=True (default), includes corpus
     dummy variables to absorb baseline differences between corpora.
     Returns a DataFrame of results.
+
+    Parameters
+    ----------
+    combined_df : DataFrame, optional
+        Pre-loaded combined DataFrame (e.g. from load_all_scored()).
+        If provided, skips loading from disk.
     """
-    if scores_dir is None:
-        scores_dir = os.path.join(SCORES_DIR, version)
-    if not os.path.isdir(scores_dir):
-        raise FileNotFoundError(f"No scores directory: {scores_dir}")
-
-    all_dfs = []
-    for fn in sorted(os.listdir(scores_dir)):
-        if not fn.endswith(".csv"):
-            continue
-        corpus_name = fn.removesuffix(".csv")
-        if corpus_name in exclude:
-            continue
-        try:
-            df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
-            df["corpus_name"] = corpus_name
-            all_dfs.append(df)
-        except Exception as e:
-            print(f"  Skipping {corpus_name}: {e}")
-            continue
-
-    if not all_dfs:
+    if combined_df is not None:
+        combined = combined_df
+    else:
+        combined = load_all_scored(scores_dir=scores_dir, version=version,
+                                   exclude=exclude)
+    if len(combined) == 0:
         return pd.DataFrame()
 
-    combined = pd.concat(all_dfs, ignore_index=True)
     if corpus_fixed_effects:
         kw["corpus_col"] = "corpus_name"
     return fit_arc_by_genre(combined, score_col=score_col,
@@ -744,10 +751,12 @@ def load_all_scored(scores_dir=None, version="v7", exclude=EXCLUDE_CORPORA):
         raise FileNotFoundError(f"No scores directory: {scores_dir}")
 
     all_dfs = []
-    for fn in sorted(os.listdir(scores_dir)):
+    iterr = tqdm(sorted(os.listdir(scores_dir)))
+    for fn in iterr:
         if not fn.endswith(".csv"):
             continue
         corpus_name = fn.removesuffix(".csv")
+        iterr.set_description(f"Loading {corpus_name}")
         if corpus_name in exclude:
             continue
         try:
