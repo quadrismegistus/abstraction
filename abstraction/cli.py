@@ -79,7 +79,8 @@ def cmd_report_arc_counts(args):
     df = report_arc_counts(
         genres=genres,
         norm=args.norm,
-        cutoff=args.cutoff,
+        abs_cutoff=args.abs_cutoff,
+        conc_cutoff=args.conc_cutoff,
         min_year=args.min_year,
         max_year=args.max_year,
         print_result=True,
@@ -145,7 +146,8 @@ def main():
     # report-arc-counts: piecewise arc report with count-based proportions
     p = sub.add_parser("report-arc-counts", help="Report arc statistics using word proportions")
     p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
-    p.add_argument("--cutoff", type=float, default=-1.0, help="Z-score cutoff for abstract words (default: -1.0)")
+    p.add_argument("--abs-cutoff", type=float, default=-1.0, help="Z-score cutoff for abstract words (z ≤ cutoff, default: -1.0)")
+    p.add_argument("--conc-cutoff", type=float, default=1.0, help="Z-score cutoff for concrete words (z > cutoff, default: 1.0)")
     p.add_argument("--norm", default="Abs-Conc.Median.median", help="Norm column")
     p.add_argument("--min-year", type=int, default=1600)
     p.add_argument("--max-year", type=int, default=2020)

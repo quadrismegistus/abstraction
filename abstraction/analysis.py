@@ -1397,12 +1397,20 @@ def pct_concrete(rec, norm="Abs-Conc.Median.median", cutoff=1.0):
 
 
 def load_counts(corpus_name, counts_dir=None, version="v1",
-                norm="Abs-Conc.Median.median", cutoff=-1.0,
+                norm="Abs-Conc.Median.median",
+                abs_cutoff=-1.0, conc_cutoff=1.0,
                 harmonize=True):
-    """Load counts for a corpus, compute pct_abstract, merge with metadata.
+    """Load counts for a corpus, compute pct_abstract and pct_concrete.
 
-    Returns a DataFrame with columns: id, pct_abstract, year,
-    genre_harmonized, corpus_name, etc.
+    Parameters
+    ----------
+    abs_cutoff : float
+        Z-score cutoff for abstract words (z ≤ abs_cutoff). Default -1.0.
+    conc_cutoff : float
+        Z-score cutoff for concrete words (z > conc_cutoff). Default 1.0.
+
+    Returns a DataFrame with columns: id, pct_abstract, pct_concrete,
+    n_words, year, genre_harmonized, corpus_name, etc.
     """
     if counts_dir is None:
         counts_dir = os.path.join(COUNT_DIR, version)
@@ -1414,8 +1422,8 @@ def load_counts(corpus_name, counts_dir=None, version="v1",
     records = _load_counts_jsonl(path)
     rows = []
     for rec in records:
-        pa = pct_abstract(rec, norm=norm, cutoff=cutoff)
-        pc = pct_concrete(rec, norm=norm, cutoff=-cutoff)
+        pa = pct_abstract(rec, norm=norm, cutoff=abs_cutoff)
+        pc = pct_concrete(rec, norm=norm, cutoff=conc_cutoff)
         total = sum(rec.get(norm, {}).values())
         rows.append({
             "id": rec["id"],
@@ -1446,11 +1454,12 @@ def load_counts(corpus_name, counts_dir=None, version="v1",
 
 
 def load_all_counts(counts_dir=None, version="v1",
-                    norm="Abs-Conc.Median.median", cutoff=-1.0,
+                    norm="Abs-Conc.Median.median",
+                    abs_cutoff=-1.0, conc_cutoff=1.0,
                     exclude=EXCLUDE_CORPORA):
     """Load counts for all corpora, return a combined DataFrame.
 
-    Each text gets pct_abstract and pct_concrete at the given cutoff.
+    Each text gets pct_abstract and pct_concrete at the given cutoffs.
     """
     if counts_dir is None:
         counts_dir = os.path.join(COUNT_DIR, version)
@@ -1468,7 +1477,8 @@ def load_all_counts(counts_dir=None, version="v1",
             continue
         try:
             df = load_counts(corpus_name, counts_dir=counts_dir,
-                             version=version, norm=norm, cutoff=cutoff)
+                             version=version, norm=norm,
+                             abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
             df["corpus_name"] = corpus_name
             all_dfs.append(df)
         except Exception as e:
@@ -1483,16 +1493,99 @@ def load_all_counts(counts_dir=None, version="v1",
     return combined
 
 
+def _report_one_measure(genre, gdf, score_col, corpus_col, label,
+                        min_year, max_year, agg_bin, min_texts_per_bin,
+                        search_range, search_step):
+    """Run piecewise fit for one genre and one measure (abstract or concrete).
+
+    Returns (row_dict, prose_string) or (None, None) if insufficient data.
+    """
+    sub_gdf = gdf.dropna(subset=[score_col])
+    if len(sub_gdf) < 30:
+        return None, None
+
+    sub_gdf = sub_gdf.copy()
+    sub_gdf["decade"] = (sub_gdf["year"] // agg_bin) * agg_bin
+    dec_mean = sub_gdf.groupby("decade")[score_col].mean()
+    dec_n = sub_gdf.groupby("decade")[score_col].count()
+
+    adj = adjust_scores(sub_gdf, score_col=score_col, corpus_col=corpus_col,
+                        min_year=min_year, max_year=max_year,
+                        agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+                        model="piecewise")
+    if adj.empty:
+        return None, None
+
+    adj_dec = adj.groupby("year")["adjusted"].mean()
+    peak_yr = int(adj_dec.idxmax())
+    trough_before = adj_dec[adj_dec.index <= peak_yr]
+    trough_after = adj_dec[adj_dec.index >= peak_yr]
+    start_yr = int(trough_before.idxmin())
+    end_yr = int(trough_after.idxmin())
+
+    # Piecewise stats
+    sub = sub_gdf[["year", score_col, corpus_col]].copy()
+    sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
+    agg = sub.groupby(["_bin", corpus_col]).agg(
+        score=(score_col, "mean"),
+        n_texts=(score_col, "count"),
+    ).reset_index()
+    agg = agg[agg.n_texts >= min_texts_per_bin]
+    y = agg["_bin"].values.astype(float)
+    s = agg["score"].values
+    g = agg[corpus_col].values
+    pw = fit_piecewise(y, s, groups=g,
+                       search_range=search_range,
+                       search_step=search_step)
+
+    pct_start = dec_mean.get(start_yr, np.nan) * 100
+    pct_peak = dec_mean.get(peak_yr, np.nan) * 100
+    pct_end = dec_mean.get(end_yr, np.nan) * 100
+
+    peak_vs_start = pct_peak / pct_start if pct_start > 0 else np.nan
+    peak_vs_end = pct_peak / pct_end if pct_end > 0 else np.nan
+
+    row = {
+        f"{label}_breakpoint": pw["pw_break_year"],
+        f"{label}_start_decade": start_yr,
+        f"{label}_peak_decade": peak_yr,
+        f"{label}_end_decade": end_yr,
+        f"{label}_pct_start": pct_start,
+        f"{label}_pct_peak": pct_peak,
+        f"{label}_pct_end": pct_end,
+        f"{label}_peak_vs_start": peak_vs_start,
+        f"{label}_peak_vs_end": peak_vs_end,
+        f"{label}_slope_before": pw["pw_slope_before"],
+        f"{label}_slope_before_p": pw["pw_slope_before_p"],
+        f"{label}_slope_after": pw["pw_slope_after"],
+        f"{label}_slope_after_p": pw["pw_slope_after_p"],
+        f"{label}_r2": pw["pw_r2"],
+        f"{label}_n_texts_start": int(dec_n.get(start_yr, 0)),
+        f"{label}_n_texts_peak": int(dec_n.get(peak_yr, 0)),
+        f"{label}_n_texts_end": int(dec_n.get(end_yr, 0)),
+    }
+
+    prose = (
+        f"  {label.capitalize()}: {pct_peak:.1f}% at peak ({peak_yr}s) vs "
+        f"{pct_start:.1f}% ({start_yr}s) and {pct_end:.1f}% ({end_yr}s). "
+        f"Peak is {peak_vs_start:.1f}x the {start_yr}s, "
+        f"{peak_vs_end:.1f}x the {end_yr}s. "
+        f"Breakpoint {int(pw['pw_break_year'])}; R² = {pw['pw_r2']:.3f}."
+    )
+    return row, prose
+
+
 def report_arc_counts(combined_df=None, genres=None,
-                      norm="Abs-Conc.Median.median", cutoff=-1.0,
+                      norm="Abs-Conc.Median.median",
+                      abs_cutoff=-1.0, conc_cutoff=1.0,
                       corpus_col="corpus_name",
                       min_year=DEFAULT_MIN_YEAR, max_year=2020,
                       agg_bin=10, min_texts_per_bin=3,
                       search_range=(1650, 1850), search_step=10,
                       print_result=True):
-    """Report piecewise arc statistics using count-based proportions.
+    """Report piecewise arc statistics for both abstract and concrete proportions.
 
-    Uses pct_abstract (proportion of words ≤ cutoff) as the score,
+    Uses pct_abstract (z ≤ abs_cutoff) and pct_concrete (z > conc_cutoff),
     giving ratio-scale values where ratios are meaningful.
 
     Parameters
@@ -1501,122 +1594,61 @@ def report_arc_counts(combined_df=None, genres=None,
         Pre-loaded from load_all_counts(). If None, loads automatically.
     genres : list, optional
         Genres to report. Default: Fiction, Poetry, Periodical.
-    cutoff : float
-        Z-score cutoff for "abstract" words (default -1.0).
+    abs_cutoff : float
+        Z-score cutoff for abstract words (default -1.0).
+    conc_cutoff : float
+        Z-score cutoff for concrete words (default 1.0).
     print_result : bool
         If True, print prose summary.
 
     Returns
     -------
-    DataFrame with one row per genre.
+    DataFrame with one row per genre, columns for both abstract and concrete.
     """
     if combined_df is None:
-        combined_df = load_all_counts(norm=norm, cutoff=cutoff)
+        combined_df = load_all_counts(norm=norm, abs_cutoff=abs_cutoff,
+                                      conc_cutoff=conc_cutoff)
 
     if genres is None:
         genres = ["Fiction", "Poetry", "Periodical"]
 
-    score_col = "pct_abstract"
+    fit_kw = dict(min_year=min_year, max_year=max_year,
+                  agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+                  search_range=search_range, search_step=search_step)
+
     rows = []
     prose_lines = []
 
     for genre in genres:
         gdf = combined_df[combined_df["genre_harmonized"] == genre].copy()
         gdf["year"] = pd.to_numeric(gdf["year"], errors="coerce")
-        gdf = gdf.dropna(subset=["year", score_col])
         gdf = gdf[(gdf["year"] >= min_year) & (gdf["year"] <= max_year)]
         if len(gdf) < 30:
             continue
 
-        gdf["decade"] = (gdf["year"] // agg_bin) * agg_bin
+        row = {"genre": genre, "n_texts": len(gdf)}
+        genre_prose = [f"{genre} (n = {len(gdf):,}):"]
 
-        # Raw decade means
-        dec_mean = gdf.groupby("decade")[score_col].mean()
-        dec_n = gdf.groupby("decade")[score_col].count()
+        for score_col, label in [("pct_abstract", "abstract"),
+                                 ("pct_concrete", "concrete")]:
+            r, p = _report_one_measure(genre, gdf, score_col, corpus_col,
+                                       label, **fit_kw)
+            if r:
+                row.update(r)
+                genre_prose.append(p)
 
-        # Piecewise fit with corpus fixed effects on decade-corpus bins
-        adj = adjust_scores(gdf, score_col=score_col, corpus_col=corpus_col,
-                            min_year=min_year, max_year=max_year,
-                            agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
-                            model="piecewise")
-        if adj.empty:
-            continue
-        adj_dec = adj.groupby("year")["adjusted"].mean()
-
-        peak_yr = int(adj_dec.idxmax())
-        before = adj_dec[adj_dec.index <= peak_yr]
-        after = adj_dec[adj_dec.index >= peak_yr]
-        start_yr = int(before.idxmin())
-        end_yr = int(after.idxmin())
-
-        # Piecewise stats
-        sub = gdf[["year", score_col, corpus_col]].copy()
-        sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
-        agg = sub.groupby(["_bin", corpus_col]).agg(
-            score=(score_col, "mean"),
-            n_texts=(score_col, "count"),
-        ).reset_index()
-        agg = agg[agg.n_texts >= min_texts_per_bin]
-        y = agg["_bin"].values.astype(float)
-        s = agg["score"].values
-        g = agg[corpus_col].values
-        pw = fit_piecewise(y, s, groups=g,
-                           search_range=search_range,
-                           search_step=search_step)
-
-        # Raw values at key decades (as percentages)
-        pct_start = dec_mean.get(start_yr, np.nan) * 100
-        pct_peak = dec_mean.get(peak_yr, np.nan) * 100
-        pct_end = dec_mean.get(end_yr, np.nan) * 100
-
-        # Ratios — these are meaningful because proportions have a real zero
-        peak_vs_start = pct_peak / pct_start if pct_start > 0 else np.nan
-        peak_vs_end = pct_peak / pct_end if pct_end > 0 else np.nan
-        start_vs_end = pct_start / pct_end if pct_end > 0 else np.nan
-
-        rows.append({
-            "genre": genre,
-            "breakpoint": pw["pw_break_year"],
-            "start_decade": start_yr,
-            "peak_decade": peak_yr,
-            "end_decade": end_yr,
-            "pct_start": pct_start,
-            "pct_peak": pct_peak,
-            "pct_end": pct_end,
-            "peak_vs_start": peak_vs_start,
-            "peak_vs_end": peak_vs_end,
-            "start_vs_end": start_vs_end,
-            "slope_before": pw["pw_slope_before"],
-            "slope_before_p": pw["pw_slope_before_p"],
-            "slope_after": pw["pw_slope_after"],
-            "slope_after_p": pw["pw_slope_after_p"],
-            "r2": pw["pw_r2"],
-            "n_texts": len(gdf),
-            "n_texts_start": int(dec_n.get(start_yr, 0)),
-            "n_texts_peak": int(dec_n.get(peak_yr, 0)),
-            "n_texts_end": int(dec_n.get(end_yr, 0)),
-        })
-
+        rows.append(row)
         if print_result:
-            prose_lines.append(
-                f"{genre}: {pct_peak:.1f}% of words are abstract in the "
-                f"{peak_yr}s (peak) vs {pct_start:.1f}% in the {start_yr}s "
-                f"and {pct_end:.1f}% in the {end_yr}s. "
-                f"Peak is {peak_vs_start:.1f}x the {start_yr}s "
-                f"and {peak_vs_end:.1f}x the {end_yr}s. "
-                f"Piecewise breakpoint at {int(pw['pw_break_year'])}; "
-                f"R² = {pw['pw_r2']:.3f}; "
-                f"n = {len(gdf):,} texts."
-            )
+            prose_lines.append("\n".join(genre_prose))
 
     df = pd.DataFrame(rows)
 
     if print_result and prose_lines:
         print()
-        for line in prose_lines:
-            print(line)
+        for block in prose_lines:
+            print(block)
             print()
-        print(f"(Abstract words defined as z ≤ {cutoff}; "
+        print(f"(Abstract: z ≤ {abs_cutoff}; Concrete: z > {conc_cutoff}; "
               f"proportions are frequency-weighted.)")
 
     return df
