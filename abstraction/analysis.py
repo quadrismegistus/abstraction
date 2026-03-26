@@ -520,6 +520,14 @@ DEFAULT_MIN_YEAR = 1600
 DEFAULT_MAX_YEAR = 2000
 DEFAULT_AGG_BIN = 10  # aggregate by decade
 
+# Corpora to exclude from cross-corpus analyses
+EXCLUDE_CORPORA = {
+    "artfl",        # French
+    "dta",          # German
+    "evans_tcp0",   # duplicate of evans_tcp
+    "oldbailey0",   # duplicate of oldbailey
+}
+
 
 def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
             min_year=DEFAULT_MIN_YEAR, max_year=DEFAULT_MAX_YEAR,
@@ -626,7 +634,8 @@ def fit_arc_corpus(corpus_name, score_col="Abs-Conc.Median.median", **kw):
 
 
 def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
-                        scores_dir=None, version="v7", **kw):
+                        scores_dir=None, version="v7",
+                        exclude=EXCLUDE_CORPORA, **kw):
     """Fit arc for all scored corpora. Returns a DataFrame of results."""
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
@@ -638,6 +647,8 @@ def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
         if not fn.endswith(".csv"):
             continue
         corpus_name = fn.removesuffix(".csv")
+        if corpus_name in exclude:
+            continue
         try:
             df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
         except (FileNotFoundError, Exception) as e:
@@ -682,7 +693,8 @@ def fit_arc_by_genre(df, score_col="Abs-Conc.Median.median",
 
 def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
                          scores_dir=None, version="v7", min_texts=30,
-                         corpus_fixed_effects=True, **kw):
+                         corpus_fixed_effects=True,
+                         exclude=EXCLUDE_CORPORA, **kw):
     """Load all scored corpora, harmonize genres, and fit arc per genre.
 
     Pools texts across corpora by harmonized genre, then fits one arc
@@ -700,6 +712,8 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
         if not fn.endswith(".csv"):
             continue
         corpus_name = fn.removesuffix(".csv")
+        if corpus_name in exclude:
+            continue
         try:
             df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
             df["corpus_name"] = corpus_name
