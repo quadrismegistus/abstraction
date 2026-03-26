@@ -1542,8 +1542,12 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
     pct_peak = dec_mean.get(peak_yr, np.nan) * 100
     pct_end = dec_mean.get(end_yr, np.nan) * 100
 
-    peak_vs_start = pct_peak / pct_start if pct_start > 0 else np.nan
-    peak_vs_end = pct_peak / pct_end if pct_end > 0 else np.nan
+    def _ratio(a, b):
+        return a / b if b > 0 else np.nan
+
+    peak_vs_start = _ratio(pct_peak, pct_start)
+    peak_vs_end = _ratio(pct_peak, pct_end)
+    start_vs_end = _ratio(pct_start, pct_end)
 
     row = {
         f"{label}_breakpoint": pw["pw_break_year"],
@@ -1555,6 +1559,7 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
         f"{label}_pct_end": pct_end,
         f"{label}_peak_vs_start": peak_vs_start,
         f"{label}_peak_vs_end": peak_vs_end,
+        f"{label}_start_vs_end": start_vs_end,
         f"{label}_slope_before": pw["pw_slope_before"],
         f"{label}_slope_before_p": pw["pw_slope_before_p"],
         f"{label}_slope_after": pw["pw_slope_after"],
@@ -1566,11 +1571,12 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
     }
 
     prose = (
-        f"  {label.capitalize()}: {pct_peak:.1f}% at peak ({peak_yr}s) vs "
-        f"{pct_start:.1f}% ({start_yr}s) and {pct_end:.1f}% ({end_yr}s). "
-        f"Peak is {peak_vs_start:.1f}x the {start_yr}s, "
-        f"{peak_vs_end:.1f}x the {end_yr}s. "
-        f"Breakpoint {int(pw['pw_break_year'])}; R² = {pw['pw_r2']:.3f}."
+        f"  {label.capitalize()}:\n"
+        f"    {start_yr}s: {pct_start:.1f}%  →  {peak_yr}s: {pct_peak:.1f}% (peak)  →  {end_yr}s: {pct_end:.1f}%\n"
+        f"    Rise:  {pct_start:.1f}% → {pct_peak:.1f}% = {peak_vs_start:.1f}x ({start_yr}s→{peak_yr}s)\n"
+        f"    Fall:  {pct_peak:.1f}% → {pct_end:.1f}% = {peak_vs_end:.1f}x ({peak_yr}s→{end_yr}s)\n"
+        f"    Net:   {pct_start:.1f}% → {pct_end:.1f}% = {start_vs_end:.1f}x ({start_yr}s→{end_yr}s)\n"
+        f"    Breakpoint {int(pw['pw_break_year'])}; R² = {pw['pw_r2']:.3f}"
     )
     return row, prose
 
