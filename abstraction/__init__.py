@@ -16,7 +16,8 @@ from .models import gen_vecnorms
 from .counting import count_absconc, count_absconc_psg, count_absconc_corpus
 from .scoring import score_psg, score_freqs, score_words, get_all_passages, gen_bookpassages, score_corpus_freqs, score_all_corpora
 from .analysis import (
-    load_scores, fit_arc, fit_arc_corpus, fit_arc_all_corpora,
+    load_scores, load_all_scored, adjust_scores,
+    fit_arc, fit_arc_corpus, fit_arc_all_corpora,
     fit_arc_by_genre, fit_arc_all_by_genre, harmonize_genre, summarize_arc,
 )
 from .utils import read_df, save_df, get_avgs_df

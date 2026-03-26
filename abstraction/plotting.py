@@ -349,3 +349,137 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
         fig.save(save_to)
 
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Arc plots (adjusted scores from analysis.adjust_scores)
+# ---------------------------------------------------------------------------
+
+
+def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
+             ylabel="Abstractness − Concreteness (corpus-adjusted)",
+             save_to=None, width=10, height=6):
+    """Plot corpus-adjusted arc from adjust_scores() output.
+
+    Parameters
+    ----------
+    adj_df : DataFrame
+        Output of analysis.adjust_scores(). Must have columns:
+        year, score, adjusted, fitted, and optionally corpus.
+    show_raw : bool
+        If True, show raw (unadjusted) corpus points in light color.
+    show_corpus : bool
+        If True and corpus column exists, color points by corpus.
+    """
+    df = adj_df.copy()
+    has_corpus = "corpus" in df.columns
+
+    p9.options.figure_size = (width, height)
+
+    # Main layer: adjusted points
+    if has_corpus and show_corpus:
+        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted", color="corpus"))
+    else:
+        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted"))
+
+    fig += p9.theme_classic()
+    fig += p9.theme(legend_position="right" if has_corpus and show_corpus else "none")
+
+    # Raw points (before adjustment) as faint background
+    if show_raw and has_corpus:
+        fig += p9.geom_point(p9.aes(x="year", y="score", color="corpus"),
+                             alpha=0.15, size=1.5)
+
+    # Adjusted points
+    fig += p9.geom_point(alpha=0.6, size=2.5)
+
+    # Fitted trend line
+    trend = df[["year", "fitted"]].drop_duplicates().sort_values("year")
+    fig += p9.geom_line(p9.aes(x="year", y="fitted"),
+                        data=trend, color="black", size=1.2,
+                        inherit_aes=False)
+
+    fig += p9.xlab("Year")
+    fig += p9.ylab(ylabel)
+    if title:
+        fig += p9.labs(title=title)
+
+    if save_to:
+        os.makedirs(os.path.dirname(save_to), exist_ok=True)
+        fig.save(save_to)
+
+    return fig
+
+
+def plot_arc_by_genre(combined_df, genres=None,
+                      score_col="Abs-Conc.Median.median",
+                      model="quadratic", save_to=None,
+                      ncol=2, width=14, height=None, **adjust_kw):
+    """Plot adjusted arcs for multiple genres as faceted panels.
+
+    Parameters
+    ----------
+    combined_df : DataFrame
+        Combined scored DataFrame with genre_harmonized and corpus_name columns.
+        Typically from analysis.load_all_scored().
+    genres : list, optional
+        Genres to include. If None, uses all genres with enough data.
+    model : str
+        "quadratic" or "piecewise" — passed to adjust_scores.
+    ncol : int
+        Number of columns in facet grid.
+    """
+    from .analysis import adjust_scores
+
+    if genres is None:
+        gcounts = combined_df["genre_harmonized"].value_counts()
+        genres = gcounts[gcounts >= 30].index.tolist()
+
+    panels = []
+    for genre in genres:
+        gdf = combined_df[combined_df["genre_harmonized"] == genre]
+        if len(gdf) < 30:
+            continue
+        adj = adjust_scores(gdf, score_col=score_col, model=model, **adjust_kw)
+        if len(adj) == 0:
+            continue
+        adj["genre"] = genre
+        panels.append(adj)
+
+    if not panels:
+        return None
+
+    df = pd.concat(panels, ignore_index=True)
+    has_corpus = "corpus" in df.columns
+
+    if height is None:
+        nrow = int(np.ceil(len(panels) / ncol))
+        height = 4 * nrow
+
+    p9.options.figure_size = (width, height)
+
+    if has_corpus:
+        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted", color="corpus"))
+    else:
+        fig = p9.ggplot(df, p9.aes(x="year", y="adjusted"))
+
+    fig += p9.theme_classic()
+    fig += p9.theme(legend_position="bottom",
+                    strip_text=p9.element_text(size=11, weight="bold"))
+    fig += p9.geom_point(alpha=0.5, size=1.5)
+
+    # Fitted trend per genre
+    trend = df[["year", "fitted", "genre"]].drop_duplicates().sort_values("year")
+    fig += p9.geom_line(p9.aes(x="year", y="fitted"),
+                        data=trend, color="black", size=1,
+                        inherit_aes=False)
+
+    fig += p9.facet_wrap("genre", ncol=ncol, scales="free_y")
+    fig += p9.xlab("Year")
+    fig += p9.ylab("Abstractness − Concreteness\n(corpus-adjusted)")
+
+    if save_to:
+        os.makedirs(os.path.dirname(save_to), exist_ok=True)
+        fig.save(save_to)
+
+    return fig

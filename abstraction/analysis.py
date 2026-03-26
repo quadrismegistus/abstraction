@@ -732,6 +732,171 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
                             min_texts=min_texts, **kw)
 
 
+def load_all_scored(scores_dir=None, version="v7", exclude=EXCLUDE_CORPORA):
+    """Load all scored corpora, harmonize genres, return a combined DataFrame.
+
+    This is the data-loading step extracted from fit_arc_all_by_genre,
+    useful when you need the underlying data (not just fit summaries).
+    """
+    if scores_dir is None:
+        scores_dir = os.path.join(SCORES_DIR, version)
+    if not os.path.isdir(scores_dir):
+        raise FileNotFoundError(f"No scores directory: {scores_dir}")
+
+    all_dfs = []
+    for fn in sorted(os.listdir(scores_dir)):
+        if not fn.endswith(".csv"):
+            continue
+        corpus_name = fn.removesuffix(".csv")
+        if corpus_name in exclude:
+            continue
+        try:
+            df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
+            df["corpus_name"] = corpus_name
+            all_dfs.append(df)
+        except Exception as e:
+            print(f"  Skipping {corpus_name}: {e}")
+            continue
+
+    if not all_dfs:
+        return pd.DataFrame()
+    return pd.concat(all_dfs, ignore_index=True)
+
+
+def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
+                  corpus_col="corpus_name", min_year=DEFAULT_MIN_YEAR,
+                  max_year=DEFAULT_MAX_YEAR, agg_bin=DEFAULT_AGG_BIN,
+                  min_texts_per_bin=3, model="quadratic"):
+    """Fit a regression with corpus fixed effects and return adjusted scores.
+
+    Returns a DataFrame with columns:
+        year, score (raw), adjusted (corpus-corrected), fitted (trend line),
+        corpus, n_texts
+    The 'adjusted' column removes corpus-specific intercepts while preserving
+    the shared time trend: adjusted = score - corpus_effect.
+    The 'fitted' column is the predicted trend (intercept + time terms only).
+
+    Parameters
+    ----------
+    model : str
+        "quadratic" or "piecewise". Determines the trend shape.
+    """
+    keep_cols = [year_col, score_col]
+    if corpus_col and corpus_col in df.columns:
+        keep_cols.append(corpus_col)
+    sub = df[keep_cols].copy()
+    sub[year_col] = pd.to_numeric(sub[year_col], errors="coerce")
+    sub = sub.dropna(subset=[year_col, score_col])
+    if min_year is not None:
+        sub = sub[sub[year_col] >= min_year]
+    if max_year is not None:
+        sub = sub[sub[year_col] <= max_year]
+
+    if len(sub) == 0:
+        return pd.DataFrame()
+
+    # Aggregate by (decade, corpus)
+    sub["_bin"] = (sub[year_col] // agg_bin) * agg_bin
+    if corpus_col and corpus_col in sub.columns:
+        agg = sub.groupby(["_bin", corpus_col]).agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        groups = agg[corpus_col].values
+    else:
+        agg = sub.groupby("_bin").agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        groups = None
+
+    years = agg["_bin"].values.astype(float)
+    scores = agg["score"].values
+
+    mask = np.isfinite(years) & np.isfinite(scores)
+    y = years[mask]
+    s = scores[mask]
+    g = groups[mask] if groups is not None else None
+    agg_masked = agg[mask].copy()
+
+    if len(y) < 10:
+        return pd.DataFrame()
+
+    if model == "quadratic":
+        y_center = y.mean()
+        yc = y - y_center
+
+        # Design matrix: [intercept, year, year², corpus_dummies...]
+        X_trend = np.column_stack([np.ones(len(yc)), yc, yc ** 2])
+        if g is not None:
+            dummies = _make_dummies(g)
+            X = np.column_stack([X_trend, dummies]) if dummies.shape[1] > 0 else X_trend
+        else:
+            X = X_trend
+
+        try:
+            beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
+        except np.linalg.LinAlgError:
+            return pd.DataFrame()
+
+        # Fitted trend (shared time component only)
+        fitted = X_trend @ beta[:3]
+        # Corpus effects: contribution of dummy variables
+        if g is not None and X.shape[1] > 3:
+            corpus_effect = X[:, 3:] @ beta[3:]
+        else:
+            corpus_effect = np.zeros(len(s))
+        adjusted = s - corpus_effect
+
+    elif model == "piecewise":
+        # First find the best breakpoint
+        pw_result = fit_piecewise(y, s, groups=g)
+        break_year = pw_result.get("pw_break_year", np.nan)
+        if not np.isfinite(break_year):
+            return pd.DataFrame()
+
+        before = y <= break_year
+        after = y > break_year
+        yb = np.where(before, y - break_year, 0.0)
+        ya = np.where(after, y - break_year, 0.0)
+
+        X_trend = np.column_stack([np.ones(len(y)), yb, ya])
+        if g is not None:
+            dummies = _make_dummies(g)
+            X = np.column_stack([X_trend, dummies]) if dummies.shape[1] > 0 else X_trend
+        else:
+            X = X_trend
+
+        try:
+            beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
+        except np.linalg.LinAlgError:
+            return pd.DataFrame()
+
+        fitted = X_trend @ beta[:3]
+        if g is not None and X.shape[1] > 3:
+            corpus_effect = X[:, 3:] @ beta[3:]
+        else:
+            corpus_effect = np.zeros(len(s))
+        adjusted = s - corpus_effect
+    else:
+        raise ValueError(f"Unknown model: {model!r} (use 'quadratic' or 'piecewise')")
+
+    # Build result DataFrame
+    result = pd.DataFrame({
+        "year": y,
+        "score": s,
+        "adjusted": adjusted,
+        "fitted": fitted,
+        "n_texts": agg_masked["n_texts"].values,
+    })
+    if g is not None:
+        result["corpus"] = g
+
+    return result
+
+
 def summarize_arc(result):
     """Format an arc result dict as a human-readable string."""
     lines = []
