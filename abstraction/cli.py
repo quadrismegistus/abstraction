@@ -62,13 +62,13 @@ def cmd_count_corpus(args):
         sys.exit(1)
     out_dir = os.path.join(COUNT_DIR, "v1")
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{args.corpus}.csv")
+    out_path = os.path.join(out_dir, f"{args.corpus}.jsonl")
     if args.force and os.path.exists(out_path):
         os.remove(out_path)
     norm_filter = args.norms.split(",") if args.norms else None
-    df = count_corpus_freqs(corpus_dir, output_path=out_path, norm_filter=norm_filter)
-    if len(df):
-        print(f"Counted {len(df)} texts -> {out_path}")
+    records = count_corpus_freqs(corpus_dir, output_path=out_path, norm_filter=norm_filter)
+    if records:
+        print(f"Counted {len(records)} texts -> {out_path}")
     else:
         print(f"No freqs files found in {corpus_dir}/freqs/")
 

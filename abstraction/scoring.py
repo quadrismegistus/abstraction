@@ -419,12 +419,13 @@ DEFAULT_BIN_EDGES = np.round(np.arange(-3.0, 3.05, 0.1), 1)
 
 
 def _count_freqs_allnorms(path, allnorms, bin_edges):
-    """Compute cumulative z-score distributions for a single freqs JSON.
+    """Compute frequency-weighted z-score histograms for a single freqs JSON.
 
-    For each norm column, bins words by z-score weighted by frequency,
-    then returns cumulative proportions at each bin edge.
+    For each norm column, bins words by z-score weighted by word frequency.
+    Only non-zero bins are stored (sparse).
 
-    Returns a dict like {"{norm}_cdf_{edge}": proportion, ...}.
+    Returns a dict like {norm_col: {"-1.0": 22, "-0.9": 33, ...}, ...}
+    where values are raw frequency-weighted counts (integers).
     """
     try:
         with open(path) as f:
@@ -447,30 +448,49 @@ def _count_freqs_allnorms(path, allnorms, bin_edges):
             continue
         w = counts[mask].astype(float)
         v = vals[mask]
-        # Histogram with bin_edges; values outside range go into first/last bins
         hist, _ = np.histogram(v, bins=bin_edges, weights=w)
-        total = w.sum()
-        cdf = np.cumsum(hist) / total
-        for edge, prop in zip(bin_edges[1:], cdf):
-            result[f"{col}_cdf_{edge:.1f}"] = round(float(prop), 6)
+        # Store sparse: only bins with nonzero counts
+        norm_hist = {}
+        for edge, count in zip(bin_edges[1:], hist):
+            c = int(round(count))
+            if c > 0:
+                norm_hist[f"{edge:.1f}"] = c
+        if norm_hist:
+            result[col] = norm_hist
     return result
 
 
-def _get_cdf_columns(allnorms, bin_edges):
-    """Return the canonical column order for CDF CSVs."""
-    cols = ["id"]
-    for norm_col in sorted(allnorms.columns):
-        for edge in bin_edges[1:]:
-            cols.append(f"{norm_col}_cdf_{edge:.1f}")
-    return cols
+def _load_done_jsonl(jsonl_path):
+    """Load existing JSONL, return {id: {norm_set}} and list of all records."""
+    records = {}
+    if not os.path.exists(jsonl_path):
+        return records, []
+    lines = []
+    with open(jsonl_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            tid = rec.get("id")
+            if tid is not None:
+                records[tid] = rec
+                lines.append(rec)
+    return records, lines
 
 
 def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
                        bin_edges=None, norm_filter=None):
     """Count z-score distributions for all freqs/*.json in a corpus.
 
-    Mirrors score_corpus_freqs but outputs cumulative proportions in
-    z-score bins instead of weighted-mean scores.
+    Outputs one JSONL line per text:
+        {"id": "...", "Abs-Conc.Median.median": {"-1.0": 0.19, ...}, ...}
+
+    Resumable: skips texts already present with all requested norms.
+    If re-run with additional norms, merges new norms into existing records.
 
     Parameters
     ----------
@@ -479,19 +499,19 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     allnorms : DataFrame, optional
         Pre-loaded allnorms. Loaded automatically if None.
     output_path : str, optional
-        CSV path for incremental output.
+        JSONL path for incremental output.
     bin_edges : array-like, optional
         Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
     norm_filter : list of str, optional
-        If given, only count these norm columns (e.g. ["Abs-Conc.Median.median"]).
+        If given, only count these norm columns.
 
     Returns
     -------
-    DataFrame with 'id' column plus CDF columns, or empty DataFrame.
+    List of dicts (one per text).
     """
     freqs_dir = os.path.join(corpus_dir, "freqs")
     if not os.path.isdir(freqs_dir):
-        return pd.DataFrame()
+        return []
     if allnorms is None:
         allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
@@ -500,43 +520,66 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     if bin_edges is None:
         bin_edges = DEFAULT_BIN_EDGES
     bin_edges = np.asarray(bin_edges)
-    columns = _get_cdf_columns(allnorms, bin_edges)
 
-    done_ids = _load_done_ids(output_path) if output_path else set()
+    requested_norms = set(allnorms.columns)
 
-    csv_file = None
-    writer = None
-    if output_path:
-        import csv as csv_mod
-        file_exists = os.path.exists(output_path) and os.path.getsize(output_path) > 0
-        csv_file = open(output_path, "a", newline="")
-        writer = csv_mod.DictWriter(csv_file, fieldnames=columns,
-                                    extrasaction="ignore", restval="")
-        if not file_exists:
-            writer.writeheader()
+    # Load existing records and check which texts need (re-)processing
+    existing, all_records = _load_done_jsonl(output_path) if output_path else ({}, [])
+    done_ids = set()
+    needs_update = {}  # id -> existing record that needs new norms merged in
+    for tid, rec in existing.items():
+        rec_norms = set(k for k in rec if k != "id")
+        if requested_norms.issubset(rec_norms):
+            done_ids.add(tid)
+        else:
+            needs_update[tid] = rec
 
-    rows = []
+    new_records = []
+    fh = None
     try:
+        if output_path:
+            # Append mode: new texts get appended; updated texts rewritten at end
+            fh = open(output_path, "a")
+
         for text_id, path in _walk_freqs(freqs_dir):
             if text_id in done_ids:
                 continue
             cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
-            if cdfs:
-                cdfs["id"] = text_id
-                rows.append(cdfs)
-                if writer:
-                    writer.writerow(cdfs)
-    finally:
-        if csv_file:
-            csv_file.close()
+            if not cdfs:
+                continue
 
-    if not rows and not done_ids:
-        return pd.DataFrame()
-    if output_path and done_ids:
-        return pd.read_csv(output_path)
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows)[columns]
+            if text_id in needs_update:
+                # Merge new norms into existing record
+                merged = needs_update.pop(text_id)
+                merged.update(cdfs)
+                new_records.append(merged)
+            else:
+                rec = {"id": text_id}
+                rec.update(cdfs)
+                new_records.append(rec)
+                if fh:
+                    fh.write(json.dumps(rec) + "\n")
+    finally:
+        if fh:
+            fh.close()
+
+    # If we had to update existing records, rewrite the whole file
+    if needs_update is not None and any(
+        tid not in done_ids and tid not in {r["id"] for r in new_records}
+        for tid in existing
+    ) or any(r["id"] in existing for r in new_records):
+        if output_path and new_records:
+            # Rebuild: existing (unchanged) + updated/new
+            final = {}
+            for rec in all_records:
+                final[rec["id"]] = rec
+            for rec in new_records:
+                final[rec["id"]] = rec
+            with open(output_path, "w") as f:
+                for rec in final.values():
+                    f.write(json.dumps(rec) + "\n")
+
+    return all_records + [r for r in new_records if r["id"] not in existing]
 
 
 def count_all_corpora(
@@ -548,16 +591,18 @@ def count_all_corpora(
 ):
     """Count z-score distributions for all corpora with freqs/ folders.
 
-    Mirrors score_all_corpora. Saves one CSV per corpus to output_dir/v1/.
+    Saves one JSONL file per corpus to output_dir/v1/.
+    Resumable: skips already-counted texts. Re-running with additional
+    norms merges new norms into existing records.
 
     Parameters
     ----------
     corpora_dir : str
         Parent directory containing corpus subdirectories.
     output_dir : str, optional
-        Where to save per-corpus count files. Default: DIST_DIR.
+        Where to save per-corpus count files. Default: COUNT_DIR.
     force : bool
-        If True, delete existing CSVs and re-count from scratch.
+        If True, delete existing files and re-count from scratch.
     norm_filter : list of str, optional
         Only count these norm columns.
     bin_edges : array-like, optional
@@ -575,7 +620,6 @@ def count_all_corpora(
     if bin_edges is None:
         bin_edges = DEFAULT_BIN_EDGES
     bin_edges = np.asarray(bin_edges)
-    columns = _get_cdf_columns(allnorms, bin_edges)
 
     # discover corpora with freqs/ dirs, dedup by realpath
     seen_realpaths = {}
@@ -592,62 +636,74 @@ def count_all_corpora(
         seen_realpaths[real] = name
         corpora.append((name, corpus_dir))
 
-    # collect all (corpus_name, text_id, path), skipping done IDs
+    requested_norms = set(allnorms.columns)
+
+    # collect files to process, skipping done IDs
     all_files = []
     for name, corpus_dir in corpora:
-        out_path = os.path.join(output_dir, f"{name}.csv")
+        out_path = os.path.join(output_dir, f"{name}.jsonl")
         if force and os.path.exists(out_path):
             os.remove(out_path)
-        done_ids = _load_done_ids(out_path)
+        existing, _ = _load_done_jsonl(out_path)
+        n_done = 0
+        for tid, rec in existing.items():
+            rec_norms = set(k for k in rec if k != "id")
+            if requested_norms.issubset(rec_norms):
+                n_done += 1
         freqs_dir = os.path.join(corpus_dir, "freqs")
+        n_new = 0
         for text_id, path in _walk_freqs(freqs_dir):
-            if text_id not in done_ids:
+            if text_id not in existing or not requested_norms.issubset(
+                set(k for k in existing[text_id] if k != "id")
+            ):
                 all_files.append((name, text_id, path))
-        if done_ids:
-            print(f"  {name}: {len(done_ids)} already done, "
-                  f"{sum(1 for n, _, _ in all_files if n == name)} remaining")
+                n_new += 1
+        if n_done:
+            print(f"  {name}: {n_done} already done, {n_new} remaining")
 
-    # open one CSV writer per corpus
-    import csv as csv_mod
-    writers = {}
+    # open one JSONL file handle per corpus; track records for merging
     file_handles = {}
+    corpus_records = {}  # name -> {id: record}
 
-    def get_writer(name):
-        if name not in writers:
-            out_path = os.path.join(output_dir, f"{name}.csv")
-            file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
-            fh = open(out_path, "a", newline="")
-            w = csv_mod.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
-            if not file_exists:
-                w.writeheader()
-            writers[name] = w
-            file_handles[name] = fh
-        return writers[name]
+    def get_handle(name):
+        if name not in file_handles:
+            out_path = os.path.join(output_dir, f"{name}.jsonl")
+            existing, _ = _load_done_jsonl(out_path)
+            corpus_records[name] = existing
+            file_handles[name] = open(out_path, "a")
+        return file_handles[name]
 
     pbar = tqdm(all_files, desc="Counting", unit="file")
+    needs_rewrite = set()
     try:
         for name, text_id, path in pbar:
             pbar.set_postfix_str(name, refresh=False)
             cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
-            if cdfs:
-                cdfs["id"] = text_id
-                get_writer(name).writerow(cdfs)
+            if not cdfs:
+                continue
+
+            fh = get_handle(name)
+            if text_id in corpus_records[name]:
+                # Merge new norms into existing record — needs rewrite
+                corpus_records[name][text_id].update(cdfs)
+                needs_rewrite.add(name)
+            else:
+                rec = {"id": text_id}
+                rec.update(cdfs)
+                corpus_records[name][text_id] = rec
+                fh.write(json.dumps(rec) + "\n")
     finally:
         for fh in file_handles.values():
             fh.close()
 
-    results = {}
-    for name, _ in corpora:
-        out_path = os.path.join(output_dir, f"{name}.csv")
-        if os.path.exists(out_path):
-            try:
-                results[name] = pd.read_csv(out_path)
-            except Exception as e:
-                print(f"  Warning: could not read {name}.csv: {e}")
-                results[name] = pd.DataFrame()
-        else:
-            results[name] = pd.DataFrame()
-    return results
+    # Rewrite files that had merged records
+    for name in needs_rewrite:
+        out_path = os.path.join(output_dir, f"{name}.jsonl")
+        with open(out_path, "w") as f:
+            for rec in corpus_records[name].values():
+                f.write(json.dumps(rec) + "\n")
+
+    return {name: list(corpus_records.get(name, {}).values()) for name, _ in corpora}
 
 
 def printpsg(row):
