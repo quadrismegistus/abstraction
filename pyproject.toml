@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "abstraction"
+version = "0.1.0"
+description = "Measuring abstract and concrete language in literary history"
+requires-python = ">=3.9"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[project.optional-dependencies]
+llm = ["litellm", "hashstash"]
+all = ["litellm", "hashstash", "tabula-py", "stanza"]
+
+[project.scripts]
+abstraction = "abstraction.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

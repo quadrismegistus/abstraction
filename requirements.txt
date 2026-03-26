@@ -1,0 +1,11 @@
+pandas>=1.5
+pyarrow>=10.0
+numpy>=1.23
+scipy>=1.9
+plotnine>=0.12
+adjustText
+nltk>=3.8
+gensim>=4.0
+tqdm>=4.64
+requests
+ftfy

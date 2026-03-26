@@ -1,0 +1,22 @@
+# Python
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Data (large, not tracked)
+data/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Project instructions (per-machine)
+CLAUDE.md
+
+# Jupyter
+.ipynb_checkpoints/
