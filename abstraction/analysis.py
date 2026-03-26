@@ -1633,19 +1633,68 @@ def report_arc_counts(combined_df=None, genres=None,
             continue
 
         row = {"genre": genre, "n_texts": len(gdf)}
-        genre_prose = [f"{genre} (n = {len(gdf):,}):"]
 
-        for score_col, label in [("pct_abstract", "abstract"),
-                                 ("pct_concrete", "concrete")]:
-            r, p = _report_one_measure(genre, gdf, score_col, corpus_col,
-                                       label, **fit_kw)
-            if r:
-                row.update(r)
-                genre_prose.append(p)
+        # Run piecewise on abstract to find the key decades
+        abs_row, abs_prose = _report_one_measure(
+            genre, gdf, "pct_abstract", corpus_col, "abstract", **fit_kw)
+        conc_row, conc_prose = _report_one_measure(
+            genre, gdf, "pct_concrete", corpus_col, "concrete", **fit_kw)
+
+        if abs_row:
+            row.update(abs_row)
+        if conc_row:
+            row.update(conc_row)
+
+        # Cross-measure: concrete values at the abstract key decades
+        if abs_row:
+            gdf_c = gdf.copy()
+            gdf_c["decade"] = (gdf_c["year"] // agg_bin) * agg_bin
+            abs_start = int(abs_row["abstract_start_decade"])
+            abs_peak = int(abs_row["abstract_peak_decade"])
+            abs_end = int(abs_row["abstract_end_decade"])
+            conc_dec = gdf_c.groupby("decade")["pct_concrete"].mean() * 100
+
+            conc_at_abs_start = conc_dec.get(abs_start, np.nan)
+            conc_at_abs_peak = conc_dec.get(abs_peak, np.nan)
+            conc_at_abs_end = conc_dec.get(abs_end, np.nan)
+
+            row["conc_at_abs_start"] = conc_at_abs_start
+            row["conc_at_abs_peak"] = conc_at_abs_peak
+            row["conc_at_abs_end"] = conc_at_abs_end
+
+        if print_result and abs_row:
+            a_s = abs_row["abstract_pct_start"]
+            a_p = abs_row["abstract_pct_peak"]
+            a_e = abs_row["abstract_pct_end"]
+            c_s = conc_at_abs_start
+            c_p = conc_at_abs_peak
+            c_e = conc_at_abs_end
+
+            def _r(a, b):
+                return a / b if b > 0 else np.nan
+
+            genre_prose = [
+                f"{genre} (n = {len(gdf):,}):",
+                f"  Rise ({abs_start}s → {abs_peak}s):",
+                f"    Abstract: {a_s:.1f}% → {a_p:.1f}% ({_r(a_p, a_s):.1f}x)",
+                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_s, c_p):.1f}x decline)" if c_p < c_s else
+                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_p, c_s):.1f}x increase)",
+                f"  Fall ({abs_peak}s → {abs_end}s):",
+                f"    Abstract: {a_p:.1f}% → {a_e:.1f}% ({_r(a_p, a_e):.1f}x decline)",
+                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_e, c_p):.1f}x increase)" if c_e > c_p else
+                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_p, c_e):.1f}x decline)",
+                f"  Net ({abs_start}s → {abs_end}s):",
+                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_s, a_e):.1f}x decline)" if a_e < a_s else
+                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_e, a_s):.1f}x increase)",
+                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_e, c_s):.1f}x increase)" if c_e > c_s else
+                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_s, c_e):.1f}x decline)",
+                f"  Breakpoint {int(abs_row['abstract_breakpoint'])}; "
+                f"R² abstract = {abs_row['abstract_r2']:.3f}"
+                + (f", R² concrete = {conc_row['concrete_r2']:.3f}" if conc_row else ""),
+            ]
+            prose_lines.append("\n".join(genre_prose))
 
         rows.append(row)
-        if print_result:
-            prose_lines.append("\n".join(genre_prose))
 
     df = pd.DataFrame(rows)
 
