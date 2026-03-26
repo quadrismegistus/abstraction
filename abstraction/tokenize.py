@@ -51,12 +51,15 @@ def get_stopwords():
 def get_spelling_modernizer():
     global _SPELLING_D
     if _SPELLING_D is None:
-        with open(PATH_SPELLING_D) as f:
-            _SPELLING_D = dict(
-                ln.strip().split("\t", 1)
-                for ln in f
-                if ln.strip() and "\t" in ln and not ln.startswith("#")
-            )
+        if not os.path.exists(PATH_SPELLING_D):
+            _SPELLING_D = {}
+        else:
+            with open(PATH_SPELLING_D) as f:
+                _SPELLING_D = dict(
+                    ln.strip().split("\t", 1)
+                    for ln in f
+                    if ln.strip() and "\t" in ln and not ln.startswith("#")
+                )
     return _SPELLING_D
 
 
