@@ -278,10 +278,43 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
 
     if harmonize:
         merged = harmonize_genre(merged, corpus_name=corpus_name)
+    if snake == "chadwyck_poetry":
+        merged = _fix_chadwyck_poetry_year(merged)
     if "year" in merged.columns:
         merged["year"] = pd.to_numeric(merged["year"], errors="coerce")
         merged = _apply_year_range(merged, snake)
     return merged
+
+
+def _fix_chadwyck_poetry_year(df):
+    """Re-estimate year for chadwyck_poetry using publication date.
+
+    The raw metadata sets year = author_dob + 30 for every row.  This
+    replaces it with attpubn1 (actual publication year) when that date
+    falls within the author's lifetime (DOB–DOD), and drops rows where
+    it doesn't or where DOD is unknown for authors born before 1950.
+    """
+    needed = {"author_dob", "author_dod", "attpubn1"}
+    if not needed.issubset(df.columns):
+        return df
+
+    dob = pd.to_numeric(df["author_dob"], errors="coerce")
+    dod = pd.to_numeric(df["author_dod"], errors="coerce")
+    pub = pd.to_numeric(df["attpubn1"], errors="coerce")
+
+    has_dod = dod.notna() & (dod > 0)
+    has_pub = pub.notna() & (pub > 0)
+
+    # Drop: no DOD and born before 1950 (can't verify pub date)
+    drop_no_dod = ~has_dod & (dob < 1950)
+
+    # Drop: has DOD + pub year but pub year outside lifetime
+    outside_lifetime = has_dod & has_pub & ((pub < dob) | (pub > dod))
+
+    keep = ~drop_no_dod & ~outside_lifetime & has_pub
+    out = df[keep].copy()
+    out["year"] = pub[keep]
+    return out
 
 
 def get_score_columns(df):
@@ -524,6 +557,275 @@ def _empty_piecewise():
     ]}
 
 
+def report_piecewise(combined_df, genres=None,
+                     score_col="Abs-Conc.Median.median",
+                     corpus_col="corpus_name",
+                     min_year=1600, max_year=2020,
+                     agg_bin=10, min_texts_per_bin=3,
+                     search_range=(1650, 1850), search_step=10,
+                     invert=True):
+    """Report piecewise regression statistics per genre.
+
+    Returns a DataFrame with one row per genre: breakpoint, slopes,
+    slope SEs, p-values, R², and sample sizes.
+    """
+    if genres is None:
+        gcounts = combined_df["genre_harmonized"].value_counts()
+        genres = gcounts[gcounts >= 30].index.tolist()
+
+    rows = []
+    for genre in genres:
+        gdf = combined_df[combined_df["genre_harmonized"] == genre]
+        # Aggregate by (decade, corpus)
+        sub = gdf[[score_col, "year", corpus_col]].copy()
+        sub["year"] = pd.to_numeric(sub["year"], errors="coerce")
+        sub = sub.dropna(subset=["year", score_col])
+        sub = sub[(sub["year"] >= min_year) & (sub["year"] <= max_year)]
+        if len(sub) < 30:
+            continue
+        sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
+        agg = sub.groupby(["_bin", corpus_col]).agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        if len(agg) < 20:
+            continue
+
+        y = agg["_bin"].values.astype(float)
+        s = agg["score"].values
+        if invert:
+            s = -s
+        g = agg[corpus_col].values
+
+        pw = fit_piecewise(y, s, groups=g,
+                           search_range=search_range,
+                           search_step=search_step)
+
+        # Also compute slope SEs from the full fit for reporting
+        break_year = pw.get("pw_break_year", np.nan)
+        se_before = np.nan
+        se_after = np.nan
+        if np.isfinite(break_year):
+            before = y <= break_year
+            after = y > break_year
+            yb = np.where(before, y - break_year, 0.0)
+            ya = np.where(after, y - break_year, 0.0)
+            X = np.column_stack([np.ones(len(y)), yb, ya])
+            dummies = _make_dummies(g)
+            if dummies.shape[1] > 0:
+                X = np.column_stack([X, dummies])
+            try:
+                beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
+                resid = s - X @ beta
+                n, p = X.shape
+                mse = (resid ** 2).sum() / max(n - p, 1)
+                cov = mse * np.linalg.inv(X.T @ X)
+                se_before = np.sqrt(cov[1, 1])
+                se_after = np.sqrt(cov[2, 2])
+            except np.linalg.LinAlgError:
+                pass
+
+        rows.append({
+            "genre": genre,
+            "breakpoint": pw["pw_break_year"],
+            "slope_before": pw["pw_slope_before"],
+            "slope_before_se": se_before,
+            "slope_before_p": pw["pw_slope_before_p"],
+            "slope_after": pw["pw_slope_after"],
+            "slope_after_se": se_after,
+            "slope_after_p": pw["pw_slope_after_p"],
+            "r2": pw["pw_r2"],
+            "n_total": pw["pw_n"],
+            "n_before": pw["pw_n_before"],
+            "n_after": pw["pw_n_after"],
+            "n_texts_total": int(sub["n_texts"].sum()) if "n_texts" in sub.columns else len(sub),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def report_arc(combined_df=None, genres=None,
+               score_col="Abs-Conc.Median.median",
+               corpus_col="corpus_name",
+               min_year=1600, max_year=2020,
+               agg_bin=10, min_texts_per_bin=3,
+               search_range=(1650, 1850), search_step=10,
+               print_result=True):
+    """Report piecewise arc statistics with ratios for each genre.
+
+    Computes piecewise regression, raw decade means at key decades
+    (start trough, peak, end trough), and abstractness ratios on a
+    shifted scale anchored so the global minimum = 1.
+
+    Parameters
+    ----------
+    combined_df : DataFrame, optional
+        Pre-loaded combined scored DataFrame. If None, calls load_all_scored().
+    genres : list, optional
+        Genres to report. Default: Fiction, Poetry, Periodical.
+    print_result : bool
+        If True, print a prose summary alongside the DataFrame.
+
+    Returns
+    -------
+    DataFrame with one row per genre.
+    """
+    if combined_df is None:
+        combined_df = load_all_scored()
+
+    if genres is None:
+        genres = ["Fiction", "Poetry", "Periodical"]
+
+    # --- Collect raw decade means per genre (inverted: abstractness up) ---
+    genre_dec = {}
+    for genre in genres:
+        gdf = combined_df[combined_df["genre_harmonized"] == genre].copy()
+        gdf["year"] = pd.to_numeric(gdf["year"], errors="coerce")
+        gdf = gdf.dropna(subset=["year", score_col])
+        gdf = gdf[(gdf["year"] >= min_year) & (gdf["year"] <= max_year)]
+        gdf["decade"] = (gdf["year"] // agg_bin) * agg_bin
+        dec = -gdf.groupby("decade")[score_col].mean()
+        dec_n = gdf.groupby("decade")[score_col].count()
+        genre_dec[genre] = (dec, dec_n, gdf)
+
+    # Per-genre shift: anchor the genre minimum to ANCHOR.
+    ANCHOR = 0.0001
+
+    rows = []
+    prose_lines = []
+    for genre in genres:
+        dec_raw, dec_n, gdf = genre_dec[genre]
+        text_sd = gdf[score_col].std()
+
+        # Piecewise fit (on aggregated, corpus-adjusted data) to find key decades
+        adj = adjust_scores(gdf, score_col=score_col, corpus_col=corpus_col,
+                            min_year=min_year, max_year=max_year,
+                            agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+                            model="piecewise")
+        if adj.empty:
+            continue
+        adj_dec = -adj.groupby("year")["adjusted"].mean()
+
+        peak_yr = int(adj_dec.idxmax())
+        before = adj_dec[adj_dec.index <= peak_yr]
+        after = adj_dec[adj_dec.index >= peak_yr]
+        start_yr = int(before.idxmin())
+        end_yr = int(after.idxmin())
+
+        # Piecewise regression stats
+        sub = gdf[["year", score_col, corpus_col]].copy()
+        sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
+        agg = sub.groupby(["_bin", corpus_col]).agg(
+            score=(score_col, "mean"),
+            n_texts=(score_col, "count"),
+        ).reset_index()
+        agg = agg[agg.n_texts >= min_texts_per_bin]
+        y = agg["_bin"].values.astype(float)
+        s = -agg["score"].values  # invert
+        g = agg[corpus_col].values
+        pw = fit_piecewise(y, s, groups=g,
+                           search_range=search_range,
+                           search_step=search_step)
+
+        # Slope SEs
+        break_year = pw.get("pw_break_year", np.nan)
+        se_before = se_after = np.nan
+        if np.isfinite(break_year):
+            bm = y <= break_year
+            am = y > break_year
+            yb = np.where(bm, y - break_year, 0.0)
+            ya = np.where(am, y - break_year, 0.0)
+            X = np.column_stack([np.ones(len(y)), yb, ya])
+            dummies = _make_dummies(g)
+            if dummies.shape[1] > 0:
+                X = np.column_stack([X, dummies])
+            try:
+                beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
+                resid = s - X @ beta
+                n, p = X.shape
+                mse = (resid ** 2).sum() / max(n - p, 1)
+                cov = mse * np.linalg.inv(X.T @ X)
+                se_before = np.sqrt(cov[1, 1])
+                se_after = np.sqrt(cov[2, 2])
+            except np.linalg.LinAlgError:
+                pass
+
+        # Raw and shifted values at key decades
+        raw_start = float(dec_raw[start_yr])
+        raw_peak = float(dec_raw[peak_yr])
+        raw_end = float(dec_raw[end_yr])
+        # Per-genre shift: anchor the genre minimum to ANCHOR
+        genre_min = min(raw_start, raw_peak, raw_end)
+        genre_shift = ANCHOR - genre_min
+        sh_start = raw_start + genre_shift
+        sh_peak = raw_peak + genre_shift
+        sh_end = raw_end + genre_shift
+
+        n_start = int(dec_n[start_yr])
+        n_peak = int(dec_n[peak_yr])
+        n_end = int(dec_n[end_yr])
+
+        rise_sd = (raw_peak - raw_start) / text_sd
+        fall_sd = (raw_peak - raw_end) / text_sd
+
+        rows.append({
+            "genre": genre,
+            "breakpoint": pw["pw_break_year"],
+            "start_decade": start_yr,
+            "peak_decade": peak_yr,
+            "end_decade": end_yr,
+            "raw_start": raw_start,
+            "raw_peak": raw_peak,
+            "raw_end": raw_end,
+            "rise_sd": rise_sd,
+            "fall_sd": fall_sd,
+            "peak_vs_start": sh_peak / sh_start,
+            "peak_vs_end": sh_peak / sh_end,
+            "start_vs_end": sh_start / sh_end,
+            "slope_before": pw["pw_slope_before"],
+            "slope_before_se": se_before,
+            "slope_before_p": pw["pw_slope_before_p"],
+            "slope_after": pw["pw_slope_after"],
+            "slope_after_se": se_after,
+            "slope_after_p": pw["pw_slope_after_p"],
+            "r2": pw["pw_r2"],
+            "n_bins": pw["pw_n"],
+            "n_texts_start": n_start,
+            "n_texts_peak": n_peak,
+            "n_texts_end": n_end,
+            "n_texts_total": len(gdf),
+        })
+
+        if print_result:
+            prose_lines.append(
+                f"{genre}: abstractness rises from the {start_yr}s to a peak "
+                f"in the {peak_yr}s ({sh_peak/sh_start:.1f}x, "
+                f"+{rise_sd:.2f} SD), then falls to a trough in the "
+                f"{end_yr}s. At peak, {genre.lower()} is "
+                f"{sh_peak/sh_end:.1f}x as abstract as in the {end_yr}s. "
+                f"Piecewise breakpoint at {int(pw['pw_break_year'])}; "
+                f"rise slope = {pw['pw_slope_before']:+.4f}/decade "
+                f"(p = {pw['pw_slope_before_p']:.1e}), "
+                f"fall slope = {pw['pw_slope_after']:+.4f}/decade "
+                f"(p = {pw['pw_slope_after_p']:.1e}); "
+                f"R² = {pw['pw_r2']:.3f}; "
+                f"n = {len(gdf):,} texts."
+            )
+
+    df = pd.DataFrame(rows)
+
+    if print_result and prose_lines:
+        print()
+        for line in prose_lines:
+            print(line)
+            print()
+        print(f"(Ratios use abstractness scores shifted so each genre's "
+              f"most concrete decade ≈ 0; ratios are relative to that floor.)")
+
+    return df
+
+
 # ---------------------------------------------------------------------------
 # Combined arc analysis
 # ---------------------------------------------------------------------------
@@ -539,7 +841,9 @@ EXCLUDE_CORPORA = {
     "evans_tcp0",   # duplicate of evans_tcp
     "oldbailey0",   # duplicate of oldbailey
     "txtlab",
-    "fanfic"
+    "fanfic",
+    "coca"
+    # "chadwyck_poetry",
 }
 
 # Per-corpus year bounds to filter outlier texts.
@@ -547,7 +851,7 @@ EXCLUDE_CORPORA = {
 # Use None for an open bound, e.g. ("chicago", (None, 1930)).
 CORPUS_YEAR_RANGE = {
     "chadwyck": (1500, 1900),
-    "chadwyck_poetry": (1500, 1999),
+    "chadwyck_poetry": (1500, 2020),
 }
 
 

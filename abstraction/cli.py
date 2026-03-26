@@ -45,6 +45,48 @@ def cmd_fix_hathi_englit(args):
     fix_hathi_englit(genres=genres)
 
 
+def cmd_count_corpora(args):
+    from .scoring import count_all_corpora
+    norm_filter = args.norms.split(",") if args.norms else None
+    count_all_corpora(force=args.force, norm_filter=norm_filter)
+
+
+def cmd_count_corpus(args):
+    import os
+    from .config import PATH_CORPORA, DIST_DIR
+    from .scoring import count_corpus_freqs
+
+    corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
+    if not os.path.isdir(corpus_dir):
+        print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
+        sys.exit(1)
+    out_dir = os.path.join(DIST_DIR, "v1")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{args.corpus}.csv")
+    if args.force and os.path.exists(out_path):
+        os.remove(out_path)
+    norm_filter = args.norms.split(",") if args.norms else None
+    df = count_corpus_freqs(corpus_dir, output_path=out_path, norm_filter=norm_filter)
+    if len(df):
+        print(f"Counted {len(df)} texts -> {out_path}")
+    else:
+        print(f"No freqs files found in {corpus_dir}/freqs/")
+
+
+def cmd_report_arc(args):
+    from .analysis import report_arc
+    genres = args.genres.split(",") if args.genres else None
+    df = report_arc(
+        genres=genres,
+        min_year=args.min_year,
+        max_year=args.max_year,
+        print_result=True,
+    )
+    if args.csv:
+        df.to_csv(args.csv, index=False)
+        print(f"\nSaved to {args.csv}")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="abstraction", description="Abstraction CLI")
     sub = parser.add_subparsers(dest="command")
@@ -66,6 +108,24 @@ def main():
     p = sub.add_parser("fix-hathi-englit", help="Unpack hathi_englit TSV archives into freqs JSONs")
     p.add_argument("--genres", default="fiction,poetry", help="Comma-separated genres (default: fiction,poetry)")
 
+    # count-corpora: count z-score distributions for all corpora
+    p = sub.add_parser("count-corpora", help="Count z-score distributions for all corpora with freqs/")
+    p.add_argument("--force", action="store_true", help="Re-count even if output exists")
+    p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
+
+    # count-corpus: count z-score distributions for one corpus
+    p = sub.add_parser("count-corpus", help="Count z-score distributions for a single corpus")
+    p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
+    p.add_argument("--force", action="store_true", help="Re-count even if output exists")
+    p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
+
+    # report-arc: piecewise arc report with ratios
+    p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
+    p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
+    p.add_argument("--min-year", type=int, default=1600)
+    p.add_argument("--max-year", type=int, default=2020)
+    p.add_argument("--csv", default=None, help="Save results to CSV")
+
     args = parser.parse_args()
     if args.command == "score-corpora":
         cmd_score_corpora(args)
@@ -75,6 +135,12 @@ def main():
         cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":
         cmd_fix_hathi_englit(args)
+    elif args.command == "count-corpora":
+        cmd_count_corpora(args)
+    elif args.command == "count-corpus":
+        cmd_count_corpus(args)
+    elif args.command == "report-arc":
+        cmd_report_arc(args)
     else:
         parser.print_help()
         sys.exit(1)

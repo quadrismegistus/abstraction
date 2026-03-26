@@ -10,7 +10,7 @@ import pandas as pd
 from scipy.stats import zscore
 from tqdm import tqdm
 
-from .config import COUNT_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA
+from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA
 from .corpus import load_corpus
 from .norms import get_allnorms
 from .tokenize import tokenize_agnostic
@@ -397,6 +397,245 @@ def score_all_corpora(
             fh.close()
 
     # load and return results
+    results = {}
+    for name, _ in corpora:
+        out_path = os.path.join(output_dir, f"{name}.csv")
+        if os.path.exists(out_path):
+            try:
+                results[name] = pd.read_csv(out_path)
+            except Exception as e:
+                print(f"  Warning: could not read {name}.csv: {e}")
+                results[name] = pd.DataFrame()
+        else:
+            results[name] = pd.DataFrame()
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Z-score distribution counting (CDF bins per text per norm)
+# ---------------------------------------------------------------------------
+
+DEFAULT_BIN_EDGES = np.round(np.arange(-3.0, 3.05, 0.1), 1)
+
+
+def _count_freqs_allnorms(path, allnorms, bin_edges):
+    """Compute cumulative z-score distributions for a single freqs JSON.
+
+    For each norm column, bins words by z-score weighted by frequency,
+    then returns cumulative proportions at each bin edge.
+
+    Returns a dict like {"{norm}_cdf_{edge}": proportion, ...}.
+    """
+    try:
+        with open(path) as f:
+            freqs = json.load(f)
+    except Exception:
+        return {}
+    if not freqs:
+        return {}
+
+    words = list(freqs.keys())
+    counts = np.array([freqs[w] for w in words])
+    words_lower = [w.lower() for w in words]
+    matched = allnorms.reindex(words_lower)
+
+    result = {}
+    for col in allnorms.columns:
+        vals = matched[col].values
+        mask = np.isfinite(vals)
+        if mask.sum() == 0:
+            continue
+        w = counts[mask].astype(float)
+        v = vals[mask]
+        # Histogram with bin_edges; values outside range go into first/last bins
+        hist, _ = np.histogram(v, bins=bin_edges, weights=w)
+        total = w.sum()
+        cdf = np.cumsum(hist) / total
+        for edge, prop in zip(bin_edges[1:], cdf):
+            result[f"{col}_cdf_{edge:.1f}"] = round(float(prop), 6)
+    return result
+
+
+def _get_cdf_columns(allnorms, bin_edges):
+    """Return the canonical column order for CDF CSVs."""
+    cols = ["id"]
+    for norm_col in sorted(allnorms.columns):
+        for edge in bin_edges[1:]:
+            cols.append(f"{norm_col}_cdf_{edge:.1f}")
+    return cols
+
+
+def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
+                       bin_edges=None, norm_filter=None):
+    """Count z-score distributions for all freqs/*.json in a corpus.
+
+    Mirrors score_corpus_freqs but outputs cumulative proportions in
+    z-score bins instead of weighted-mean scores.
+
+    Parameters
+    ----------
+    corpus_dir : str
+        Corpus directory with a freqs/ subdirectory.
+    allnorms : DataFrame, optional
+        Pre-loaded allnorms. Loaded automatically if None.
+    output_path : str, optional
+        CSV path for incremental output.
+    bin_edges : array-like, optional
+        Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
+    norm_filter : list of str, optional
+        If given, only count these norm columns (e.g. ["Abs-Conc.Median.median"]).
+
+    Returns
+    -------
+    DataFrame with 'id' column plus CDF columns, or empty DataFrame.
+    """
+    freqs_dir = os.path.join(corpus_dir, "freqs")
+    if not os.path.isdir(freqs_dir):
+        return pd.DataFrame()
+    if allnorms is None:
+        allnorms = get_allnorms()
+    allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+    if norm_filter:
+        allnorms = allnorms[[c for c in allnorms.columns if c in norm_filter]]
+    if bin_edges is None:
+        bin_edges = DEFAULT_BIN_EDGES
+    bin_edges = np.asarray(bin_edges)
+    columns = _get_cdf_columns(allnorms, bin_edges)
+
+    done_ids = _load_done_ids(output_path) if output_path else set()
+
+    csv_file = None
+    writer = None
+    if output_path:
+        import csv as csv_mod
+        file_exists = os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        csv_file = open(output_path, "a", newline="")
+        writer = csv_mod.DictWriter(csv_file, fieldnames=columns,
+                                    extrasaction="ignore", restval="")
+        if not file_exists:
+            writer.writeheader()
+
+    rows = []
+    try:
+        for text_id, path in _walk_freqs(freqs_dir):
+            if text_id in done_ids:
+                continue
+            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
+            if cdfs:
+                cdfs["id"] = text_id
+                rows.append(cdfs)
+                if writer:
+                    writer.writerow(cdfs)
+    finally:
+        if csv_file:
+            csv_file.close()
+
+    if not rows and not done_ids:
+        return pd.DataFrame()
+    if output_path and done_ids:
+        return pd.read_csv(output_path)
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows)[columns]
+
+
+def count_all_corpora(
+    corpora_dir=PATH_CORPORA,
+    output_dir=None,
+    force=False,
+    norm_filter=None,
+    bin_edges=None,
+):
+    """Count z-score distributions for all corpora with freqs/ folders.
+
+    Mirrors score_all_corpora. Saves one CSV per corpus to output_dir/v1/.
+
+    Parameters
+    ----------
+    corpora_dir : str
+        Parent directory containing corpus subdirectories.
+    output_dir : str, optional
+        Where to save per-corpus count files. Default: DIST_DIR.
+    force : bool
+        If True, delete existing CSVs and re-count from scratch.
+    norm_filter : list of str, optional
+        Only count these norm columns.
+    bin_edges : array-like, optional
+        Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
+    """
+    if output_dir is None:
+        output_dir = DIST_DIR
+    output_dir = os.path.join(output_dir, "v1")
+    os.makedirs(output_dir, exist_ok=True)
+
+    allnorms = get_allnorms()
+    allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+    if norm_filter:
+        allnorms = allnorms[[c for c in allnorms.columns if c in norm_filter]]
+    if bin_edges is None:
+        bin_edges = DEFAULT_BIN_EDGES
+    bin_edges = np.asarray(bin_edges)
+    columns = _get_cdf_columns(allnorms, bin_edges)
+
+    # discover corpora with freqs/ dirs, dedup by realpath
+    seen_realpaths = {}
+    corpora = []
+    for name in sorted(os.listdir(corpora_dir)):
+        corpus_dir = os.path.join(corpora_dir, name)
+        freqs_dir = os.path.join(corpus_dir, "freqs")
+        if not os.path.isdir(freqs_dir):
+            continue
+        real = os.path.realpath(freqs_dir)
+        if real in seen_realpaths:
+            print(f"  Skipping {name}/freqs/ (same as {seen_realpaths[real]})")
+            continue
+        seen_realpaths[real] = name
+        corpora.append((name, corpus_dir))
+
+    # collect all (corpus_name, text_id, path), skipping done IDs
+    all_files = []
+    for name, corpus_dir in corpora:
+        out_path = os.path.join(output_dir, f"{name}.csv")
+        if force and os.path.exists(out_path):
+            os.remove(out_path)
+        done_ids = _load_done_ids(out_path)
+        freqs_dir = os.path.join(corpus_dir, "freqs")
+        for text_id, path in _walk_freqs(freqs_dir):
+            if text_id not in done_ids:
+                all_files.append((name, text_id, path))
+        if done_ids:
+            print(f"  {name}: {len(done_ids)} already done, "
+                  f"{sum(1 for n, _, _ in all_files if n == name)} remaining")
+
+    # open one CSV writer per corpus
+    import csv as csv_mod
+    writers = {}
+    file_handles = {}
+
+    def get_writer(name):
+        if name not in writers:
+            out_path = os.path.join(output_dir, f"{name}.csv")
+            file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+            fh = open(out_path, "a", newline="")
+            w = csv_mod.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
+            if not file_exists:
+                w.writeheader()
+            writers[name] = w
+            file_handles[name] = fh
+        return writers[name]
+
+    pbar = tqdm(all_files, desc="Counting", unit="file")
+    try:
+        for name, text_id, path in pbar:
+            pbar.set_postfix_str(name, refresh=False)
+            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
+            if cdfs:
+                cdfs["id"] = text_id
+                get_writer(name).writerow(cdfs)
+    finally:
+        for fh in file_handles.values():
+            fh.close()
+
     results = {}
     for name, _ in corpora:
         out_path = os.path.join(output_dir, f"{name}.csv")
