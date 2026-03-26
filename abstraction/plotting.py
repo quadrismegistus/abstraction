@@ -497,13 +497,16 @@ def plot_arc_by_genre(combined_df, genres=None,
     p9.options.figure_size = (width, height)
 
     # Build base aesthetics
+    n_corpora = df["corpus"].nunique() if has_corpus else 0
+    use_shape = has_corpus and not show_facet and n_corpora <= 20
+
     aes_kw = {"x": "year", "y": "adjusted"}
     if show_facet:
         if has_corpus:
             aes_kw["color"] = "corpus"
     else:
         aes_kw["color"] = "genre"
-        if has_corpus:
+        if use_shape:
             aes_kw["shape"] = "corpus"
     if has_n:
         aes_kw["size"] = "n_texts"
@@ -514,6 +517,8 @@ def plot_arc_by_genre(combined_df, genres=None,
                     strip_text=p9.element_text(size=11, weight="bold"))
     if has_n:
         fig += p9.scale_size_continuous(range=(0.5, 4), name="Texts")
+    if use_shape:
+        fig += p9.guides(shape=p9.guide_legend(ncol=4))
 
     # Raw points (before adjustment) as faint background
     if show_raw and has_corpus:
@@ -522,7 +527,8 @@ def plot_arc_by_genre(combined_df, genres=None,
             raw_aes["color"] = "corpus"
         else:
             raw_aes["color"] = "genre"
-            raw_aes["shape"] = "corpus"
+            if use_shape:
+                raw_aes["shape"] = "corpus"
         if has_n:
             raw_aes["size"] = "n_texts"
         fig += p9.geom_point(p9.aes(**raw_aes), alpha=0.15)
