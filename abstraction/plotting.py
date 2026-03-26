@@ -433,9 +433,10 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
 def plot_arc_by_genre(combined_df, genres=None,
                       score_col="Abs-Conc.Median.median",
                       model="quadratic", show_raw=False,
-                      show_lines=False, save_to=None,
+                      show_lines=False, show_facet=True,
+                      save_to=None,
                       ncol=2, width=14, height=None, **adjust_kw):
-    """Plot adjusted arcs for multiple genres as faceted panels.
+    """Plot adjusted arcs for multiple genres.
 
     Parameters
     ----------
@@ -449,9 +450,14 @@ def plot_arc_by_genre(combined_df, genres=None,
     show_raw : bool
         If True, show raw (unadjusted) corpus points in light color.
     show_lines : bool
-        If True, draw lines connecting points within each corpus.
+        If True, draw lines connecting points within each corpus
+        (per-genre when faceted, per-genre-per-corpus when combined).
+    show_facet : bool
+        If True (default), show each genre in a separate facet panel,
+        colored by corpus. If False, plot all genres on one panel,
+        colored by genre and shaped by corpus.
     ncol : int
-        Number of columns in facet grid.
+        Number of columns in facet grid (only used when show_facet=True).
     """
     from .analysis import adjust_scores
 
@@ -475,22 +481,34 @@ def plot_arc_by_genre(combined_df, genres=None,
 
     df = pd.concat(panels, ignore_index=True)
     has_corpus = "corpus" in df.columns
+    has_n = "n_texts" in df.columns
+
+    # Interaction group for lines: unique per genre+corpus combination
+    if has_corpus:
+        df["_grp"] = df["genre"] + ":" + df["corpus"]
 
     if height is None:
-        nrow = int(np.ceil(len(panels) / ncol))
-        height = 4 * nrow
+        if show_facet:
+            nrow = int(np.ceil(len(panels) / ncol))
+            height = 4 * nrow
+        else:
+            height = 8
 
     p9.options.figure_size = (width, height)
 
-    has_n = "n_texts" in df.columns
-
+    # Build base aesthetics
     aes_kw = {"x": "year", "y": "adjusted"}
-    if has_corpus:
-        aes_kw["color"] = "corpus"
+    if show_facet:
+        if has_corpus:
+            aes_kw["color"] = "corpus"
+    else:
+        aes_kw["color"] = "genre"
+        if has_corpus:
+            aes_kw["shape"] = "corpus"
     if has_n:
         aes_kw["size"] = "n_texts"
-    fig = p9.ggplot(df, p9.aes(**aes_kw))
 
+    fig = p9.ggplot(df, p9.aes(**aes_kw))
     fig += p9.theme_classic()
     fig += p9.theme(legend_position="bottom",
                     strip_text=p9.element_text(size=11, weight="bold"))
@@ -499,29 +517,45 @@ def plot_arc_by_genre(combined_df, genres=None,
 
     # Raw points (before adjustment) as faint background
     if show_raw and has_corpus:
-        raw_aes = {"x": "year", "y": "score", "color": "corpus"}
+        raw_aes = {"x": "year", "y": "score"}
+        if show_facet:
+            raw_aes["color"] = "corpus"
+        else:
+            raw_aes["color"] = "genre"
+            raw_aes["shape"] = "corpus"
         if has_n:
             raw_aes["size"] = "n_texts"
         fig += p9.geom_point(p9.aes(**raw_aes), alpha=0.15)
         if show_lines:
-            fig += p9.geom_line(p9.aes(x="year", y="score", color="corpus",
-                                       group="corpus"),
-                                alpha=0.15, size=0.5)
+            raw_line_aes = {"x": "year", "y": "score", "group": "_grp"}
+            if show_facet:
+                raw_line_aes["color"] = "corpus"
+            else:
+                raw_line_aes["color"] = "genre"
+            fig += p9.geom_line(p9.aes(**raw_line_aes), alpha=0.15, size=0.5)
 
     # Adjusted points
     fig += p9.geom_point(alpha=0.5)
 
-    # Lines connecting adjusted points within each corpus
+    # Lines connecting adjusted points within each corpus (and genre)
     if show_lines and has_corpus:
-        fig += p9.geom_line(p9.aes(group="corpus"), alpha=0.4, size=0.5)
+        line_aes = {"group": "_grp"}
+        if not show_facet:
+            line_aes["color"] = "genre"
+        fig += p9.geom_line(p9.aes(**line_aes), alpha=0.4, size=0.5)
 
     # Fitted trend per genre
     trend = df[["year", "fitted", "genre"]].drop_duplicates().sort_values("year")
-    fig += p9.geom_line(p9.aes(x="year", y="fitted"),
-                        data=trend, color="black", size=1,
-                        inherit_aes=False)
+    if show_facet:
+        fig += p9.geom_line(p9.aes(x="year", y="fitted"),
+                            data=trend, color="black", size=1,
+                            inherit_aes=False)
+        fig += p9.facet_wrap("genre", ncol=ncol, scales="free_y")
+    else:
+        fig += p9.geom_line(p9.aes(x="year", y="fitted", color="genre"),
+                            data=trend, size=1, linetype="dashed",
+                            inherit_aes=False)
 
-    fig += p9.facet_wrap("genre", ncol=ncol, scales="free_y")
     fig += p9.xlab("Year")
     fig += p9.ylab("Abstractness − Concreteness\n(corpus-adjusted)")
 
