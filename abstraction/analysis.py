@@ -213,8 +213,12 @@ def _empty_piecewise():
 # Combined arc analysis
 # ---------------------------------------------------------------------------
 
+DEFAULT_MIN_YEAR = 1600
+DEFAULT_MAX_YEAR = 2000
+
+
 def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
-            min_year=None, max_year=None, **kw):
+            min_year=DEFAULT_MIN_YEAR, max_year=DEFAULT_MAX_YEAR, **kw):
     """Run both quadratic and piecewise fits on a scored DataFrame.
 
     Parameters
