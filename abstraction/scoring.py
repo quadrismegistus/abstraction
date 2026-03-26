@@ -273,7 +273,7 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
         file_exists = os.path.exists(output_path) and os.path.getsize(output_path) > 0
         csv_file = open(output_path, "a", newline="")
         import csv
-        writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore")
+        writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore", restval="")
         if not file_exists:
             writer.writeheader()
 
@@ -401,7 +401,11 @@ def score_all_corpora(
     for name, _ in corpora:
         out_path = os.path.join(output_dir, f"{name}.csv")
         if os.path.exists(out_path):
-            results[name] = pd.read_csv(out_path)
+            try:
+                results[name] = pd.read_csv(out_path)
+            except Exception as e:
+                print(f"  Warning: could not read {name}.csv: {e}")
+                results[name] = pd.DataFrame()
         else:
             results[name] = pd.DataFrame()
     return results
