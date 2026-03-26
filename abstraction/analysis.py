@@ -769,7 +769,10 @@ def load_all_scored(scores_dir=None, version="v7", exclude=EXCLUDE_CORPORA):
 
     if not all_dfs:
         return pd.DataFrame()
-    return pd.concat(all_dfs, ignore_index=True)
+    combined = pd.concat(all_dfs, ignore_index=True)
+    if "year" in combined.columns:
+        combined["year"] = pd.to_numeric(combined["year"], errors="coerce")
+    return combined
 
 
 def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
