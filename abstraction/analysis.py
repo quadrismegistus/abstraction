@@ -190,49 +190,28 @@ def _find_id_col(meta):
     return meta.columns[0]
 
 
-def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
-    """Load scored texts for a corpus and merge with metadata.
+def _merge_with_metadata(df, corpus_name, harmonize=True):
+    """Merge a DataFrame (with 'id' column) against corpus metadata.
 
-    Returns a DataFrame with score columns plus metadata (year, genre, etc.).
-    If harmonize=True, adds a 'genre_harmonized' column.
-
-    Handles ID format mismatches (e.g. hathi subcorpora where freqs paths
-    use slashes but metadata uses dots in IDs).
+    Handles ID format mismatches (slash→dot, zero-padding, htid→path, etc.)
+    and applies genre harmonization, year fixes, and year-range filtering.
     """
-    if scores_dir is None:
-        scores_dir = os.path.join(SCORES_DIR, version)
     snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
-    path = os.path.join(scores_dir, f"{snake}.csv")
-
-    # If no corpus-specific scores, try falling back to parent hathi scores
-    if not os.path.exists(path) and snake.startswith("hathi_"):
-        parent_path = os.path.join(scores_dir, "hathi.csv")
-        if os.path.exists(parent_path):
-            path = parent_path
-
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"No scores file: {path}")
-
-    scores = pd.read_csv(path)
     corpus = load_corpus(corpus_name)
     meta = corpus.metadata
 
-    # Find the right ID column in metadata
     id_col = _find_id_col(meta)
     if id_col != "id":
         meta = meta.rename(columns={id_col: "id"})
 
-    # Ensure both ID columns are strings
-    scores["id"] = scores["id"].astype(str)
+    df["id"] = df["id"].astype(str)
     meta["id"] = meta["id"].astype(str)
 
-    # Try direct merge first
-    merged = scores.merge(meta, on="id", how="inner")
+    merged = df.merge(meta, on="id", how="inner")
 
-    # Try progressively more aggressive normalizations if merge is poor
     def _try_merge(score_ids, meta_ids_col=None):
         nonlocal merged
-        s = scores.copy()
+        s = df.copy()
         m = meta
         if score_ids is not None:
             s["id"] = score_ids
@@ -243,8 +222,8 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
         if len(candidate) > len(merged):
             merged = candidate
 
-    if len(merged) < len(scores) * 0.5 and len(scores) > 0:
-        score_ids = scores["id"]
+    if len(merged) < len(df) * 0.5 and len(df) > 0:
+        score_ids = df["id"]
 
         # slash→dot (hathi)
         _try_merge(score_ids.str.replace("/", ".", n=1))
@@ -269,7 +248,6 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
         _try_merge(None, meta["id"].apply(_htid_to_path))
 
         # 3-segment→2-segment: "chi/086/546157" -> "chi/086546157"
-        # (freqs walk produces 3-level paths but metadata uses 2-level)
         def _collapse_3seg(sid):
             parts = sid.split("/")
             if len(parts) == 3:
@@ -285,6 +263,33 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
         merged["year"] = pd.to_numeric(merged["year"], errors="coerce")
         merged = _apply_year_range(merged, snake)
     return merged
+
+
+def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
+    """Load scored texts for a corpus and merge with metadata.
+
+    Returns a DataFrame with score columns plus metadata (year, genre, etc.).
+    If harmonize=True, adds a 'genre_harmonized' column.
+
+    Handles ID format mismatches (e.g. hathi subcorpora where freqs paths
+    use slashes but metadata uses dots in IDs).
+    """
+    if scores_dir is None:
+        scores_dir = os.path.join(SCORES_DIR, version)
+    snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
+    path = os.path.join(scores_dir, f"{snake}.csv")
+
+    # If no corpus-specific scores, try falling back to parent hathi scores
+    if not os.path.exists(path) and snake.startswith("hathi_"):
+        parent_path = os.path.join(scores_dir, "hathi.csv")
+        if os.path.exists(parent_path):
+            path = parent_path
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No scores file: {path}")
+
+    scores = pd.read_csv(path)
+    return _merge_with_metadata(scores, corpus_name, harmonize=harmonize)
 
 
 def _fix_chadwyck_poetry_year(df):
@@ -1432,25 +1437,7 @@ def load_counts(corpus_name, counts_dir=None, version="v1",
             "n_words": total,
         })
     df = pd.DataFrame(rows)
-
-    # Merge with metadata (same logic as load_scores)
-    corpus = load_corpus(corpus_name)
-    meta = corpus.metadata
-    id_col = _find_id_col(meta)
-    if id_col != "id":
-        meta = meta.rename(columns={id_col: "id"})
-    df["id"] = df["id"].astype(str)
-    meta["id"] = meta["id"].astype(str)
-    merged = df.merge(meta, on="id", how="inner")
-
-    if harmonize:
-        merged = harmonize_genre(merged, corpus_name=corpus_name)
-    if snake == "chadwyck_poetry":
-        merged = _fix_chadwyck_poetry_year(merged)
-    if "year" in merged.columns:
-        merged["year"] = pd.to_numeric(merged["year"], errors="coerce")
-        merged = _apply_year_range(merged, snake)
-    return merged
+    return _merge_with_metadata(df, corpus_name, harmonize=harmonize)
 
 
 def load_all_counts(counts_dir=None, version="v1",
