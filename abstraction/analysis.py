@@ -269,6 +269,9 @@ def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
 
     if harmonize:
         merged = harmonize_genre(merged, corpus_name=corpus_name)
+    if "year" in merged.columns:
+        merged["year"] = pd.to_numeric(merged["year"], errors="coerce")
+        merged = _apply_year_range(merged, snake)
     return merged
 
 
@@ -527,6 +530,26 @@ EXCLUDE_CORPORA = {
     "evans_tcp0",   # duplicate of evans_tcp
     "oldbailey0",   # duplicate of oldbailey
 }
+
+# Per-corpus year bounds to filter outlier texts.
+# Keys are snake_case corpus names; values are (min_year, max_year).
+# Use None for an open bound, e.g. ("chicago", (None, 1930)).
+CORPUS_YEAR_RANGE = {
+    # "corpus_name": (min_year, max_year),
+}
+
+
+def _apply_year_range(df, corpus_name, year_col="year"):
+    """Filter rows outside the corpus's configured year range, if any."""
+    bounds = CORPUS_YEAR_RANGE.get(corpus_name)
+    if bounds is None:
+        return df
+    lo, hi = bounds
+    if lo is not None:
+        df = df[df[year_col] >= lo]
+    if hi is not None:
+        df = df[df[year_col] <= hi]
+    return df
 
 
 def fit_arc(df, score_col="Abs-Conc.Median.median", year_col="year",
