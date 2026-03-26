@@ -30,6 +30,12 @@ def cmd_score_corpus(args):
         print(f"No freqs files found in {corpus_dir}/freqs/")
 
 
+def cmd_fix_hathi_englit(args):
+    from .corpus import fix_hathi_englit
+    genres = tuple(args.genres.split(","))
+    fix_hathi_englit(genres=genres)
+
+
 def main():
     parser = argparse.ArgumentParser(prog="abstraction", description="Abstraction CLI")
     sub = parser.add_subparsers(dest="command")
@@ -43,11 +49,17 @@ def main():
     p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
 
+    # fix-hathi-englit: unpack TSV archives into freqs JSONs
+    p = sub.add_parser("fix-hathi-englit", help="Unpack hathi_englit TSV archives into freqs JSONs")
+    p.add_argument("--genres", default="fiction,poetry", help="Comma-separated genres (default: fiction,poetry)")
+
     args = parser.parse_args()
     if args.command == "score-corpora":
         cmd_score_corpora(args)
     elif args.command == "score-corpus":
         cmd_score_corpus(args)
+    elif args.command == "fix-hathi-englit":
+        cmd_fix_hathi_englit(args)
     else:
         parser.print_help()
         sys.exit(1)
