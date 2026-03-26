@@ -181,21 +181,57 @@ def harmonize_genre(df, corpus_name=None):
 # Loading and merging scores with metadata
 # ---------------------------------------------------------------------------
 
+def _find_id_col(meta):
+    """Find the ID column in metadata, preferring 'id' then 'htid'."""
+    for col in ["id", "htid"]:
+        if col in meta.columns:
+            return col
+    return meta.columns[0]
+
+
 def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
     """Load scored texts for a corpus and merge with metadata.
 
     Returns a DataFrame with score columns plus metadata (year, genre, etc.).
     If harmonize=True, adds a 'genre_harmonized' column.
+
+    Handles ID format mismatches (e.g. hathi subcorpora where freqs paths
+    use slashes but metadata uses dots in IDs).
     """
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
     snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
     path = os.path.join(scores_dir, f"{snake}.csv")
+
+    # If no corpus-specific scores, try falling back to parent hathi scores
+    if not os.path.exists(path) and snake.startswith("hathi_"):
+        parent_path = os.path.join(scores_dir, "hathi.csv")
+        if os.path.exists(parent_path):
+            path = parent_path
+
     if not os.path.exists(path):
         raise FileNotFoundError(f"No scores file: {path}")
+
     scores = pd.read_csv(path)
     corpus = load_corpus(corpus_name)
-    merged = scores.merge(corpus.metadata, on="id", how="inner")
+    meta = corpus.metadata
+
+    # Find the right ID column in metadata
+    id_col = _find_id_col(meta)
+    if id_col != "id":
+        meta = meta.rename(columns={id_col: "id"})
+
+    # Try direct merge first
+    merged = scores.merge(meta, on="id", how="inner")
+
+    # If merge is poor, try slash↔dot normalization (hathi ID format mismatch)
+    if len(merged) < len(scores) * 0.1 and len(scores) > 0:
+        scores_norm = scores.copy()
+        scores_norm["id"] = scores_norm["id"].str.replace("/", ".", n=1)
+        merged_norm = scores_norm.merge(meta, on="id", how="inner")
+        if len(merged_norm) > len(merged):
+            merged = merged_norm
+
     if harmonize:
         merged = harmonize_genre(merged, corpus_name=corpus_name)
     return merged
