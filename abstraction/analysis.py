@@ -11,17 +11,181 @@ from scipy import stats
 
 from .config import SCORES_DIR, PATH_CORPORA
 from .corpus import load_corpus, _camel_to_snake
+from .tokenize import tokenize_agnostic
 from .utils import read_df
+
+
+# ---------------------------------------------------------------------------
+# Genre harmonization
+# ---------------------------------------------------------------------------
+
+# Corpus-level genre: if the corpus name implies a single genre, use it
+CORPUS_GENRE = {
+    "chadwyck": "Fiction",
+    "chadwyck_drama": "Drama",
+    "chadwyck_poetry": "Poetry",
+    "chicago": "Fiction",
+    "gale_amfic": "Fiction",
+    "gildedage": "Fiction",
+    "internet_archive": "Fiction",
+    "markmark": "Fiction",
+    "fanfic": "Fiction",
+    "canon_fiction": "Fiction",
+    "litlab": "Fiction",
+    "hathi_novels": "Fiction",
+    "hathi_stories": "Fiction",
+    "hathi_tales": "Fiction",
+    "hathi_romances": "Fiction",
+    "hathi_essays": "Essay/Treatise",
+    "hathi_treatises": "Essay/Treatise",
+    "hathi_sermons": "Sermon",
+    "hathi_letters": "Letters",
+    "hathi_bio": "Biography",
+    "hathi_proclamations": "Proclamation",
+    "hathi_almanacs": "Almanac",
+    "old_bailey": "Legal",
+    "oldbailey": "Legal",
+    "sotu": "Political",
+    "spectator": "Periodical",
+    "new_yorker": "Periodical",
+    "pmla": "Criticism",
+    "bpo": "Periodical",
+}
+
+# Map raw genre values to harmonized categories
+_GENRE_MAP = {
+    # Poetry
+    "Verse": "Poetry", "Poetry": "Poetry", "Poem": "Poetry",
+    "Sonnet": "Poetry", "Lyric": "Poetry", "Heroic couplets": "Poetry",
+    "Ballad": "Poetry", "Ode": "Poetry", "Hymn": "Poetry",
+    "Epigram": "Poetry", "Metrical Psalm": "Poetry", "Elegy": "Poetry",
+    "Epitaph": "Poetry", "Prologue": "Poetry", "Epilogue": "Poetry",
+    # Fiction
+    "Fiction": "Fiction", "Novel": "Fiction", "Tale": "Fiction",
+    "Story": "Fiction", "FIC": "Fiction", "FanFiction": "Fiction",
+    "Romance": "Fiction", "Gothic": "Fiction", "Historical": "Fiction",
+    "Silver Fork": "Fiction", "New Woman": "Fiction", "Epistolary": "Fiction",
+    "Picaresque": "Fiction", "Oriental": "Fiction", "Anti-Jacobin": "Fiction",
+    "Jacobin": "Fiction", "National tale": "Fiction", "Evangelical": "Fiction",
+    "DET": "Fiction", "ROM": "Fiction", "FANT": "Fiction",
+    "SCI": "Fiction", "SOC": "Fiction", "HIST": "Fiction",
+    "ADV": "Fiction", "WEST": "Fiction",
+    # Drama
+    "Drama": "Drama",
+    # Essay / Treatise
+    "Treatise": "Essay/Treatise", "Essay": "Essay/Treatise",
+    "Discourse": "Essay/Treatise",
+    # Letters
+    "Letter": "Letters", "Letters": "Letters",
+    # Biography
+    "Biography": "Biography",
+    # Sermon
+    "Sermon": "Sermon",
+    # Nonfiction catchall
+    "Non-Fiction": "Nonfiction", "NF": "Nonfiction",
+    # Periodical
+    "Magazine": "Periodical", "MAG": "Periodical",
+    "News": "Periodical", "NEWS": "Periodical",
+    "Periodical": "Periodical",
+    # Other media
+    "SPOK": "Spoken", "ACAD": "Academic", "Film": "Film",
+}
+
+# Genre columns to try, in priority order
+_GENRE_COL_PRIORITY = [
+    "major_genre", "genre", "attgenre", "medium",
+    "genre_label", "documentType", "ObjectType",
+]
+
+# Vague genre values that should fall through to title-based detection
+_VAGUE_GENRES = {"Prose", "Print", "BOOK", ""}
+
+# Keywords to detect genre from title
+_TITLE_KEYWORDS = {
+    "novel": "Fiction", "tale": "Fiction", "romance": "Fiction",
+    "story": "Fiction", "stories": "Fiction",
+    "sermon": "Sermon", "sermons": "Sermon",
+    "essay": "Essay/Treatise", "essays": "Essay/Treatise",
+    "treatise": "Essay/Treatise", "discourse": "Essay/Treatise",
+    "letter": "Letters", "letters": "Letters",
+    "poem": "Poetry", "poems": "Poetry", "ode": "Poetry",
+    "hymn": "Poetry", "hymns": "Poetry", "ballad": "Poetry",
+}
+
+
+def _genre_from_title(title):
+    """Infer genre from title keywords as a fallback."""
+    if not isinstance(title, str):
+        return ""
+    words = [w.lower() for w in tokenize_agnostic(title)]
+    for kw, genre in _TITLE_KEYWORDS.items():
+        if any(w.startswith(kw) for w in words):
+            return genre
+    return ""
+
+
+def _detect_genre_col(df):
+    """Find the best genre column in a DataFrame."""
+    for col in _GENRE_COL_PRIORITY:
+        if col in df.columns:
+            return col
+    return None
+
+
+def harmonize_genre(df, corpus_name=None):
+    """Add a 'genre_harmonized' column to a scored+metadata DataFrame.
+
+    Resolution order:
+    1. Corpus-level genre (if corpus implies a single genre)
+    2. Row-level genre from metadata column, mapped through _GENRE_MAP
+    3. Title-based fallback
+    4. Empty string if unresolvable
+    """
+    df = df.copy()
+    snake = _camel_to_snake(corpus_name) if corpus_name else None
+
+    # 1. Corpus-level override
+    corpus_genre = CORPUS_GENRE.get(snake, "") if snake else ""
+
+    # 2. Find the best genre column
+    genre_col = _detect_genre_col(df)
+
+    def _resolve(row):
+        # corpus-level genre takes precedence for single-genre corpora
+        if corpus_genre:
+            return corpus_genre
+
+        # row-level genre
+        if genre_col:
+            raw = str(row.get(genre_col, "")).strip()
+            if raw and raw not in _VAGUE_GENRES:
+                mapped = _GENRE_MAP.get(raw, "")
+                if mapped:
+                    return mapped
+                # try as-is if it looks like a real genre
+                return raw
+
+        # title fallback
+        title = row.get("title", "")
+        g = _genre_from_title(title)
+        if g:
+            return g
+
+        return ""
+
+    df["genre_harmonized"] = df.apply(_resolve, axis=1)
+    return df
 
 
 # ---------------------------------------------------------------------------
 # Loading and merging scores with metadata
 # ---------------------------------------------------------------------------
 
-def load_scores(corpus_name, scores_dir=None, version="v7"):
+def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
     """Load scored texts for a corpus and merge with metadata.
 
     Returns a DataFrame with score columns plus metadata (year, genre, etc.).
+    If harmonize=True, adds a 'genre_harmonized' column.
     """
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
@@ -32,6 +196,8 @@ def load_scores(corpus_name, scores_dir=None, version="v7"):
     scores = pd.read_csv(path)
     corpus = load_corpus(corpus_name)
     merged = scores.merge(corpus.metadata, on="id", how="inner")
+    if harmonize:
+        merged = harmonize_genre(merged, corpus_name=corpus_name)
     return merged
 
 
@@ -314,6 +480,69 @@ def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
         results.append(result)
 
     return pd.DataFrame(results)
+
+
+def fit_arc_by_genre(df, score_col="Abs-Conc.Median.median",
+                     genre_col="genre_harmonized", min_texts=30, **kw):
+    """Fit arc separately for each genre in a DataFrame.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Scored + metadata DataFrame (must have genre_col and year columns).
+    score_col : str
+        Column to fit.
+    genre_col : str
+        Column with genre labels.
+    min_texts : int
+        Skip genres with fewer texts than this.
+
+    Returns
+    -------
+    DataFrame of arc results, one row per genre.
+    """
+    results = []
+    for genre, gdf in df.groupby(genre_col):
+        if not genre or len(gdf) < min_texts:
+            continue
+        result = fit_arc(gdf, score_col=score_col, **kw)
+        result["genre"] = genre
+        result["corpus"] = genre  # for summarize_arc display
+        results.append(result)
+    return pd.DataFrame(results)
+
+
+def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
+                         scores_dir=None, version="v7", min_texts=30, **kw):
+    """Load all scored corpora, harmonize genres, and fit arc per genre.
+
+    Pools texts across corpora by harmonized genre, then fits one arc
+    per genre. Returns a DataFrame of results.
+    """
+    if scores_dir is None:
+        scores_dir = os.path.join(SCORES_DIR, version)
+    if not os.path.isdir(scores_dir):
+        raise FileNotFoundError(f"No scores directory: {scores_dir}")
+
+    all_dfs = []
+    for fn in sorted(os.listdir(scores_dir)):
+        if not fn.endswith(".csv"):
+            continue
+        corpus_name = fn.removesuffix(".csv")
+        try:
+            df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
+            df["corpus_name"] = corpus_name
+            all_dfs.append(df)
+        except Exception as e:
+            print(f"  Skipping {corpus_name}: {e}")
+            continue
+
+    if not all_dfs:
+        return pd.DataFrame()
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    return fit_arc_by_genre(combined, score_col=score_col,
+                            min_texts=min_texts, **kw)
 
 
 def summarize_arc(result):
