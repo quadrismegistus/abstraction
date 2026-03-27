@@ -83,10 +83,12 @@ def _render_body(txt, col="Abs-Conc.Median.median",
             parts.append((f'<span class="w {cls}">{escaped}</span>', False))
 
     chunks = []
+    prev_is_hyphen = False
     for i, (html_str, is_punct) in enumerate(parts):
-        if i > 0 and not is_punct:
+        if i > 0 and not is_punct and not prev_is_hyphen:
             chunks.append(" ")
         chunks.append(html_str)
+        prev_is_hyphen = is_punct and html_str.strip() in ("-", "\u2013", "\u2014")
     return "".join(chunks)
 
 
