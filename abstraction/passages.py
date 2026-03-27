@@ -50,7 +50,7 @@ def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
         alpha = 0.08 + intensity * 0.32
         css = (f"font-weight:{weight}; "
                f"background:rgba(0,0,0,{alpha:.2f}); "
-               f"padding:0 2px; border-radius:2px")
+               f"padding:1px 4px; border-radius:2px")
         return css, "concrete"
 
     return None, "neither"
