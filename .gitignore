@@ -6,6 +6,9 @@ __pycache__/
 
 # Data (large, not tracked)
 data/
+data
+.pytest_cache
+.claude
 
 # OS
 .DS_Store
