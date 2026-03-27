@@ -661,8 +661,9 @@ def report_arc(combined_df=None, genres=None,
     """Report piecewise arc statistics with ratios for each genre.
 
     Computes piecewise regression, raw decade means at key decades
-    (start trough, peak, end trough), and abstractness ratios on a
-    shifted scale anchored so the global minimum = 1.
+    (start trough, peak, end trough), and abstractness ratios using
+    raw scores. Ratios are only reported when both values have the
+    same sign (i.e. both abstract or both concrete); NaN otherwise.
 
     Parameters
     ----------
@@ -694,9 +695,6 @@ def report_arc(combined_df=None, genres=None,
         dec = -gdf.groupby("decade")[score_col].mean()
         dec_n = gdf.groupby("decade")[score_col].count()
         genre_dec[genre] = (dec, dec_n, gdf)
-
-    # Per-genre shift: anchor the genre minimum to ANCHOR.
-    ANCHOR = 0.0001
 
     rows = []
     prose_lines = []
@@ -757,16 +755,10 @@ def report_arc(combined_df=None, genres=None,
             except np.linalg.LinAlgError:
                 pass
 
-        # Raw and shifted values at key decades
+        # Raw values at key decades
         raw_start = float(dec_raw[start_yr])
         raw_peak = float(dec_raw[peak_yr])
         raw_end = float(dec_raw[end_yr])
-        # Per-genre shift: anchor the genre minimum to ANCHOR
-        genre_min = min(raw_start, raw_peak, raw_end)
-        genre_shift = ANCHOR - genre_min
-        sh_start = raw_start + genre_shift
-        sh_peak = raw_peak + genre_shift
-        sh_end = raw_end + genre_shift
 
         n_start = int(dec_n[start_yr])
         n_peak = int(dec_n[peak_yr])
@@ -774,6 +766,12 @@ def report_arc(combined_df=None, genres=None,
 
         rise_sd = (raw_peak - raw_start) / text_sd
         fall_sd = (raw_peak - raw_end) / text_sd
+
+        def _safe_ratio(a, b):
+            """Return a/b only when both have the same sign; NaN otherwise."""
+            if a * b > 0:
+                return a / b
+            return np.nan
 
         rows.append({
             "genre": genre,
@@ -786,9 +784,9 @@ def report_arc(combined_df=None, genres=None,
             "raw_end": raw_end,
             "rise_sd": rise_sd,
             "fall_sd": fall_sd,
-            "peak_vs_start": sh_peak / sh_start,
-            "peak_vs_end": sh_peak / sh_end,
-            "start_vs_end": sh_start / sh_end,
+            "peak_vs_start": _safe_ratio(raw_peak, raw_start),
+            "peak_vs_end": _safe_ratio(raw_peak, raw_end),
+            "start_vs_end": _safe_ratio(raw_start, raw_end),
             "slope_before": pw["pw_slope_before"],
             "slope_before_se": se_before,
             "slope_before_p": pw["pw_slope_before_p"],
@@ -804,12 +802,15 @@ def report_arc(combined_df=None, genres=None,
         })
 
         if print_result:
+            ratio_peak_start = _safe_ratio(raw_peak, raw_start)
+            ratio_peak_end = _safe_ratio(raw_peak, raw_end)
+            ratio_str_rise = f"{ratio_peak_start:.2f}x" if np.isfinite(ratio_peak_start) else "N/A (sign change)"
+            ratio_str_fall = f"{ratio_peak_end:.2f}x" if np.isfinite(ratio_peak_end) else "N/A (sign change)"
             prose_lines.append(
                 f"{genre}: abstractness rises from the {start_yr}s to a peak "
-                f"in the {peak_yr}s ({sh_peak/sh_start:.1f}x, "
+                f"in the {peak_yr}s ({ratio_str_rise}, "
                 f"+{rise_sd:.2f} SD), then falls to a trough in the "
-                f"{end_yr}s. At peak, {genre.lower()} is "
-                f"{sh_peak/sh_end:.1f}x as abstract as in the {end_yr}s. "
+                f"{end_yr}s. Peak vs end: {ratio_str_fall}. "
                 f"Piecewise breakpoint at {int(pw['pw_break_year'])}; "
                 f"rise slope = {pw['pw_slope_before']:+.4f}/decade "
                 f"(p = {pw['pw_slope_before_p']:.1e}), "
@@ -826,8 +827,8 @@ def report_arc(combined_df=None, genres=None,
         for line in prose_lines:
             print(line)
             print()
-        print(f"(Ratios use abstractness scores shifted so each genre's "
-              f"most concrete decade ≈ 0; ratios are relative to that floor.)")
+        print(f"(Ratios use raw abstractness scores; reported only when "
+              f"both values have the same sign.)")
 
     return df
 
