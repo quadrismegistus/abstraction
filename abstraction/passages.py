@@ -36,7 +36,7 @@ def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
         # More abstract → thicker border.  Map |z| from [cutoff .. max_z] to [1px .. 4px]
         intensity = (min(abs(z), max_z) - abs(abs_cutoff)) / (max_z - abs(abs_cutoff))
         intensity = max(0.0, min(1.0, intensity))
-        border_px = 1 + round(intensity * 3)  # 1..4
+        border_px = 1 + round(intensity * 5)  # 1..6
         css = f"border:{border_px}px solid #555; border-radius:2px; padding:0 2px"
         return css, "abstract"
 
@@ -46,8 +46,8 @@ def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
         intensity = (min(z, max_z) - conc_cutoff) / (max_z - conc_cutoff)
         intensity = max(0.0, min(1.0, intensity))
         weight = 400 + round(intensity * 500)  # 400..900
-        # Gray background: rgba black from 0.06 (light) to 0.25 (dark)
-        alpha = 0.06 + intensity * 0.19
+        # Gray background: rgba black from 0.08 (light) to 0.40 (dark)
+        alpha = 0.08 + intensity * 0.32
         css = (f"font-weight:{weight}; "
                f"background:rgba(0,0,0,{alpha:.2f}); "
                f"padding:0 2px; border-radius:2px")
