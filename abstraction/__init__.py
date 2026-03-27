@@ -24,4 +24,9 @@ from .passages import (
     render_passage_html, display_passage, save_passage_html, save_passage_image,
     render_comparison_html, display_comparison, save_comparison_image,
 )
+from .words import (
+    aggregate_freqs_by_decade, load_aggregate_freqs,
+    correlate_words_with_trend, word_contributions,
+    summarize_correlations, summarize_contributions,
+)
 from .utils import read_df, save_df, get_avgs_df
