@@ -374,9 +374,9 @@ def arc_caption(combined_df, genres=None):
     Returns
     -------
     str
-        Caption like "Fiction (45,231 texts: hathi_englit 30,102, chadwyck 5,012, ...); ..."
+        Caption like "Fiction (45,231 texts: Hathi Englit 30,102, Chadwyck 5,012, ...); ..."
     """
-    df = combined_df.copy()
+    df = combined_df
     if genres is not None:
         df = df[df["genre_harmonized"].isin(genres)]
 
@@ -385,7 +385,7 @@ def arc_caption(combined_df, genres=None):
         gdf = df[df["genre_harmonized"] == genre]
         corpus_counts = gdf["corpus_name"].value_counts()
         corpus_str = ", ".join(
-            f"{name} {count:,}" for name, count in corpus_counts.items()
+            f'{name.replace("_", " ").title()} {count:,}' for name, count in corpus_counts.items()
         )
         parts.append(f"{genre} ({len(gdf):,} texts: {corpus_str})")
     return "; ".join(parts)
