@@ -25,24 +25,32 @@ def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
     """Return inline CSS for a word given its z-score.
 
     Abstract (z <= abs_cutoff): border whose width scales with |z|.
-    Concrete (z >= conc_cutoff): font-weight that scales with z.
+    Concrete (z >= conc_cutoff): bold weight + gray background box that
+        darkens with concreteness.
     Neither: no special styling.
     """
     if np.isnan(z):
         return None, "neither"
 
     if z <= abs_cutoff:
-        # More abstract → thicker border.  Map z from [abs_cutoff .. -max_z] to [1px .. 4px]
-        intensity = min(abs(z), max_z) / max_z  # 0..1
+        # More abstract → thicker border.  Map |z| from [cutoff .. max_z] to [1px .. 4px]
+        intensity = (min(abs(z), max_z) - abs(abs_cutoff)) / (max_z - abs(abs_cutoff))
+        intensity = max(0.0, min(1.0, intensity))
         border_px = 1 + round(intensity * 3)  # 1..4
         css = f"border:{border_px}px solid #555; border-radius:2px; padding:0 2px"
         return css, "abstract"
 
     if z >= conc_cutoff:
-        # More concrete → bolder.  Map z from [conc_cutoff .. max_z] to [600 .. 900]
-        intensity = min(z, max_z) / max_z  # 0..1
-        weight = 600 + round(intensity * 300)  # 600..900
-        css = f"font-weight:{weight}"
+        # More concrete → bolder + darker gray background box
+        # Map z from [cutoff .. max_z] to 0..1
+        intensity = (min(z, max_z) - conc_cutoff) / (max_z - conc_cutoff)
+        intensity = max(0.0, min(1.0, intensity))
+        weight = 400 + round(intensity * 500)  # 400..900
+        # Gray background: rgba black from 0.06 (light) to 0.25 (dark)
+        alpha = 0.06 + intensity * 0.19
+        css = (f"font-weight:{weight}; "
+               f"background:rgba(0,0,0,{alpha:.2f}); "
+               f"padding:0 2px; border-radius:2px")
         return css, "concrete"
 
     return None, "neither"
@@ -118,7 +126,7 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
         legend_html = f"""
         <div style="margin-bottom:12px; font-size:{font_size - 2}px; color:#555;">
             <span style="border:2px solid #555; border-radius:2px; padding:0 3px; margin-right:8px;">abstract</span>
-            <span style="font-weight:800; margin-right:8px;">concrete</span>
+            <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:0 3px; border-radius:2px; margin-right:8px;">concrete</span>
             <span style="color:#888;">plain = unscored or neither</span>
         </div>"""
 
@@ -318,7 +326,7 @@ h4 {{ margin: 0 0 8px 0; font-family: serif; }}
 <body>
 <div class="legend">
     <span style="border:2px solid #555; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
-    <span style="font-weight:800;">concrete</span>&ensp;
+    <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:0 3px; border-radius:2px;">concrete</span>&ensp;
     <span style="color:#888;">plain = unscored / neither</span>
 </div>
 {table}
