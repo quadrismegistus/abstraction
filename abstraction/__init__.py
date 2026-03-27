@@ -27,6 +27,7 @@ from .passages import (
 from .words import (
     aggregate_freqs_by_decade, load_aggregate_freqs,
     correlate_words_with_trend, word_contributions,
-    summarize_correlations, summarize_contributions,
+    word_score_shifts,
+    summarize_correlations, summarize_contributions, summarize_score_shifts,
 )
 from .utils import read_df, save_df, get_avgs_df

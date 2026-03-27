@@ -401,3 +401,109 @@ def summarize_correlations(corr_df, n=20):
     for _, row in top_abs.iterrows():
         print(f"  {row['word']:20s}  z={row['z_score']:+.2f} ({row['category']:>8s})  "
               f"r={row['correlation']:+.3f}  freq={row['freq']:,.0f}")
+
+
+# ---------------------------------------------------------------------------
+# Score change: which words changed concreteness across centuries?
+# ---------------------------------------------------------------------------
+
+def word_score_shifts(source="Median", period_early="C17", period_late="C19",
+                      min_periods=2):
+    """Find words whose concreteness score changed between historical periods.
+
+    Uses vector norms (Word2Vec-derived per-century concreteness) to identify
+    words that changed in *meaning* — became more abstract or more concrete —
+    independent of frequency.
+
+    Parameters
+    ----------
+    source : str
+        Norm source (e.g. "Median", "MRC-Conc", "MT-Conc").
+    period_early : str
+        Earlier period column suffix (e.g. "C16", "C17", "C18").
+    period_late : str
+        Later period column suffix (e.g. "C19", "C20").
+    min_periods : int
+        Require scores in at least this many of the 5 periods (C16-C20)
+        to include a word. Filters out words with sparse coverage.
+
+    Returns
+    -------
+    DataFrame
+        Columns: word, score_early, score_late, score_shift, abs_shift,
+                 score_median (time-averaged), trajectory (all 5 periods).
+        Sorted by score_shift (most concretizing first).
+    """
+    allnorms = get_allnorms()
+
+    col_early = f"Abs-Conc.{source}.{period_early}"
+    col_late = f"Abs-Conc.{source}.{period_late}"
+    if col_early not in allnorms.columns:
+        raise ValueError(f"Unknown column: {col_early}")
+    if col_late not in allnorms.columns:
+        raise ValueError(f"Unknown column: {col_late}")
+
+    # All period columns for this source
+    all_period_cols = [f"Abs-Conc.{source}.{p}" for p in ["C16", "C17", "C18", "C19", "C20"]]
+    all_period_cols = [c for c in all_period_cols if c in allnorms.columns]
+
+    # Filter to words with scores in both target periods; drop duplicate words
+    allnorms = allnorms[~allnorms.index.duplicated(keep="first")]
+    valid = allnorms[[col_early, col_late]].dropna()
+
+    # Optional: require coverage across multiple periods
+    if min_periods > 1:
+        coverage = allnorms.loc[valid.index, all_period_cols].notna().sum(axis=1)
+        keep_idx = coverage[coverage >= min_periods].index.intersection(valid.index)
+        valid = valid.loc[keep_idx]
+
+    # Build results from the valid subset
+    trajectories = allnorms.loc[valid.index, all_period_cols]
+    score_median = trajectories.median(axis=1)
+    shift = valid[col_late] - valid[col_early]  # positive = became more concrete
+
+    results = valid[[col_early, col_late]].copy()
+    results.columns = ["score_early", "score_late"]
+    results["word"] = results.index
+    results["score_shift"] = shift
+    results["abs_shift"] = shift.abs()
+    results["score_median"] = score_median
+    results["trajectory"] = [
+        trajectories.loc[w].to_dict() for w in results.index
+    ]
+
+    # Classify by median score
+    results["category"] = "Neither"
+    results.loc[results["score_median"] <= -1.0, "category"] = "Abstract"
+    results.loc[results["score_median"] >= 1.0, "category"] = "Concrete"
+
+    results = results.sort_values("score_shift", ascending=False).reset_index(drop=True)
+    return results
+
+
+def summarize_score_shifts(shifts_df, n=20):
+    """Print a readable summary of words with largest score changes.
+
+    Parameters
+    ----------
+    shifts_df : DataFrame
+        From word_score_shifts().
+    n : int
+        Number of words per direction.
+    """
+    print("=" * 72)
+    print(f"TOP {n} WORDS THAT BECAME MORE CONCRETE (meaning shifted)")
+    print("=" * 72)
+    top = shifts_df.head(n)
+    for _, row in top.iterrows():
+        print(f"  {row['word']:20s}  {row['score_early']:+.2f} → {row['score_late']:+.2f}  "
+              f"shift={row['score_shift']:+.2f}  ({row['category']})")
+
+    print()
+    print("=" * 72)
+    print(f"TOP {n} WORDS THAT BECAME MORE ABSTRACT (meaning shifted)")
+    print("=" * 72)
+    bottom = shifts_df.tail(n).iloc[::-1]
+    for _, row in bottom.iterrows():
+        print(f"  {row['word']:20s}  {row['score_early']:+.2f} → {row['score_late']:+.2f}  "
+              f"shift={row['score_shift']:+.2f}  ({row['category']})")
