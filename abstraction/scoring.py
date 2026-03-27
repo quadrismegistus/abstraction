@@ -277,7 +277,8 @@ def _load_done_ids(csv_path):
         return set()
 
 
-def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
+def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
+                       modernize=True):
     """Score all freqs/*.json files in a corpus directory against all norms.
 
     If output_path is provided, appends rows to a CSV incrementally and
@@ -292,6 +293,8 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
     output_path : str, optional
         Path to a CSV file for incremental output. If None, returns results
         in memory only.
+    modernize : bool
+        If True (default), prefer modernized spelling for norm lookups.
 
     Returns
     -------
@@ -305,7 +308,7 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
         allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
     columns = _get_csv_columns(allnorms)
-    spelling_d = get_spelling_modernizer()
+    spelling_d = get_spelling_modernizer() if modernize else None
 
     # check what's already done
     done_ids = _load_done_ids(output_path) if output_path else set()
@@ -348,14 +351,21 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
     return df[columns]
 
 
+def _version_dir(base, version, modernize):
+    """Append version subdirectory, with '-raw' suffix when unmodernized."""
+    suffix = "" if modernize else "-raw"
+    return os.path.join(base, f"{version}{suffix}")
+
+
 def score_all_corpora(
     corpora_dir=PATH_CORPORA,
     output_dir=SCORES_DIR,
     force=False,
+    modernize=True,
 ):
     """Score all corpora that have freqs/ folders.
 
-    Saves one CSV per corpus to output_dir/v7/, appending incrementally.
+    Saves one CSV per corpus to output_dir/v8/, appending incrementally.
     Resumable: skips already-scored text IDs within each corpus.
     Deduplicates corpora whose freqs/ directories resolve to the same
     real path (e.g. hathi subcorpora sharing a symlinked freqs/ tree).
@@ -368,12 +378,15 @@ def score_all_corpora(
         Where to save per-corpus score files.
     force : bool
         If True, delete existing CSVs and re-score from scratch.
+    modernize : bool
+        If True (default), prefer modernized spelling for norm lookups.
+        Outputs go to v8/ (modernized) or v8-raw/ (unmodernized).
 
     Returns
     -------
     dict of {corpus_name: DataFrame}
     """
-    output_dir = os.path.join(output_dir, "v8")
+    output_dir = _version_dir(output_dir, "v8", modernize)
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
@@ -412,7 +425,7 @@ def score_all_corpora(
     # open one CSV writer per corpus
     import csv
     columns = _get_csv_columns(allnorms)
-    spelling_d = get_spelling_modernizer()
+    spelling_d = get_spelling_modernizer() if modernize else None
     writers = {}
     file_handles = {}
 
@@ -530,7 +543,7 @@ def _load_done_jsonl(jsonl_path):
 
 
 def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
-                       bin_edges=None, norm_filter=None):
+                       bin_edges=None, norm_filter=None, modernize=True):
     """Count z-score distributions for all freqs/*.json in a corpus.
 
     Outputs one JSONL line per text:
@@ -551,6 +564,8 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
         Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
     norm_filter : list of str, optional
         If given, only count these norm columns.
+    modernize : bool
+        If True (default), prefer modernized spelling for norm lookups.
 
     Returns
     -------
@@ -569,7 +584,7 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     bin_edges = np.asarray(bin_edges)
 
     requested_norms = set(allnorms.columns)
-    spelling_d = get_spelling_modernizer()
+    spelling_d = get_spelling_modernizer() if modernize else None
 
     # Load existing records and check which texts need (re-)processing
     existing, all_records = _load_done_jsonl(output_path) if output_path else ({}, [])
@@ -636,10 +651,11 @@ def count_all_corpora(
     force=False,
     norm_filter=None,
     bin_edges=None,
+    modernize=True,
 ):
     """Count z-score distributions for all corpora with freqs/ folders.
 
-    Saves one JSONL file per corpus to output_dir/v1/.
+    Saves one JSONL file per corpus to output_dir/v2/.
     Resumable: skips already-counted texts. Re-running with additional
     norms merges new norms into existing records.
 
@@ -655,10 +671,13 @@ def count_all_corpora(
         Only count these norm columns.
     bin_edges : array-like, optional
         Z-score bin edges. Default: -3.0 to 3.0 in 0.1 steps.
+    modernize : bool
+        If True (default), prefer modernized spelling for norm lookups.
+        Outputs go to v2/ (modernized) or v2-raw/ (unmodernized).
     """
     if output_dir is None:
         output_dir = COUNT_DIR
-    output_dir = os.path.join(output_dir, "v2")
+    output_dir = _version_dir(output_dir, "v2", modernize)
     os.makedirs(output_dir, exist_ok=True)
 
     allnorms = get_allnorms()
@@ -685,7 +704,7 @@ def count_all_corpora(
         corpora.append((name, corpus_dir))
 
     requested_norms = set(allnorms.columns)
-    spelling_d = get_spelling_modernizer()
+    spelling_d = get_spelling_modernizer() if modernize else None
 
     # collect files to process, skipping done IDs
     all_files = []

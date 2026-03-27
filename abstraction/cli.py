@@ -6,24 +6,25 @@ import sys
 
 def cmd_score_corpora(args):
     from .scoring import score_all_corpora
-    score_all_corpora(force=args.force)
+    score_all_corpora(force=args.force, modernize=not args.no_modernize)
 
 
 def cmd_score_corpus(args):
     import os
     from .config import PATH_CORPORA, SCORES_DIR
-    from .scoring import score_corpus_freqs
+    from .scoring import score_corpus_freqs, _version_dir
 
+    modernize = not args.no_modernize
     corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    out_dir = os.path.join(SCORES_DIR, "v8")
+    out_dir = _version_dir(SCORES_DIR, "v8", modernize)
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{args.corpus}.csv")
     if args.force and os.path.exists(out_path):
         os.remove(out_path)
-    df = score_corpus_freqs(corpus_dir, output_path=out_path)
+    df = score_corpus_freqs(corpus_dir, output_path=out_path, modernize=modernize)
     if len(df):
         print(f"Scored {len(df)} texts -> {out_path}")
     else:
@@ -48,25 +49,28 @@ def cmd_fix_hathi_englit(args):
 def cmd_count_corpora(args):
     from .scoring import count_all_corpora
     norm_filter = args.norms.split(",") if args.norms else None
-    count_all_corpora(force=args.force, norm_filter=norm_filter)
+    count_all_corpora(force=args.force, norm_filter=norm_filter,
+                      modernize=not args.no_modernize)
 
 
 def cmd_count_corpus(args):
     import os
     from .config import PATH_CORPORA, COUNT_DIR
-    from .scoring import count_corpus_freqs
+    from .scoring import count_corpus_freqs, _version_dir
 
+    modernize = not args.no_modernize
     corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    out_dir = os.path.join(COUNT_DIR, "v2")
+    out_dir = _version_dir(COUNT_DIR, "v2", modernize)
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{args.corpus}.jsonl")
     if args.force and os.path.exists(out_path):
         os.remove(out_path)
     norm_filter = args.norms.split(",") if args.norms else None
-    records = count_corpus_freqs(corpus_dir, output_path=out_path, norm_filter=norm_filter)
+    records = count_corpus_freqs(corpus_dir, output_path=out_path,
+                                 norm_filter=norm_filter, modernize=modernize)
     if records:
         print(f"Counted {len(records)} texts -> {out_path}")
     else:
@@ -111,11 +115,13 @@ def main():
     # score-corpora: score all corpora with freqs/ folders
     p = sub.add_parser("score-corpora", help="Score all corpora with freqs/ folders")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
+    p.add_argument("--no-modernize", action="store_true", help="Disable spelling modernization (output to v8-raw/)")
 
     # score-corpus: score a single corpus
     p = sub.add_parser("score-corpus", help="Score a single corpus")
     p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
+    p.add_argument("--no-modernize", action="store_true", help="Disable spelling modernization (output to v8-raw/)")
 
     # check-freqs: check metadata-to-freqs coverage
     p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
@@ -129,12 +135,14 @@ def main():
     p = sub.add_parser("count-corpora", help="Count z-score distributions for all corpora with freqs/")
     p.add_argument("--force", action="store_true", help="Re-count even if output exists")
     p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
+    p.add_argument("--no-modernize", action="store_true", help="Disable spelling modernization (output to v2-raw/)")
 
     # count-corpus: count z-score distributions for one corpus
     p = sub.add_parser("count-corpus", help="Count z-score distributions for a single corpus")
     p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
     p.add_argument("--force", action="store_true", help="Re-count even if output exists")
     p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
+    p.add_argument("--no-modernize", action="store_true", help="Disable spelling modernization (output to v2-raw/)")
 
     # report-arc: piecewise arc report with ratios (score-based)
     p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
