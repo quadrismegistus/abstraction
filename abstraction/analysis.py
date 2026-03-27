@@ -1971,3 +1971,222 @@ def report_full(scores_df=None, counts_df=None, genres=None,
                                 suffixes=("_score", "_count"))
 
     return md, merged
+
+
+def report_compare(genres=None,
+                   score_col="Abs-Conc.Median.median",
+                   norm="Abs-Conc.Median.median",
+                   abs_cutoff=-1.0, conc_cutoff=1.0,
+                   corpus_col="corpus_name",
+                   min_year=1600, max_year=2020,
+                   agg_bin=10, min_texts_per_bin=3,
+                   search_range=(1650, 1850), search_step=10):
+    """Compare raw vs modernized results across scores and counts.
+
+    Loads all four datasets (v8-raw, v8, v2-raw, v2) and produces a
+    side-by-side comparison table plus per-genre detail.
+
+    Returns (markdown_string, dict_of_dataframes).
+    """
+    if genres is None:
+        genres = ["Fiction", "Poetry", "Periodical"]
+
+    fit_kw = dict(
+        corpus_col=corpus_col, min_year=min_year, max_year=max_year,
+        agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+        search_range=search_range, search_step=search_step,
+    )
+
+    # Load all four datasets
+    variants = {
+        "scores_raw": ("v8-raw", "scores"),
+        "scores_mod": ("v8", "scores"),
+        "counts_raw": ("v2-raw", "counts"),
+        "counts_mod": ("v2", "counts"),
+    }
+    data = {}
+    for key, (version, kind) in variants.items():
+        try:
+            if kind == "scores":
+                data[key] = load_all_scored(version=version)
+            else:
+                data[key] = load_all_counts(version=version, norm=norm,
+                                            abs_cutoff=abs_cutoff,
+                                            conc_cutoff=conc_cutoff)
+        except FileNotFoundError:
+            print(f"  Warning: {version}/ not found, skipping {key}")
+            data[key] = None
+
+    # Run reports for each available variant
+    results = {}
+    if data.get("scores_raw") is not None:
+        results["scores_raw"] = report_arc(
+            combined_df=data["scores_raw"], genres=genres,
+            score_col=score_col, print_result=False, **fit_kw)
+    if data.get("scores_mod") is not None:
+        results["scores_mod"] = report_arc(
+            combined_df=data["scores_mod"], genres=genres,
+            score_col=score_col, print_result=False, **fit_kw)
+    if data.get("counts_raw") is not None:
+        results["counts_raw"] = report_arc_counts(
+            combined_df=data["counts_raw"], genres=genres, norm=norm,
+            abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff,
+            print_result=False, **fit_kw)
+    if data.get("counts_mod") is not None:
+        results["counts_mod"] = report_arc_counts(
+            combined_df=data["counts_mod"], genres=genres, norm=norm,
+            abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff,
+            print_result=False, **fit_kw)
+
+    def _p_stars(p):
+        if not np.isfinite(p):
+            return ""
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "n.s."
+
+    def _fmt_ratio(r):
+        if not np.isfinite(r):
+            return "—"
+        if r < 1:
+            return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
+        return f"{r:.1f}:1"
+
+    def _safe_ratio(a, b):
+        return a / b if b > 0 else np.nan
+
+    def _get_row(df, genre):
+        if df is None:
+            return None
+        rows = df[df["genre"] == genre]
+        return rows.iloc[0] if len(rows) else None
+
+    lines = []
+
+    lines.append("## Raw vs modernized spelling: comparison")
+    lines.append("")
+
+    # --- Per-genre comparison ---
+    for genre in genres:
+        sr_raw = _get_row(results.get("scores_raw"), genre)
+        sr_mod = _get_row(results.get("scores_mod"), genre)
+        cr_raw = _get_row(results.get("counts_raw"), genre)
+        cr_mod = _get_row(results.get("counts_mod"), genre)
+
+        n_texts = int(sr_raw["n_texts_total"]) if sr_raw is not None else (
+            int(sr_mod["n_texts_total"]) if sr_mod is not None else "?")
+
+        lines.append(f"### {genre} (n = {n_texts:,})")
+        lines.append("")
+
+        # Scores comparison table
+        lines.append("#### Scores (continuous weighted-mean)")
+        lines.append("")
+        lines.append("| | Raw | Modernized |")
+        lines.append("|---|---|---|")
+
+        def _score_row(label, key, sr):
+            if sr is None:
+                return "—"
+            return f"{sr[key]}"
+
+        if sr_raw is not None or sr_mod is not None:
+            for label, key, fmt in [
+                ("Breakpoint", "breakpoint", lambda v: f"{int(v)}"),
+                ("Start decade", "start_decade", lambda v: f"{int(v)}s"),
+                ("Peak decade", "peak_decade", lambda v: f"{int(v)}s"),
+                ("End decade", "end_decade", lambda v: f"{int(v)}s"),
+                ("Raw start", "raw_start", lambda v: f"{v:.4f}"),
+                ("Raw peak", "raw_peak", lambda v: f"{v:.4f}"),
+                ("Raw end", "raw_end", lambda v: f"{v:.4f}"),
+                ("Rise (SD)", "rise_sd", lambda v: f"+{v:.2f}"),
+                ("Fall (SD)", "fall_sd", lambda v: f"+{v:.2f}"),
+                ("Rise slope", "slope_before", lambda v: f"{v:+.4f}/dec"),
+                ("Rise p", "slope_before_p", lambda v: f"{v:.1e} {_p_stars(v)}"),
+                ("Fall slope", "slope_after", lambda v: f"{v:+.4f}/dec"),
+                ("Fall p", "slope_after_p", lambda v: f"{v:.1e} {_p_stars(v)}"),
+                ("R²", "r2", lambda v: f"{v:.3f}"),
+            ]:
+                raw_val = fmt(sr_raw[key]) if sr_raw is not None else "—"
+                mod_val = fmt(sr_mod[key]) if sr_mod is not None else "—"
+                lines.append(f"| {label} | {raw_val} | {mod_val} |")
+
+        lines.append("")
+
+        # Counts comparison table
+        lines.append(f"#### Word proportions (abstract: z ≤ {abs_cutoff}, concrete: z > {conc_cutoff})")
+        lines.append("")
+        lines.append("| | Raw | Modernized |")
+        lines.append("|---|---|---|")
+
+        if cr_raw is not None or cr_mod is not None:
+            for label, key, fmt in [
+                ("Breakpoint (abstract)", "abstract_breakpoint", lambda v: f"{int(v)}"),
+                ("Abstract start", "abstract_pct_start", lambda v: f"{v:.1f}%"),
+                ("Abstract peak", "abstract_pct_peak", lambda v: f"{v:.1f}%"),
+                ("Abstract end", "abstract_pct_end", lambda v: f"{v:.1f}%"),
+                ("Concrete at start", "conc_at_abs_start", lambda v: f"{v:.1f}%"),
+                ("Concrete at peak", "conc_at_abs_peak", lambda v: f"{v:.1f}%"),
+                ("Concrete at end", "conc_at_abs_end", lambda v: f"{v:.1f}%"),
+                ("Abs/Conc ratio start", "abs_conc_ratio_start", lambda v: _fmt_ratio(v)),
+                ("Abs/Conc ratio peak", "abs_conc_ratio_peak", lambda v: _fmt_ratio(v)),
+                ("Abs/Conc ratio end", "abs_conc_ratio_end", lambda v: _fmt_ratio(v)),
+                ("R² (abstract)", "abstract_r2", lambda v: f"{v:.3f}"),
+                ("R² (concrete)", "concrete_r2", lambda v: f"{v:.3f}"),
+            ]:
+                raw_val = fmt(cr_raw[key]) if cr_raw is not None else "—"
+                mod_val = fmt(cr_mod[key]) if cr_mod is not None else "—"
+                lines.append(f"| {label} | {raw_val} | {mod_val} |")
+
+            # Add ratio changes
+            for cr_label, cr in [("Raw", cr_raw), ("Modernized", cr_mod)]:
+                if cr is None:
+                    continue
+                r_s = cr["abs_conc_ratio_start"]
+                r_p = cr["abs_conc_ratio_peak"]
+                r_e = cr["abs_conc_ratio_end"]
+                # We'll add these as summary rows below
+
+        lines.append("")
+
+        # Ratio change summary
+        lines.append("**Abs/Conc ratio changes:**")
+        lines.append("")
+        lines.append("| Phase | Raw | Modernized |")
+        lines.append("|---|---|---|")
+        for phase, get_a, get_b in [
+            ("Rise", "abs_conc_ratio_start", "abs_conc_ratio_peak"),
+            ("Fall", "abs_conc_ratio_peak", "abs_conc_ratio_end"),
+            ("Net", "abs_conc_ratio_start", "abs_conc_ratio_end"),
+        ]:
+            cells = []
+            for cr in [cr_raw, cr_mod]:
+                if cr is None:
+                    cells.append("—")
+                    continue
+                a, b = cr[get_a], cr[get_b]
+                if phase == "Rise":
+                    cells.append(f"{_fmt_ratio(a)} → {_fmt_ratio(b)} ({_safe_ratio(b, a):.1f}x)")
+                elif phase == "Fall":
+                    cells.append(f"{_fmt_ratio(a)} → {_fmt_ratio(b)} ({_safe_ratio(a, b):.1f}x decline)")
+                else:
+                    change = _safe_ratio(max(a, b), min(a, b))
+                    direction = "decline" if b < a else "increase"
+                    cells.append(f"{_fmt_ratio(a)} → {_fmt_ratio(b)} ({change:.1f}x {direction})")
+            lines.append(f"| {phase} | {cells[0]} | {cells[1]} |")
+
+        lines.append("")
+
+    lines.append(
+        f"*(Scores: continuous weighted-mean concreteness, inverted. "
+        f"Proportions: frequency-weighted, abstract z ≤ {abs_cutoff}, "
+        f"concrete z > {conc_cutoff}. "
+        f"All regressions include corpus fixed effects.)*"
+    )
+
+    md = "\n".join(lines)
+    return md, results

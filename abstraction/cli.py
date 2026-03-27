@@ -98,6 +98,23 @@ def cmd_report_arc_counts(args):
 
 
 def cmd_report_full(args):
+    if args.compare:
+        from .analysis import report_compare
+        genres = args.genres.split(",") if args.genres else None
+        md, results = report_compare(
+            genres=genres,
+            abs_cutoff=args.abs_cutoff,
+            conc_cutoff=args.conc_cutoff,
+            min_year=args.min_year,
+            max_year=args.max_year,
+        )
+        print(md)
+        if args.output:
+            with open(args.output, "w") as f:
+                f.write(md + "\n")
+            print(f"\nSaved markdown to {args.output}")
+        return
+
     from .analysis import report_full
     genres = args.genres.split(",") if args.genres else None
     scores_version = "v8" if args.modernize else "v8-raw"
@@ -184,6 +201,7 @@ def main():
     p.add_argument("--csv", default=None, help="Save merged DataFrame to CSV")
     p.add_argument("--output", "-o", default=None, help="Save markdown to file")
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized data")
+    p.add_argument("--compare", action="store_true", help="Compare raw vs modernized side by side (loads all 4 datasets)")
 
     # report-arc: piecewise arc report with ratios (score-based)
     p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
