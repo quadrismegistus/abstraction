@@ -1672,25 +1672,31 @@ def report_arc_counts(combined_df=None, genres=None,
             def _r(a, b):
                 return a / b if b > 0 else np.nan
 
+            def _fmt_ratio(r):
+                """Format abs/conc ratio, showing inverse when < 1."""
+                if r < 1:
+                    return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
+                return f"{r:.1f}:1"
+
             genre_prose = [
                 f"{genre} (n = {len(gdf):,}):",
                 f"  Rise ({abs_start}s → {abs_peak}s):",
                 f"    Abstract: {a_s:.1f}% → {a_p:.1f}% ({_r(a_p, a_s):.1f}x)",
                 f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_s, c_p):.1f}x decline)" if c_p < c_s else
                 f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_p, c_s):.1f}x increase)",
-                f"    Abs/Conc ratio: {r_s:.1f}:1 → {r_p:.1f}:1 ({_r(r_p, r_s):.1f}x)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_p)} ({_r(r_p, r_s):.1f}x)",
                 f"  Fall ({abs_peak}s → {abs_end}s):",
                 f"    Abstract: {a_p:.1f}% → {a_e:.1f}% ({_r(a_p, a_e):.1f}x decline)",
                 f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_e, c_p):.1f}x increase)" if c_e > c_p else
                 f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_p, c_e):.1f}x decline)",
-                f"    Abs/Conc ratio: {r_p:.1f}:1 → {r_e:.1f}:1 ({_r(r_p, r_e):.1f}x decline)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_p)} → {_fmt_ratio(r_e)} ({_r(r_p, r_e):.1f}x decline)",
                 f"  Net ({abs_start}s → {abs_end}s):",
                 f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_s, a_e):.1f}x decline)" if a_e < a_s else
                 f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_e, a_s):.1f}x increase)",
                 f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_e, c_s):.1f}x increase)" if c_e > c_s else
                 f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_s, c_e):.1f}x decline)",
-                f"    Abs/Conc ratio: {r_s:.1f}:1 → {r_e:.1f}:1 ({_r(r_s, r_e):.1f}x decline)" if r_e < r_s else
-                f"    Abs/Conc ratio: {r_s:.1f}:1 → {r_e:.1f}:1 ({_r(r_e, r_s):.1f}x increase)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_s, r_e):.1f}x decline)" if r_e < r_s else
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_e, r_s):.1f}x increase)",
                 f"  Breakpoint {int(abs_row['abstract_breakpoint'])}; "
                 f"R² abstract = {abs_row['abstract_r2']:.3f}"
                 + (f", R² concrete = {conc_row['concrete_r2']:.3f}" if conc_row else ""),
