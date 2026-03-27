@@ -1651,6 +1651,13 @@ def report_arc_counts(combined_df=None, genres=None,
             row["conc_at_abs_peak"] = conc_at_abs_peak
             row["conc_at_abs_end"] = conc_at_abs_end
 
+            # Abstract-to-concrete ratio at key decades
+            def _ratio(a, c):
+                return a / c if c > 0 else np.nan
+            row["abs_conc_ratio_start"] = _ratio(abs_row["abstract_pct_start"], conc_at_abs_start)
+            row["abs_conc_ratio_peak"] = _ratio(abs_row["abstract_pct_peak"], conc_at_abs_peak)
+            row["abs_conc_ratio_end"] = _ratio(abs_row["abstract_pct_end"], conc_at_abs_end)
+
         if print_result and abs_row:
             a_s = abs_row["abstract_pct_start"]
             a_p = abs_row["abstract_pct_peak"]
@@ -1658,6 +1665,9 @@ def report_arc_counts(combined_df=None, genres=None,
             c_s = conc_at_abs_start
             c_p = conc_at_abs_peak
             c_e = conc_at_abs_end
+            r_s = row["abs_conc_ratio_start"]
+            r_p = row["abs_conc_ratio_peak"]
+            r_e = row["abs_conc_ratio_end"]
 
             def _r(a, b):
                 return a / b if b > 0 else np.nan
@@ -1668,15 +1678,18 @@ def report_arc_counts(combined_df=None, genres=None,
                 f"    Abstract: {a_s:.1f}% → {a_p:.1f}% ({_r(a_p, a_s):.1f}x)",
                 f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_s, c_p):.1f}x decline)" if c_p < c_s else
                 f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_p, c_s):.1f}x increase)",
+                f"    Abs/Conc ratio: {r_s:.1f}:1 → {r_p:.1f}:1",
                 f"  Fall ({abs_peak}s → {abs_end}s):",
                 f"    Abstract: {a_p:.1f}% → {a_e:.1f}% ({_r(a_p, a_e):.1f}x decline)",
                 f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_e, c_p):.1f}x increase)" if c_e > c_p else
                 f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_p, c_e):.1f}x decline)",
+                f"    Abs/Conc ratio: {r_p:.1f}:1 → {r_e:.1f}:1",
                 f"  Net ({abs_start}s → {abs_end}s):",
                 f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_s, a_e):.1f}x decline)" if a_e < a_s else
                 f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_e, a_s):.1f}x increase)",
                 f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_e, c_s):.1f}x increase)" if c_e > c_s else
                 f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_s, c_e):.1f}x decline)",
+                f"    Abs/Conc ratio: {r_s:.1f}:1 → {r_e:.1f}:1",
                 f"  Breakpoint {int(abs_row['abstract_breakpoint'])}; "
                 f"R² abstract = {abs_row['abstract_r2']:.3f}"
                 + (f", R² concrete = {conc_row['concrete_r2']:.3f}" if conc_row else ""),
