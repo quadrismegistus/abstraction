@@ -12,17 +12,107 @@ Code and data for measuring abstract and concrete language across the history of
 
 ### Cross-genre results (piecewise regression with corpus fixed effects)
 
-| Genre | Texts | Peak | Break | Before break | After break | R² |
-|---|---:|---:|---:|---|---|---:|
-| Fiction | 45K | 1709 | 1760 | abstracting *** | concretizing *** | 0.84 |
-| Poetry | 281K | 1705 | 1720 | abstracting *** | concretizing *** | 0.78 |
-| Drama | 8K | 1750 | 1720 | abstracting *** | concretizing *** | 0.83 |
-| Periodical | 192K | 1812 | 1840 | abstracting *** | concretizing *** | 0.93 |
-| Sermon | 7K | 1766 | 1660 | abstracting *** | abstracting *** | 0.79 |
-| Letters | 5K | 1742 | 1740 | abstracting * | concretizing * | 0.86 |
-| Essay/Treatise | 4K | 1751 | 1770 | abstracting ** | concretizing ** | 0.47 |
+| Genre | Texts | Breakpoint | Rise slope | Fall slope | R² (scores) | R² (abstract %) | R² (concrete %) |
+|---|---:|---:|---|---|---:|---:|---:|
+| Fiction | 161,148 | 1760 | +0.0013/dec *** | -0.0029/dec *** | 0.882 | 0.820 | 0.900 |
+| Poetry | 244,790 | 1700 | +0.0021/dec *** | -0.0019/dec *** | 0.881 | 0.794 | 0.904 |
+| Periodical | 157,561 | 1830 | +0.0013/dec *** | -0.0018/dec *** | 0.870 | 0.849 | 0.787 |
 
-Sermons never concretize. Nonfiction shows the inverse pattern (gets more abstract over time).
+#### Fiction (n = 161,148)
+
+**Scores** (continuous weighted-mean concreteness, inverted so abstractness is up):
+- 1600s: 0.2046 → 1750s: 0.3743 → 1990s: -0.2490
+- Rise: +0.67 SD | Fall: +2.46 SD
+- Breakpoint: 1760 | R² = 0.882
+- Rise slope: +0.0013/decade (p = 7.5e-11) ***
+- Fall slope: -0.0029/decade (p = 3.6e-83) ***
+
+**Word proportions** (abstract: z ≤ -1.0, concrete: z > 1.0):
+
+| Phase | Abstract | Concrete | Abs/Conc ratio |
+|---|---|---|---|
+| 1600s (start) | 18.8% | 9.4% | 2.0:1 |
+| 1750s (peak) | 26.4% | 7.9% | 3.4:1 |
+| 1990s (end) | 10.4% | 24.2% | 0.4:1 (1:2.3 conc/abs) |
+| **Rise** (1600s→1750s) | 1.4x | 1.2x decline | 1.7x |
+| **Fall** (1750s→1990s) | 2.5x decline | 3.1x increase | 7.8x decline |
+| **Net** (1600s→1990s) | 1.8x decline | 2.6x increase | 4.6x decline |
+
+R² abstract = 0.820, R² concrete = 0.900
+
+#### Poetry (n = 244,790)
+
+**Scores** (continuous weighted-mean concreteness, inverted so abstractness is up):
+- 1610s: -0.0418 → 1690s: 0.1606 → 1980s: -0.4291
+- Rise: +0.60 SD | Fall: +1.74 SD
+- Breakpoint: 1700 | R² = 0.881
+- Rise slope: +0.0021/decade (p = 6.9e-12) ***
+- Fall slope: -0.0019/decade (p = 6.3e-52) ***
+
+**Word proportions** (abstract: z ≤ -1.0, concrete: z > 1.0):
+
+| Phase | Abstract | Concrete | Abs/Conc ratio |
+|---|---|---|---|
+| 1610s (start) | 10.3% | 12.4% | 0.8:1 (1:1.2 conc/abs) |
+| 1690s (peak) | 16.3% | 9.8% | 1.7:1 |
+| 1980s (end) | 7.7% | 31.3% | 0.2:1 (1:4.0 conc/abs) |
+| **Rise** (1610s→1690s) | 1.6x | 1.3x decline | 2.0x |
+| **Fall** (1690s→1980s) | 2.1x decline | 3.2x increase | 6.8x decline |
+| **Net** (1610s→1980s) | 1.3x decline | 2.5x increase | 3.4x decline |
+
+R² abstract = 0.794, R² concrete = 0.904
+
+#### Periodical (n = 157,561)
+
+**Scores** (continuous weighted-mean concreteness, inverted so abstractness is up):
+- 1640s: -0.1142 → 1840s: 0.1735 → 2000s: 0.0312
+- Rise: +0.82 SD | Fall: +0.41 SD
+- Breakpoint: 1830 | R² = 0.870
+- Rise slope: +0.0013/decade (p = 8.6e-06) ***
+- Fall slope: -0.0018/decade (p = 3.5e-11) ***
+
+**Word proportions** (abstract: z ≤ -1.0, concrete: z > 1.0):
+
+| Phase | Abstract | Concrete | Abs/Conc ratio |
+|---|---|---|---|
+| 1640s (start) | 11.8% | 19.4% | 0.6:1 (1:1.7 conc/abs) |
+| 1840s (peak) | 19.7% | 10.7% | 1.8:1 |
+| 2000s (end) | 16.4% | 16.0% | 1.0:1 |
+| **Rise** (1640s→1840s) | 1.7x | 1.8x decline | 3.0x |
+| **Fall** (1840s→2000s) | 1.2x decline | 1.5x increase | 1.8x decline |
+| **Net** (1640s→2000s) | 1.4x increase | 1.2x decline | 1.7x increase |
+
+R² abstract = 0.849, R² concrete = 0.787
+
+#### Prose summary
+
+**Fiction** (n = 161,148): Abstractness rises from the 1600s to a peak in the 1750s (+0.67 SD), then falls through the 1990s (+2.46 SD). At peak, fiction has 3.4:1 abstract-to-concrete words, up from 2.0:1 in the 1600s (1.7x). By the 1990s, the ratio inverts to 0.4:1 (1:2.3 conc/abs) — a 7.8x decline from peak. Piecewise breakpoint at 1760; rise slope = +0.0013/decade (p = 7.5e-11), fall slope = -0.0029/decade (p = 3.6e-83); R² = 0.882.
+
+**Poetry** (n = 244,790): Abstractness rises from the 1610s to a peak in the 1690s (+0.60 SD), then falls through the 1980s (+1.74 SD). At peak, poetry has 1.7:1 abstract-to-concrete words, up from 0.8:1 (1:1.2 conc/abs) in the 1610s. By the 1980s, the ratio inverts to 0.2:1 (1:4.0 conc/abs) — a 6.8x decline from peak. Piecewise breakpoint at 1700; rise slope = +0.0021/decade (p = 6.9e-12), fall slope = -0.0019/decade (p = 6.3e-52); R² = 0.881.
+
+**Periodical** (n = 157,561): Abstractness rises from the 1640s to a peak in the 1840s (+0.82 SD), then falls through the 2000s (+0.41 SD). At peak, periodical has 1.8:1 abstract-to-concrete words, up from 0.6:1 (1:1.7 conc/abs) in the 1640s. By the 2000s it falls to 1.0:1. Piecewise breakpoint at 1830; rise slope = +0.0013/decade (p = 8.6e-06), fall slope = -0.0018/decade (p = 3.5e-11); R² = 0.870.
+
+*(Scores: continuous weighted-mean concreteness, inverted. Proportions: frequency-weighted, abstract z ≤ -1.0, concrete z > 1.0. All regressions include corpus fixed effects.)*
+
+<details>
+<summary>Robustness: raw vs modernized spelling comparison</summary>
+
+Spelling modernization (mapping historical forms like "vertue" to "virtue" via MorphAdorner) has minimal effect on the overall findings. Breakpoints, peak decades, and R² values are stable across both approaches. The main difference is in early-period baseline scores, where modernization slightly raises abstractness (more words match the norm vocabulary). Results below use raw spelling as the primary analysis.
+
+| | Fiction | Poetry | Periodical |
+|---|---|---|---|
+| Breakpoint (raw) | 1760 | 1700 | 1830 |
+| Breakpoint (mod) | 1760 | 1760 | 1830 |
+| R² scores (raw) | 0.882 | 0.881 | 0.870 |
+| R² scores (mod) | 0.884 | 0.887 | 0.871 |
+| Abs/Conc rise (raw) | 2.0→3.4 (1.7x) | 0.8→1.7 (2.0x) | 0.6→1.8 (3.0x) |
+| Abs/Conc rise (mod) | 2.3→3.3 (1.4x) | 1.3→1.7 (1.4x) | 0.6→1.8 (3.1x) |
+
+The only notable divergence is poetry's score-based breakpoint, which shifts from 1700 (raw) to 1760 (modernized). This occurs because modernization slightly flattens the early rise (+0.60 SD raw → +0.36 SD modernized), making the pre-break slope non-significant (p = 0.78). The count-based breakpoint remains at 1690 in both cases.
+
+Generated with `abstraction report-full --compare`.
+
+</details>
 
 ## What drove the shift?
 
@@ -154,8 +244,10 @@ data/
         sources/           # raw downloaded norm files
         data.allnorms.pkl  # cached combined norms DataFrame
     models/                # trained Word2Vec models by corpus/period/run
-    counts/v2/             # per-corpus JSONL bin counts
-    scores/v8/             # per-corpus CSVs of text-level norm scores
+    counts/v2-raw/         # per-corpus JSONL bin counts (raw spelling, default)
+    counts/v2/             # per-corpus JSONL bin counts (modernized spelling)
+    scores/v8-raw/         # per-corpus CSVs of text-level norm scores (raw spelling, default)
+    scores/v8/             # per-corpus CSVs of text-level norm scores (modernized spelling)
     psgs/                  # generated passage markdown files
     stash/                 # LLM response cache
     figures/               # saved plots
@@ -184,18 +276,22 @@ data/
 
 ```bash
 # Score all corpora with freqs/ directories
-abstraction score-corpora [--force]
+abstraction score-corpora [--force] [--modernize]
 
 # Score a single corpus
-abstraction score-corpus canon_fiction [--force]
+abstraction score-corpus canon_fiction [--force] [--modernize]
 
 # Count abstract/concrete words per corpus
-abstraction count-corpora [--norms Median] [--force]
-abstraction count-corpus canon_fiction [--force]
+abstraction count-corpora [--norms Median] [--force] [--modernize]
+abstraction count-corpus canon_fiction [--force] [--modernize]
 
 # Report arc statistics
-abstraction report-arc
-abstraction report-arc-counts [--abs-cutoff -1.0] [--conc-cutoff 1.0]
+abstraction report-arc [--modernize]
+abstraction report-arc-counts [--abs-cutoff -1.0] [--conc-cutoff 1.0] [--modernize]
+
+# Combined report (scores + counts + prose)
+abstraction report-full [-o report.md] [--csv results.csv] [--modernize]
+abstraction report-full --compare [-o comparison.md]   # raw vs modernized side-by-side
 ```
 
 ## Notebooks
