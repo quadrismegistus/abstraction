@@ -361,7 +361,7 @@ _YLABEL_CONC = "<< More abstract | More concrete >>"#\n(corpus-adjusted)"
 _YLABEL_ABS = "<< More concrete | More abstract >>"#\n(corpus-adjusted)"
 
 
-def arc_caption(combined_df, genres=None):
+def arc_caption(combined_df, genres=None, wrap_by=160):
     """Generate a caption string summarizing texts per genre and corpus.
 
     Parameters
@@ -370,12 +370,16 @@ def arc_caption(combined_df, genres=None):
         Combined scored DataFrame with genre_harmonized and corpus_name columns.
     genres : list, optional
         Genres to include. If None, uses all genres present.
+    wrap_by : int, optional
+        Line width for text wrapping. Default 160.
 
     Returns
     -------
     str
-        Caption like "Fiction (45,231 texts: Hathi Englit 30,102, Chadwyck 5,012, ...); ..."
+        Caption like "- Fiction: 45,231 texts = Hathi Englit (30,102) + Chadwyck (5,012) + ..."
     """
+    import textwrap
+
     df = combined_df
     if genres is not None:
         df = df[df["genre_harmonized"].isin(genres)]
@@ -384,11 +388,17 @@ def arc_caption(combined_df, genres=None):
     for genre in sorted(df["genre_harmonized"].dropna().unique()):
         gdf = df[df["genre_harmonized"] == genre]
         corpus_counts = gdf["corpus_name"].value_counts()
-        corpus_str = ", ".join(
-            f'{name.replace("_", " ").title()} {count:,}' for name, count in corpus_counts.items()
+        corpus_str = " + ".join(
+            f"{name.replace('_', ' ').title()} ({count:,})" for name, count in corpus_counts.items()
         )
-        parts.append(f"{genre} ({len(gdf):,} texts: {corpus_str})")
-    return "; ".join(parts)
+        opart = f"- {genre}: {len(gdf):,} texts = {corpus_str}"
+        parts.append(opart)
+
+    def _wrap(part):
+        return textwrap.fill(part, width=wrap_by, break_long_words=False, break_on_hyphens=False)
+
+    out = "\n\n".join(_wrap(part).replace("\n", "\n        ") for part in parts)
+    return out
 
 
 def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
