@@ -196,8 +196,26 @@ def save_passage_html(txt, path, col="Abs-Conc.Median.median", title="", **kwarg
 
 
 def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
-                       width=800, **kwargs):
+                       width=800, dpi=300, **kwargs):
     """Save a styled passage as a PNG image.
+
+    Parameters
+    ----------
+    txt : str
+        The passage text.
+    path : str
+        Output file path (.png or .pdf).
+    col : str
+        Norm column to use for scoring.
+    title : str
+        Optional title/header above the passage.
+    width : int
+        Layout width in CSS pixels.
+    dpi : int
+        Output resolution. 300 = print quality (3x scale factor).
+        Default 300.
+    **kwargs
+        Passed to render_passage_html.
 
     Requires either playwright or wkhtmltoimage to be installed.
     Tries playwright first, falls back to wkhtmltoimage.
@@ -208,12 +226,17 @@ def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
     if ext not in (".png", ".pdf"):
         raise ValueError(f"Unsupported format {ext}; use .png or .pdf")
 
+    scale = max(1, round(dpi / 96))  # 96 CSS px per inch baseline
+
     # Try playwright (headless Chromium)
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch()
-            page = browser.new_page(viewport={"width": width, "height": 100})
+            page = browser.new_page(
+                viewport={"width": width, "height": 100},
+                device_scale_factor=scale,
+            )
             page.set_content(html)
             page.wait_for_load_state("networkidle")
             # Auto-height: measure content
@@ -321,3 +344,46 @@ def display_comparison(passages, **kwargs):
     from IPython.display import HTML, display
     html = render_comparison_html(passages, **kwargs)
     display(HTML(html))
+
+
+def save_comparison_image(passages, path, width=900, dpi=300, **kwargs):
+    """Save a side-by-side passage comparison as a PNG or PDF.
+
+    Parameters
+    ----------
+    passages : list of dict
+        Each dict has 'text' and optionally 'title'.
+    path : str
+        Output file path (.png or .pdf).
+    width : int
+        Layout width in CSS pixels.
+    dpi : int
+        Output resolution. Default 300 (print quality).
+    **kwargs
+        Passed to render_comparison_html.
+    """
+    html = render_comparison_html(passages, **kwargs)
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".png", ".pdf"):
+        raise ValueError(f"Unsupported format {ext}; use .png or .pdf")
+
+    scale = max(1, round(dpi / 96))
+
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(
+            viewport={"width": width, "height": 100},
+            device_scale_factor=scale,
+        )
+        page.set_content(html)
+        page.wait_for_load_state("networkidle")
+        height = page.evaluate("document.body.scrollHeight")
+        page.set_viewport_size({"width": width, "height": height + 40})
+        if ext == ".pdf":
+            page.pdf(path=path, width=f"{width}px")
+        else:
+            page.screenshot(path=path, full_page=True)
+        browser.close()
+    return path

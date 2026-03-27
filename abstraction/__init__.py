@@ -22,6 +22,6 @@ from .analysis import (
 )
 from .passages import (
     render_passage_html, display_passage, save_passage_html, save_passage_image,
-    render_comparison_html, display_comparison,
+    render_comparison_html, display_comparison, save_comparison_image,
 )
 from .utils import read_df, save_df, get_avgs_df
