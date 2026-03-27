@@ -76,9 +76,14 @@ def cmd_count_corpus(args):
 
 
 def cmd_report_arc_counts(args):
-    from .analysis import report_arc_counts
+    from .analysis import report_arc_counts, load_all_counts
     genres = args.genres.split(",") if args.genres else None
+    version = "v2" if args.modernize else "v2-raw"
+    combined_df = load_all_counts(version=version, norm=args.norm,
+                                  abs_cutoff=args.abs_cutoff,
+                                  conc_cutoff=args.conc_cutoff)
     df = report_arc_counts(
+        combined_df=combined_df,
         genres=genres,
         norm=args.norm,
         abs_cutoff=args.abs_cutoff,
@@ -93,9 +98,12 @@ def cmd_report_arc_counts(args):
 
 
 def cmd_report_arc(args):
-    from .analysis import report_arc
+    from .analysis import report_arc, load_all_scored
     genres = args.genres.split(",") if args.genres else None
+    version = "v8" if args.modernize else "v8-raw"
+    combined_df = load_all_scored(version=version)
     df = report_arc(
+        combined_df=combined_df,
         genres=genres,
         min_year=args.min_year,
         max_year=args.max_year,
@@ -148,6 +156,7 @@ def main():
     p.add_argument("--min-year", type=int, default=1600)
     p.add_argument("--max-year", type=int, default=2020)
     p.add_argument("--csv", default=None, help="Save results to CSV")
+    p.add_argument("--modernize", action="store_true", help="Use spelling-modernized scores (v8 instead of v8-raw)")
 
     # report-arc-counts: piecewise arc report with count-based proportions
     p = sub.add_parser("report-arc-counts", help="Report arc statistics using word proportions")
@@ -158,6 +167,7 @@ def main():
     p.add_argument("--min-year", type=int, default=1600)
     p.add_argument("--max-year", type=int, default=2020)
     p.add_argument("--csv", default=None, help="Save results to CSV")
+    p.add_argument("--modernize", action="store_true", help="Use spelling-modernized counts (v2 instead of v2-raw)")
 
     args = parser.parse_args()
     if args.command == "score-corpora":
