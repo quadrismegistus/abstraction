@@ -32,15 +32,20 @@ def get_norm_dict(col="Abs-Conc.Median.median"):
 
 
 def _modernize_score(word, norm_dict, spelling_d):
-    """Look up word in norms; if not found, try modernized spelling.
+    """Look up word in norms, preferring modernized spelling when available.
+
+    If the word has a modern form in the spelling dict AND that form is in
+    the norms, uses the modern form's score. This ensures historical variants
+    like "vertue" get "virtue"'s score rather than a truncated vecnorm median.
+    Falls back to the raw word's score if no modernization applies.
 
     Returns (score, matched_word) or (None, None) if no match.
     """
-    if word in norm_dict:
-        return norm_dict[word], word
     modern = spelling_d.get(word)
     if modern is not None and modern in norm_dict:
         return norm_dict[modern], modern
+    if word in norm_dict:
+        return norm_dict[word], word
     return None, None
 
 
@@ -220,14 +225,14 @@ def _walk_freqs(freqs_dir):
 
 
 def _modernize_word_list(words_lower, norm_index, spelling_d):
-    """For each word not in norm_index, try modernized spelling."""
+    """Modernize words, preferring modern form when available in norms."""
     result = []
     for w in words_lower:
-        if w in norm_index:
-            result.append(w)
+        modern = spelling_d.get(w)
+        if modern is not None and modern in norm_index:
+            result.append(modern)
         else:
-            modern = spelling_d.get(w)
-            result.append(modern if modern is not None and modern in norm_index else w)
+            result.append(w)
     return result
 
 

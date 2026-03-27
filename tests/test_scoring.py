@@ -392,18 +392,28 @@ class TestScoreAllCorpora:
 
 
 class TestModernizeScore:
-    def test_direct_match_preferred(self):
+    def test_word_not_in_spelling_dict(self):
+        """Words not in the spelling dict use their own score."""
         norm_dict = {"virtue": -1.8, "rock": 1.5}
         spelling_d = {"vertue": "virtue"}
         score, word = _modernize_score("virtue", norm_dict, spelling_d)
         assert score == -1.8
         assert word == "virtue"
 
-    def test_modernized_fallback(self):
+    def test_modern_form_preferred(self):
+        """Historical spelling maps to modern form's score."""
         norm_dict = {"virtue": -1.8, "rock": 1.5}
         spelling_d = {"vertue": "virtue"}
         score, word = _modernize_score("vertue", norm_dict, spelling_d)
         assert score == -1.8
+        assert word == "virtue"
+
+    def test_modern_preferred_over_raw(self):
+        """When both old and modern are in norms, modern form wins."""
+        norm_dict = {"vertue": -0.72, "virtue": -1.59}
+        spelling_d = {"vertue": "virtue"}
+        score, word = _modernize_score("vertue", norm_dict, spelling_d)
+        assert score == -1.59
         assert word == "virtue"
 
     def test_no_match(self):
@@ -413,12 +423,13 @@ class TestModernizeScore:
         assert score is None
         assert word is None
 
-    def test_modernized_not_in_norms(self):
-        norm_dict = {"virtue": -1.8}
+    def test_modernized_not_in_norms_falls_back(self):
+        """If modern form not in norms, fall back to raw word."""
+        norm_dict = {"vertue": -0.72}
         spelling_d = {"vertue": "vertew"}  # maps to something not in norms
         score, word = _modernize_score("vertue", norm_dict, spelling_d)
-        assert score is None
-        assert word is None
+        assert score == -0.72
+        assert word == "vertue"
 
 
 class TestModernizeWordList:
@@ -482,10 +493,10 @@ class TestModernizeIntegration:
         scores = _score_freqs_allnorms(str(path), allnorms, spelling_d)
         assert abs(scores["Conc.Brys"] - 1.2) < 1e-6
 
-    def test_direct_match_not_modernized(self, monkeypatch):
-        """If word matches norms directly, modernizer should not override."""
-        fake_norms = {"rock": 1.5}
-        fake_spelling = {"rock": "stone"}  # bad mapping — shouldn't be used
+    def test_modern_form_preferred_over_raw(self, monkeypatch):
+        """When both raw and modern forms exist in norms, modern wins."""
+        fake_norms = {"vertue": -0.72, "virtue": -1.59}
+        fake_spelling = {"vertue": "virtue"}
         monkeypatch.setattr(
             "abstraction.scoring._NORM_DICTS",
             {"Abs-Conc.Median.median": fake_norms},
@@ -494,5 +505,5 @@ class TestModernizeIntegration:
             "abstraction.scoring.get_spelling_modernizer",
             lambda: fake_spelling,
         )
-        score = score_psg("rock")
-        assert abs(score - 1.5) < 1e-6
+        score = score_psg("vertue")
+        assert abs(score - (-1.59)) < 1e-6
