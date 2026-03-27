@@ -56,6 +56,40 @@ def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
     return None, "neither"
 
 
+def _render_body(txt, col="Abs-Conc.Median.median",
+                 abs_cutoff=-1.0, conc_cutoff=1.0):
+    """Render passage text to styled HTML fragment (no wrapper)."""
+    scores = get_norm_dict(col)
+    tokens = tokenize_agnostic(txt)
+
+    parts = []
+    for tok in tokens:
+        tok_lower = tok.lower()
+        escaped = html_mod.escape(tok)
+
+        if not tok or not tok[0].isalpha():
+            if tok == "\n":
+                parts.append(("<br/>", True))
+            else:
+                parts.append((escaped, True))
+            continue
+
+        z = scores.get(tok_lower, np.nan)
+        css, cls = _word_style(z, abs_cutoff, conc_cutoff)
+
+        if css:
+            parts.append((f'<span class="w {cls}" style="{css}">{escaped}</span>', False))
+        else:
+            parts.append((f'<span class="w {cls}">{escaped}</span>', False))
+
+    chunks = []
+    for i, (html_str, is_punct) in enumerate(parts):
+        if i > 0 and not is_punct:
+            chunks.append(" ")
+        chunks.append(html_str)
+    return "".join(chunks)
+
+
 def render_passage_html(txt, col="Abs-Conc.Median.median",
                         abs_cutoff=-1.0, conc_cutoff=1.0,
                         title="", show_legend=True, font_size=14,
@@ -88,38 +122,7 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
     str
         Complete HTML document string.
     """
-    scores = get_norm_dict(col)
-    tokens = tokenize_agnostic(txt)
-
-    # Build styled tokens: list of (html_str, is_punct) pairs
-    parts = []
-    for tok in tokens:
-        tok_lower = tok.lower()
-        escaped = html_mod.escape(tok)
-
-        # Punctuation / whitespace — pass through
-        if not tok or not tok[0].isalpha():
-            if tok == "\n":
-                parts.append(("<br/>", True))
-            else:
-                parts.append((escaped, True))
-            continue
-
-        z = scores.get(tok_lower, np.nan)
-        css, cls = _word_style(z, abs_cutoff, conc_cutoff)
-
-        if css:
-            parts.append((f'<span class="w {cls}" style="{css}">{escaped}</span>', False))
-        else:
-            parts.append((f'<span class="w {cls}">{escaped}</span>', False))
-
-    # Join with spaces, but no space before punctuation
-    chunks = []
-    for i, (html_str, is_punct) in enumerate(parts):
-        if i > 0 and not is_punct:
-            chunks.append(" ")
-        chunks.append(html_str)
-    body = "".join(chunks)
+    body = _render_body(txt, col=col, abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
 
     legend_html = ""
     if show_legend:
@@ -262,35 +265,11 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
     str
         HTML document with passages in a table row.
     """
-    scores = get_norm_dict(col)
-
     cells = []
     for psg in passages:
         txt = psg["text"]
         title = psg.get("title", "")
-        tokens = tokenize_agnostic(txt)
-
-        parts = []
-        for tok in tokens:
-            tok_lower = tok.lower()
-            escaped = html_mod.escape(tok)
-            if not tok or not tok[0].isalpha():
-                parts.append(("<br/>" if tok == "\n" else escaped, True))
-                continue
-            z = scores.get(tok_lower, np.nan)
-            css, cls = _word_style(z, abs_cutoff, conc_cutoff)
-            if css:
-                parts.append((f'<span class="w {cls}" style="{css}">{escaped}</span>', False))
-            else:
-                parts.append((f'<span class="w {cls}">{escaped}</span>', False))
-
-        chunks = []
-        for i, (html_str, is_punct) in enumerate(parts):
-            if i > 0 and not is_punct:
-                chunks.append(" ")
-            chunks.append(html_str)
-        body = "".join(chunks)
-
+        body = _render_body(txt, col=col, abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
         title_html = f"<h4>{title}</h4>" if title else ""
         cells.append(f"<td>{title_html}<div class='passage'>{body}</div></td>")
 
