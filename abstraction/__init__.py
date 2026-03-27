@@ -20,4 +20,8 @@ from .analysis import (
     fit_arc, fit_arc_corpus, fit_arc_all_corpora,
     fit_arc_by_genre, fit_arc_all_by_genre, harmonize_genre, summarize_arc,
 )
+from .passages import (
+    render_passage_html, display_passage, save_passage_html, save_passage_image,
+    render_comparison_html, display_comparison,
+)
 from .utils import read_df, save_df, get_avgs_df
