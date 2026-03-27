@@ -177,7 +177,7 @@ def gen_bookpassages(corpus_name, text_id, sources=None, periods=None, save=Fals
     path = corpus.text_path(text_id)
     ld = count_absconc_path(
         path, sources=sources, periods=periods,
-        incl_psg=True, modernize=True,
+        incl_psg=True, modernize=False,
     )
     df = pd.DataFrame(ld)
     if len(df):
@@ -278,7 +278,7 @@ def _load_done_ids(csv_path):
 
 
 def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
-                       modernize=True):
+                       modernize=False):
     """Score all freqs/*.json files in a corpus directory against all norms.
 
     If output_path is provided, appends rows to a CSV incrementally and
@@ -361,7 +361,7 @@ def score_all_corpora(
     corpora_dir=PATH_CORPORA,
     output_dir=SCORES_DIR,
     force=False,
-    modernize=True,
+    modernize=False,
 ):
     """Score all corpora that have freqs/ folders.
 
@@ -543,7 +543,7 @@ def _load_done_jsonl(jsonl_path):
 
 
 def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
-                       bin_edges=None, norm_filter=None, modernize=True):
+                       bin_edges=None, norm_filter=None, modernize=False):
     """Count z-score distributions for all freqs/*.json in a corpus.
 
     Outputs one JSONL line per text:
@@ -651,7 +651,7 @@ def count_all_corpora(
     force=False,
     norm_filter=None,
     bin_edges=None,
-    modernize=True,
+    modernize=False,
 ):
     """Count z-score distributions for all corpora with freqs/ folders.
 

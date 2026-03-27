@@ -83,7 +83,7 @@ class TestScoreCorpus:
         )
         main()
 
-        csv_path = os.path.join(scores_dir, "v8", "test_corpus.csv")
+        csv_path = os.path.join(scores_dir, "v8-raw", "test_corpus.csv")
         assert os.path.exists(csv_path)
         df = pd.read_csv(csv_path)
         assert len(df) >= 1
@@ -109,7 +109,7 @@ class TestScoreCorpus:
         )
         main()
 
-        csv_path = os.path.join(scores_dir, "v8", "test_corpus.csv")
+        csv_path = os.path.join(scores_dir, "v8-raw", "test_corpus.csv")
         assert os.path.exists(csv_path)
         mtime1 = os.path.getmtime(csv_path)
         row_count1 = len(pd.read_csv(csv_path))
@@ -144,9 +144,9 @@ class TestScoreCorpora:
         from abstraction.scoring import score_all_corpora as real_fn
         calls = []
 
-        def mock_score_all(force=False):
+        def mock_score_all(force=False, modernize=False):
             calls.append(force)
-            return real_fn(corpora_dir=corpora_dir, output_dir=scores_dir, force=force)
+            return real_fn(corpora_dir=corpora_dir, output_dir=scores_dir, force=force, modernize=modernize)
 
         monkeypatch.setattr("abstraction.scoring.score_all_corpora", mock_score_all)
 
@@ -154,6 +154,6 @@ class TestScoreCorpora:
         main()
 
         assert len(calls) == 1
-        assert os.path.exists(os.path.join(scores_dir, "v8", "corpus_a.csv"))
-        assert os.path.exists(os.path.join(scores_dir, "v8", "corpus_b.csv"))
-        assert not os.path.exists(os.path.join(scores_dir, "v8", "corpus_c.csv"))
+        assert os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_a.csv"))
+        assert os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_b.csv"))
+        assert not os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_c.csv"))
