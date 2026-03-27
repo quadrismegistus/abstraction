@@ -94,7 +94,7 @@ def _render_body(txt, col="Abs-Conc.Median.median",
 
 def render_passage_html(txt, col="Abs-Conc.Median.median",
                         abs_cutoff=-1.0, conc_cutoff=1.0,
-                        title="", show_legend=True, font_size=14,
+                        title="", show_title=True, show_legend=True, font_size=14,
                         line_height=2.2, max_width=700):
     """Render a passage as an HTML string with per-word styling.
 
@@ -136,7 +136,7 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
         </div>"""
 
     title_html = ""
-    if title:
+    if title and show_title:
         title_html = f'<h3 style="margin:0 0 8px 0; font-family:serif;">{html_mod.escape(title)}</h3>'
 
     html = f"""<!DOCTYPE html>
@@ -272,6 +272,7 @@ def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
 
 def render_comparison_html(passages, col="Abs-Conc.Median.median",
                            abs_cutoff=-1.0, conc_cutoff=1.0,
+                           show_legend=True, show_titles=True,
                            font_size=13, line_height=2.2, col_width=380):
     """Render multiple passages side-by-side for comparison.
 
@@ -282,6 +283,10 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
         Example: [{"text": "...", "title": "Austen, *Emma* (1815)"}]
     col : str
         Norm column.
+    show_legend : bool
+        Whether to show the abstract/concrete legend. Default True.
+    show_titles : bool
+        Whether to show per-passage titles. Default True.
     col_width : int
         Width of each passage column in pixels.
 
@@ -295,10 +300,18 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
         txt = psg["text"]
         title = psg.get("title", "")
         body = _render_body(txt, col=col, abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
-        title_html = f"<h4>{title}</h4>" if title else ""
+        title_html = f"<h4>{title}</h4>" if (title and show_titles) else ""
         cells.append(f"<td>{title_html}<div class='passage'>{body}</div></td>")
 
     table = "<table><tr>" + "".join(cells) + "</tr></table>"
+
+    legend_html = ""
+    if show_legend:
+        legend_html = f"""<div class="legend">
+    <span style="border:2px solid #555; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
+    <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:1px 4px; border-radius:2px;">concrete</span>&ensp;
+    <span style="color:#888;">plain = unscored / neither</span>
+</div>"""
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -322,17 +335,14 @@ td {{
 td:last-child {{ border-right: none; }}
 h4 {{ margin: 0 0 8px 0; font-family: serif; }}
 .abstract {{ display: inline-block; margin: 1px 0; }}
+.concrete {{ display: inline-block; margin: 1px 0; }}
 .legend {{
     margin-bottom: 12px; font-size: {font_size - 2}px; color: #555;
 }}
 </style>
 </head>
 <body>
-<div class="legend">
-    <span style="border:2px solid #555; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
-    <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:0 3px; border-radius:2px;">concrete</span>&ensp;
-    <span style="color:#888;">plain = unscored / neither</span>
-</div>
+{legend_html}
 {table}
 </body>
 </html>"""
