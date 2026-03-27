@@ -8,6 +8,9 @@ import pytest
 from abstraction.scoring import (
     score_freqs,
     score_words,
+    score_psg,
+    _modernize_score,
+    _modernize_word_list,
     _walk_freqs,
     _score_freqs_allnorms,
     _get_csv_columns,
@@ -381,3 +384,115 @@ class TestScoreAllCorpora:
         # only one of the two should be scored (first in sorted order)
         scored_names = [n for n, df in results.items() if len(df) > 0]
         assert len(scored_names) == 1
+
+
+# ---------------------------------------------------------------------------
+# Spelling modernization
+# ---------------------------------------------------------------------------
+
+
+class TestModernizeScore:
+    def test_direct_match_preferred(self):
+        norm_dict = {"virtue": -1.8, "rock": 1.5}
+        spelling_d = {"vertue": "virtue"}
+        score, word = _modernize_score("virtue", norm_dict, spelling_d)
+        assert score == -1.8
+        assert word == "virtue"
+
+    def test_modernized_fallback(self):
+        norm_dict = {"virtue": -1.8, "rock": 1.5}
+        spelling_d = {"vertue": "virtue"}
+        score, word = _modernize_score("vertue", norm_dict, spelling_d)
+        assert score == -1.8
+        assert word == "virtue"
+
+    def test_no_match(self):
+        norm_dict = {"virtue": -1.8}
+        spelling_d = {"vertue": "virtue"}
+        score, word = _modernize_score("xyzzy", norm_dict, spelling_d)
+        assert score is None
+        assert word is None
+
+    def test_modernized_not_in_norms(self):
+        norm_dict = {"virtue": -1.8}
+        spelling_d = {"vertue": "vertew"}  # maps to something not in norms
+        score, word = _modernize_score("vertue", norm_dict, spelling_d)
+        assert score is None
+        assert word is None
+
+
+class TestModernizeWordList:
+    def test_mixed(self):
+        norm_index = {"virtue", "rock", "face"}
+        spelling_d = {"vertue": "virtue", "rocke": "rock"}
+        words = ["vertue", "rock", "xyzzy"]
+        result = _modernize_word_list(words, norm_index, spelling_d)
+        assert result == ["virtue", "rock", "xyzzy"]
+
+    def test_no_modernization_needed(self):
+        norm_index = {"virtue", "rock"}
+        spelling_d = {"vertue": "virtue"}
+        words = ["virtue", "rock"]
+        result = _modernize_word_list(words, norm_index, spelling_d)
+        assert result == ["virtue", "rock"]
+
+
+class TestModernizeIntegration:
+    """Test that scoring functions use modernization end-to-end."""
+
+    def _patch(self, monkeypatch):
+        fake_norms = {"virtue": -1.8, "rock": 1.5}
+        fake_spelling = {"vertue": "virtue", "rocke": "rock"}
+        monkeypatch.setattr(
+            "abstraction.scoring._NORM_DICTS",
+            {"Abs-Conc.Median.median": fake_norms},
+        )
+        monkeypatch.setattr(
+            "abstraction.scoring.get_spelling_modernizer",
+            lambda: fake_spelling,
+        )
+        return fake_norms
+
+    def test_score_psg_modernizes(self, monkeypatch):
+        self._patch(monkeypatch)
+        score = score_psg("vertue and rocke")
+        expected = (-1.8 + 1.5) / 2
+        assert abs(score - expected) < 1e-6
+
+    def test_score_freqs_modernizes(self, monkeypatch):
+        self._patch(monkeypatch)
+        score = score_freqs({"vertue": 1, "rocke": 1})
+        expected = (-1.8 + 1.5) / 2
+        assert abs(score - expected) < 1e-6
+
+    def test_score_words_modernizes(self, monkeypatch):
+        self._patch(monkeypatch)
+        df = score_words("vertue and rocke")
+        vertue_row = df[df["word"] == "vertue"].iloc[0]
+        assert vertue_row["score"] == -1.8
+        assert vertue_row["is_abstract"] == True
+
+    def test_score_freqs_allnorms_modernizes(self, tmp_path, monkeypatch):
+        allnorms = pd.DataFrame(
+            {"Conc.Brys": {"virtue": 1.2, "rock": 4.5}}
+        )
+        spelling_d = {"vertue": "virtue"}
+        path = tmp_path / "t.json"
+        _write_json(str(path), {"vertue": 3})
+        scores = _score_freqs_allnorms(str(path), allnorms, spelling_d)
+        assert abs(scores["Conc.Brys"] - 1.2) < 1e-6
+
+    def test_direct_match_not_modernized(self, monkeypatch):
+        """If word matches norms directly, modernizer should not override."""
+        fake_norms = {"rock": 1.5}
+        fake_spelling = {"rock": "stone"}  # bad mapping — shouldn't be used
+        monkeypatch.setattr(
+            "abstraction.scoring._NORM_DICTS",
+            {"Abs-Conc.Median.median": fake_norms},
+        )
+        monkeypatch.setattr(
+            "abstraction.scoring.get_spelling_modernizer",
+            lambda: fake_spelling,
+        )
+        score = score_psg("rock")
+        assert abs(score - 1.5) < 1e-6

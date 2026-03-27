@@ -13,7 +13,7 @@ from tqdm import tqdm
 from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA
 from .corpus import load_corpus
 from .norms import get_allnorms
-from .tokenize import tokenize_agnostic
+from .tokenize import tokenize_agnostic, get_spelling_modernizer
 from .counting import count_absconc, count_absconc_path
 from .utils import read_df, save_df
 
@@ -31,11 +31,30 @@ def get_norm_dict(col="Abs-Conc.Median.median"):
     return _NORM_DICTS[col]
 
 
+def _modernize_score(word, norm_dict, spelling_d):
+    """Look up word in norms; if not found, try modernized spelling.
+
+    Returns (score, matched_word) or (None, None) if no match.
+    """
+    if word in norm_dict:
+        return norm_dict[word], word
+    modern = spelling_d.get(word)
+    if modern is not None and modern in norm_dict:
+        return norm_dict[modern], modern
+    return None, None
+
+
 def score_psg(txt, col="Abs-Conc.Median.median"):
     """Score a passage's mean concreteness (negative = abstract, positive = concrete)."""
     scores = get_norm_dict(col)
-    toks = [x for x in tokenize_agnostic(txt.lower()) if x in scores]
-    return sum(scores[x] for x in toks) / len(toks) if toks else np.nan
+    spelling_d = get_spelling_modernizer()
+    total, n = 0.0, 0
+    for tok in tokenize_agnostic(txt.lower()):
+        s, _ = _modernize_score(tok, scores, spelling_d)
+        if s is not None:
+            total += s
+            n += 1
+    return total / n if n else np.nan
 
 
 # ---------------------------------------------------------------------------
@@ -49,12 +68,14 @@ def score_freqs(freqs, col="Abs-Conc.Median.median"):
     that store pre-tokenized frequency files (JSON) rather than raw text.
     """
     scores = get_norm_dict(col)
+    spelling_d = get_spelling_modernizer()
     total_score = 0.0
     total_count = 0
     for word, count in freqs.items():
         word = word.lower()
-        if word in scores:
-            total_score += scores[word] * count
+        s, _ = _modernize_score(word, scores, spelling_d)
+        if s is not None:
+            total_score += s * count
             total_count += count
     return total_score / total_count if total_count else np.nan
 
@@ -74,18 +95,21 @@ def score_words(txt, col="Abs-Conc.Median.median"):
     """Tokenize a text and return a DataFrame with per-word concreteness scores.
 
     Each row is a token with its position, the raw token, and its z-score
-    (NaN if the word is not in the norm vocabulary). Useful for density plots
-    and color-coded passage rendering.
+    (NaN if the word is not in the norm vocabulary). Falls back to modernized
+    spelling for unmatched words. Useful for density plots and color-coded
+    passage rendering.
     """
     scores = get_norm_dict(col)
+    spelling_d = get_spelling_modernizer()
     tokens = tokenize_agnostic(txt.lower())
     rows = []
     for i, tok in enumerate(tokens):
         if tok and tok[0].isalpha():
+            s, _ = _modernize_score(tok, scores, spelling_d)
             rows.append({
                 "position": i,
                 "word": tok,
-                "score": scores.get(tok, np.nan),
+                "score": s if s is not None else np.nan,
             })
     df = pd.DataFrame(rows)
     if len(df):
@@ -195,7 +219,19 @@ def _walk_freqs(freqs_dir):
                 yield text_id, path
 
 
-def _score_freqs_allnorms(path, allnorms):
+def _modernize_word_list(words_lower, norm_index, spelling_d):
+    """For each word not in norm_index, try modernized spelling."""
+    result = []
+    for w in words_lower:
+        if w in norm_index:
+            result.append(w)
+        else:
+            modern = spelling_d.get(w)
+            result.append(modern if modern is not None and modern in norm_index else w)
+    return result
+
+
+def _score_freqs_allnorms(path, allnorms, spelling_d=None):
     """Score a single freqs JSON file against all norm columns at once.
 
     Returns a dict of {norm_col: weighted_mean_score} or empty dict on error.
@@ -210,6 +246,8 @@ def _score_freqs_allnorms(path, allnorms):
     words = list(freqs.keys())
     counts = np.array([freqs[w] for w in words])
     words_lower = [w.lower() for w in words]
+    if spelling_d:
+        words_lower = _modernize_word_list(words_lower, set(allnorms.index), spelling_d)
     matched = allnorms.reindex(words_lower)
     notna = matched.notna()
     weighted = matched.mul(counts, axis=0)
@@ -262,6 +300,7 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
         allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
     columns = _get_csv_columns(allnorms)
+    spelling_d = get_spelling_modernizer()
 
     # check what's already done
     done_ids = _load_done_ids(output_path) if output_path else set()
@@ -282,7 +321,7 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None):
         for text_id, path in _walk_freqs(freqs_dir):
             if text_id in done_ids:
                 continue
-            scores = _score_freqs_allnorms(path, allnorms)
+            scores = _score_freqs_allnorms(path, allnorms, spelling_d)
             if scores:
                 scores["id"] = text_id
                 rows.append(scores)
@@ -368,6 +407,7 @@ def score_all_corpora(
     # open one CSV writer per corpus
     import csv
     columns = _get_csv_columns(allnorms)
+    spelling_d = get_spelling_modernizer()
     writers = {}
     file_handles = {}
 
@@ -388,7 +428,7 @@ def score_all_corpora(
     try:
         for name, text_id, path in pbar:
             pbar.set_postfix_str(name, refresh=False)
-            scores = _score_freqs_allnorms(path, allnorms)
+            scores = _score_freqs_allnorms(path, allnorms, spelling_d)
             if scores:
                 scores["id"] = text_id
                 get_writer(name).writerow(scores)
@@ -418,7 +458,7 @@ def score_all_corpora(
 DEFAULT_BIN_EDGES = np.round(np.arange(-3.0, 3.05, 0.1), 1)
 
 
-def _count_freqs_allnorms(path, allnorms, bin_edges):
+def _count_freqs_allnorms(path, allnorms, bin_edges, spelling_d=None):
     """Compute frequency-weighted z-score histograms for a single freqs JSON.
 
     For each norm column, bins words by z-score weighted by word frequency.
@@ -438,6 +478,8 @@ def _count_freqs_allnorms(path, allnorms, bin_edges):
     words = list(freqs.keys())
     counts = np.array([freqs[w] for w in words])
     words_lower = [w.lower() for w in words]
+    if spelling_d:
+        words_lower = _modernize_word_list(words_lower, set(allnorms.index), spelling_d)
     matched = allnorms.reindex(words_lower)
 
     result = {}
@@ -522,6 +564,7 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     bin_edges = np.asarray(bin_edges)
 
     requested_norms = set(allnorms.columns)
+    spelling_d = get_spelling_modernizer()
 
     # Load existing records and check which texts need (re-)processing
     existing, all_records = _load_done_jsonl(output_path) if output_path else ({}, [])
@@ -544,7 +587,7 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
         for text_id, path in _walk_freqs(freqs_dir):
             if text_id in done_ids:
                 continue
-            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
+            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges, spelling_d)
             if not cdfs:
                 continue
 
@@ -637,6 +680,7 @@ def count_all_corpora(
         corpora.append((name, corpus_dir))
 
     requested_norms = set(allnorms.columns)
+    spelling_d = get_spelling_modernizer()
 
     # collect files to process, skipping done IDs
     all_files = []
@@ -678,7 +722,7 @@ def count_all_corpora(
     try:
         for name, text_id, path in pbar:
             pbar.set_postfix_str(name, refresh=False)
-            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges)
+            cdfs = _count_freqs_allnorms(path, allnorms, bin_edges, spelling_d)
             if not cdfs:
                 continue
 

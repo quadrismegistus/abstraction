@@ -13,8 +13,8 @@ import textwrap
 
 import numpy as np
 
-from .scoring import score_words, get_norm_dict
-from .tokenize import tokenize_agnostic
+from .scoring import score_words, get_norm_dict, _modernize_score
+from .tokenize import tokenize_agnostic, get_spelling_modernizer
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +60,7 @@ def _render_body(txt, col="Abs-Conc.Median.median",
                  abs_cutoff=-1.0, conc_cutoff=1.0):
     """Render passage text to styled HTML fragment (no wrapper)."""
     scores = get_norm_dict(col)
+    spelling_d = get_spelling_modernizer()
     tokens = tokenize_agnostic(txt)
 
     parts = []
@@ -74,7 +75,8 @@ def _render_body(txt, col="Abs-Conc.Median.median",
                 parts.append((escaped, True))
             continue
 
-        z = scores.get(tok_lower, np.nan)
+        s, _ = _modernize_score(tok_lower, scores, spelling_d)
+        z = s if s is not None else np.nan
         css, cls = _word_style(z, abs_cutoff, conc_cutoff)
 
         if css:
