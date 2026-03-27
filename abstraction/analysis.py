@@ -1716,3 +1716,258 @@ def report_arc_counts(combined_df=None, genres=None,
               f"proportions are frequency-weighted.)")
 
     return df
+
+
+# ---------------------------------------------------------------------------
+# Combined report: scores + counts in one view
+# ---------------------------------------------------------------------------
+
+def report_full(scores_df=None, counts_df=None, genres=None,
+                score_col="Abs-Conc.Median.median",
+                norm="Abs-Conc.Median.median",
+                abs_cutoff=-1.0, conc_cutoff=1.0,
+                corpus_col="corpus_name",
+                min_year=1600, max_year=2020,
+                agg_bin=10, min_texts_per_bin=3,
+                search_range=(1650, 1850), search_step=10,
+                scores_version="v8-raw", counts_version="v2-raw"):
+    """Generate a combined report from score-based and count-based analyses.
+
+    Returns (markdown_string, summary_df) where markdown_string contains
+    both a table and prose suitable for inclusion in a README.
+
+    Parameters
+    ----------
+    scores_df : DataFrame, optional
+        Pre-loaded from load_all_scored(). Loaded automatically if None.
+    counts_df : DataFrame, optional
+        Pre-loaded from load_all_counts(). Loaded automatically if None.
+    genres : list, optional
+        Genres to report. Default: Fiction, Poetry, Periodical.
+    scores_version : str
+        Version directory for scores (default "v8-raw").
+    counts_version : str
+        Version directory for counts (default "v2-raw").
+    """
+    if genres is None:
+        genres = ["Fiction", "Poetry", "Periodical"]
+
+    # Load data if needed
+    if scores_df is None:
+        scores_df = load_all_scored(version=scores_version)
+    if counts_df is None:
+        counts_df = load_all_counts(version=counts_version, norm=norm,
+                                    abs_cutoff=abs_cutoff,
+                                    conc_cutoff=conc_cutoff)
+
+    fit_kw = dict(
+        corpus_col=corpus_col, min_year=min_year, max_year=max_year,
+        agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
+        search_range=search_range, search_step=search_step,
+    )
+
+    # Run both reports silently
+    score_result = report_arc(
+        combined_df=scores_df, genres=genres, score_col=score_col,
+        print_result=False, **fit_kw,
+    )
+    count_result = report_arc_counts(
+        combined_df=counts_df, genres=genres, norm=norm,
+        abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff,
+        print_result=False, **fit_kw,
+    )
+
+    def _p_stars(p):
+        if not np.isfinite(p):
+            return ""
+        if p < 0.001:
+            return "***"
+        if p < 0.01:
+            return "**"
+        if p < 0.05:
+            return "*"
+        return "n.s."
+
+    def _fmt_ratio(r):
+        if r < 1:
+            return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
+        return f"{r:.1f}:1"
+
+    def _safe_ratio(a, b):
+        return a / b if b > 0 else np.nan
+
+    lines = []
+
+    # --- Summary table ---
+    lines.append("### Summary (piecewise regression with corpus fixed effects)")
+    lines.append("")
+    lines.append("| Genre | Texts | Breakpoint | Rise slope | Fall slope | R² (scores) | R² (abstract %) | R² (concrete %) |")
+    lines.append("|---|---:|---:|---|---|---:|---:|---:|")
+
+    for _, sr in score_result.iterrows():
+        genre = sr["genre"]
+        cr = count_result[count_result["genre"] == genre]
+        cr = cr.iloc[0] if len(cr) else None
+
+        n = f"{int(sr['n_texts_total']):,}"
+        bp = int(sr["breakpoint"])
+        rise_p = _p_stars(sr["slope_before_p"])
+        fall_p = _p_stars(sr["slope_after_p"])
+        rise_slope = f"{sr['slope_before']:+.4f}/dec {rise_p}"
+        fall_slope = f"{sr['slope_after']:+.4f}/dec {fall_p}"
+        r2_scores = f"{sr['r2']:.3f}"
+        r2_abs = f"{cr['abstract_r2']:.3f}" if cr is not None else "—"
+        r2_conc = f"{cr['concrete_r2']:.3f}" if cr is not None else "—"
+
+        lines.append(f"| {genre} | {n} | {bp} | {rise_slope} | {fall_slope} | {r2_scores} | {r2_abs} | {r2_conc} |")
+
+    lines.append("")
+
+    # --- Per-genre detail ---
+    for _, sr in score_result.iterrows():
+        genre = sr["genre"]
+        cr = count_result[count_result["genre"] == genre]
+        cr = cr.iloc[0] if len(cr) else None
+        if cr is None:
+            continue
+
+        start_yr = int(sr["start_decade"])
+        peak_yr = int(sr["peak_decade"])
+        end_yr = int(sr["end_decade"])
+
+        # Count-based values at score-based key decades
+        a_s = cr["abstract_pct_start"]
+        a_p = cr["abstract_pct_peak"]
+        a_e = cr["abstract_pct_end"]
+        c_s = cr["conc_at_abs_start"]
+        c_p = cr["conc_at_abs_peak"]
+        c_e = cr["conc_at_abs_end"]
+        r_s = cr["abs_conc_ratio_start"]
+        r_p = cr["abs_conc_ratio_peak"]
+        r_e = cr["abs_conc_ratio_end"]
+
+        lines.append(f"#### {genre} (n = {int(sr['n_texts_total']):,})")
+        lines.append("")
+
+        # Scores summary
+        lines.append("**Scores** (continuous weighted-mean concreteness, inverted so abstractness is up):")
+        lines.append(f"- {start_yr}s: {sr['raw_start']:.4f} → {peak_yr}s: {sr['raw_peak']:.4f} → {end_yr}s: {sr['raw_end']:.4f}")
+        lines.append(f"- Rise: +{sr['rise_sd']:.2f} SD | Fall: +{sr['fall_sd']:.2f} SD")
+        lines.append(f"- Breakpoint: {int(sr['breakpoint'])} | R² = {sr['r2']:.3f}")
+        rise_p_str = _p_stars(sr["slope_before_p"])
+        fall_p_str = _p_stars(sr["slope_after_p"])
+        lines.append(f"- Rise slope: {sr['slope_before']:+.4f}/decade (p = {sr['slope_before_p']:.1e}) {rise_p_str}")
+        lines.append(f"- Fall slope: {sr['slope_after']:+.4f}/decade (p = {sr['slope_after_p']:.1e}) {fall_p_str}")
+        lines.append("")
+
+        # Counts table
+        lines.append(f"**Word proportions** (abstract: z ≤ {abs_cutoff}, concrete: z > {conc_cutoff}):")
+        lines.append("")
+        lines.append("| Phase | Abstract | Concrete | Abs/Conc ratio |")
+        lines.append("|---|---|---|---|")
+
+        lines.append(
+            f"| {start_yr}s (start) | {a_s:.1f}% | {c_s:.1f}% | {_fmt_ratio(r_s)} |"
+        )
+        lines.append(
+            f"| {peak_yr}s (peak) | {a_p:.1f}% | {c_p:.1f}% | {_fmt_ratio(r_p)} |"
+        )
+        lines.append(
+            f"| {end_yr}s (end) | {a_e:.1f}% | {c_e:.1f}% | {_fmt_ratio(r_e)} |"
+        )
+        lines.append(
+            f"| **Rise** ({start_yr}s→{peak_yr}s) "
+            f"| {_safe_ratio(a_p, a_s):.1f}x "
+            f"| {_safe_ratio(c_s, c_p):.1f}x decline "
+            f"| {_safe_ratio(r_p, r_s):.1f}x |"
+        )
+        lines.append(
+            f"| **Fall** ({peak_yr}s→{end_yr}s) "
+            f"| {_safe_ratio(a_p, a_e):.1f}x decline "
+            f"| {_safe_ratio(c_e, c_p):.1f}x increase "
+            f"| {_safe_ratio(r_p, r_e):.1f}x decline |"
+        )
+        lines.append(
+            f"| **Net** ({start_yr}s→{end_yr}s) "
+            f"| {_safe_ratio(max(a_s, a_e), min(a_s, a_e)):.1f}x {'decline' if a_e < a_s else 'increase'} "
+            f"| {_safe_ratio(max(c_s, c_e), min(c_s, c_e)):.1f}x {'increase' if c_e > c_s else 'decline'} "
+            f"| {_safe_ratio(max(r_s, r_e), min(r_s, r_e)):.1f}x {'decline' if r_e < r_s else 'increase'} |"
+        )
+
+        lines.append("")
+        lines.append(
+            f"R² abstract = {cr['abstract_r2']:.3f}, "
+            f"R² concrete = {cr['concrete_r2']:.3f}"
+        )
+        lines.append("")
+
+    # --- Prose ---
+    lines.append("### Prose summary")
+    lines.append("")
+
+    for _, sr in score_result.iterrows():
+        genre = sr["genre"]
+        cr = count_result[count_result["genre"] == genre]
+        cr = cr.iloc[0] if len(cr) else None
+        if cr is None:
+            continue
+
+        start_yr = int(sr["start_decade"])
+        peak_yr = int(sr["peak_decade"])
+        end_yr = int(sr["end_decade"])
+        a_s = cr["abstract_pct_start"]
+        a_p = cr["abstract_pct_peak"]
+        a_e = cr["abstract_pct_end"]
+        c_s = cr["conc_at_abs_start"]
+        c_p = cr["conc_at_abs_peak"]
+        c_e = cr["conc_at_abs_end"]
+        r_s = cr["abs_conc_ratio_start"]
+        r_p = cr["abs_conc_ratio_peak"]
+        r_e = cr["abs_conc_ratio_end"]
+
+        ratio_rise = _safe_ratio(r_p, r_s)
+        ratio_fall = _safe_ratio(r_p, r_e)
+
+        prose = (
+            f"**{genre}** (n = {int(sr['n_texts_total']):,}): "
+            f"Abstractness rises from the {start_yr}s to a peak in the {peak_yr}s "
+            f"(+{sr['rise_sd']:.2f} SD), "
+            f"then falls through the {end_yr}s (+{sr['fall_sd']:.2f} SD). "
+            f"At peak, {genre.lower()} has {_fmt_ratio(r_p)} abstract-to-concrete words, "
+        )
+        if r_s >= 1:
+            prose += f"up from {_fmt_ratio(r_s)} in the {start_yr}s ({ratio_rise:.1f}x). "
+        else:
+            prose += f"up from {_fmt_ratio(r_s)} in the {start_yr}s. "
+        if r_e < 1:
+            prose += (
+                f"By the {end_yr}s, the ratio inverts to {_fmt_ratio(r_e)} — "
+                f"a {ratio_fall:.1f}x decline from peak. "
+            )
+        else:
+            prose += f"By the {end_yr}s it falls to {_fmt_ratio(r_e)}. "
+        prose += (
+            f"Piecewise breakpoint at {int(sr['breakpoint'])}; "
+            f"rise slope = {sr['slope_before']:+.4f}/decade "
+            f"(p = {sr['slope_before_p']:.1e}), "
+            f"fall slope = {sr['slope_after']:+.4f}/decade "
+            f"(p = {sr['slope_after_p']:.1e}); "
+            f"R² = {sr['r2']:.3f}."
+        )
+        lines.append(prose)
+        lines.append("")
+
+    lines.append(
+        f"*(Scores: continuous weighted-mean concreteness, inverted. "
+        f"Proportions: frequency-weighted, abstract z ≤ {abs_cutoff}, "
+        f"concrete z > {conc_cutoff}. "
+        f"All regressions include corpus fixed effects.)*"
+    )
+
+    md = "\n".join(lines)
+
+    # Merge DataFrames
+    merged = score_result.merge(count_result, on="genre", how="outer",
+                                suffixes=("_score", "_count"))
+
+    return md, merged

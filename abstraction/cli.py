@@ -97,6 +97,30 @@ def cmd_report_arc_counts(args):
         print(f"\nSaved to {args.csv}")
 
 
+def cmd_report_full(args):
+    from .analysis import report_full
+    genres = args.genres.split(",") if args.genres else None
+    scores_version = "v8" if args.modernize else "v8-raw"
+    counts_version = "v2" if args.modernize else "v2-raw"
+    md, df = report_full(
+        genres=genres,
+        abs_cutoff=args.abs_cutoff,
+        conc_cutoff=args.conc_cutoff,
+        min_year=args.min_year,
+        max_year=args.max_year,
+        scores_version=scores_version,
+        counts_version=counts_version,
+    )
+    print(md)
+    if args.csv:
+        df.to_csv(args.csv, index=False)
+        print(f"\nSaved DataFrame to {args.csv}")
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(md + "\n")
+        print(f"\nSaved markdown to {args.output}")
+
+
 def cmd_report_arc(args):
     from .analysis import report_arc, load_all_scored
     genres = args.genres.split(",") if args.genres else None
@@ -150,6 +174,17 @@ def main():
     p.add_argument("--norms", default=None, help="Comma-separated norm columns to count (default: all)")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v2/ instead of v2-raw/)")
 
+    # report-full: combined score + count report
+    p = sub.add_parser("report-full", help="Combined report: scores + word proportions + prose")
+    p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
+    p.add_argument("--abs-cutoff", type=float, default=-1.0, help="Z-score cutoff for abstract words (default: -1.0)")
+    p.add_argument("--conc-cutoff", type=float, default=1.0, help="Z-score cutoff for concrete words (default: 1.0)")
+    p.add_argument("--min-year", type=int, default=1600)
+    p.add_argument("--max-year", type=int, default=2020)
+    p.add_argument("--csv", default=None, help="Save merged DataFrame to CSV")
+    p.add_argument("--output", "-o", default=None, help="Save markdown to file")
+    p.add_argument("--modernize", action="store_true", help="Use spelling-modernized data")
+
     # report-arc: piecewise arc report with ratios (score-based)
     p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
     p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
@@ -170,7 +205,9 @@ def main():
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized counts (v2 instead of v2-raw)")
 
     args = parser.parse_args()
-    if args.command == "score-corpora":
+    if args.command == "report-full":
+        cmd_report_full(args)
+    elif args.command == "score-corpora":
         cmd_score_corpora(args)
     elif args.command == "score-corpus":
         cmd_score_corpus(args)
