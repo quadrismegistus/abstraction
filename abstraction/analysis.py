@@ -265,7 +265,7 @@ def _merge_with_metadata(df, corpus_name, harmonize=True):
     return merged
 
 
-def load_scores(corpus_name, scores_dir=None, version="v7", harmonize=True):
+def load_scores(corpus_name, scores_dir=None, version="v8", harmonize=True):
     """Load scored texts for a corpus and merge with metadata.
 
     Returns a DataFrame with score columns plus metadata (year, genre, etc.).
@@ -980,7 +980,7 @@ def fit_arc_corpus(corpus_name, score_col="Abs-Conc.Median.median", **kw):
 
 def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
                         combined_df=None,
-                        scores_dir=None, version="v7",
+                        scores_dir=None, version="v8",
                         exclude=EXCLUDE_CORPORA, **kw):
     """Fit arc for all scored corpora. Returns a DataFrame of results.
 
@@ -1054,7 +1054,7 @@ def fit_arc_by_genre(df, score_col="Abs-Conc.Median.median",
 
 def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
                          combined_df=None,
-                         scores_dir=None, version="v7", min_texts=30,
+                         scores_dir=None, version="v8", min_texts=30,
                          corpus_fixed_effects=True,
                          exclude=EXCLUDE_CORPORA, **kw):
     """Load all scored corpora, harmonize genres, and fit arc per genre.
@@ -1084,7 +1084,7 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
                             min_texts=min_texts, **kw)
 
 
-def load_all_scored(scores_dir=None, version="v7", exclude=EXCLUDE_CORPORA):
+def load_all_scored(scores_dir=None, version="v8", exclude=EXCLUDE_CORPORA):
     """Load all scored corpora, harmonize genres, return a combined DataFrame.
 
     This is the data-loading step extracted from fit_arc_all_by_genre,
@@ -1401,7 +1401,7 @@ def pct_concrete(rec, norm="Abs-Conc.Median.median", cutoff=1.0):
     return concrete / total
 
 
-def load_counts(corpus_name, counts_dir=None, version="v1",
+def load_counts(corpus_name, counts_dir=None, version="v2",
                 norm="Abs-Conc.Median.median",
                 abs_cutoff=-1.0, conc_cutoff=1.0,
                 harmonize=True):
@@ -1440,7 +1440,7 @@ def load_counts(corpus_name, counts_dir=None, version="v1",
     return _merge_with_metadata(df, corpus_name, harmonize=harmonize)
 
 
-def load_all_counts(counts_dir=None, version="v1",
+def load_all_counts(counts_dir=None, version="v2",
                     norm="Abs-Conc.Median.median",
                     abs_cutoff=-1.0, conc_cutoff=1.0,
                     exclude=EXCLUDE_CORPORA):

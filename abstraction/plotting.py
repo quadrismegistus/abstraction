@@ -244,7 +244,7 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
                  color_by="major_genre", shape_by="major_genre",
                  label_by="canon_genre", jitter=False, smooth=True,
                  span=0.2, title="", highlights=None, standardize=False,
-                 save_to=None, width=22.5, height=17.5, version="v1"):
+                 save_to=None, width=22.5, height=17.5, version="v2"):
     """Plot abstraction trends across the history of fiction."""
     df = df.copy()
     if highlights is None:

@@ -154,8 +154,8 @@ data/
         sources/           # raw downloaded norm files
         data.allnorms.pkl  # cached combined norms DataFrame
     models/                # trained Word2Vec models by corpus/period/run
-    counts/v1/             # per-corpus JSONL bin counts
-    scores/v7/             # per-corpus CSVs of text-level norm scores
+    counts/v2/             # per-corpus JSONL bin counts
+    scores/v8/             # per-corpus CSVs of text-level norm scores
     psgs/                  # generated passage markdown files
     stash/                 # LLM response cache
     figures/               # saved plots

@@ -83,7 +83,7 @@ class TestScoreCorpus:
         )
         main()
 
-        csv_path = os.path.join(scores_dir, "v7", "test_corpus.csv")
+        csv_path = os.path.join(scores_dir, "v8", "test_corpus.csv")
         assert os.path.exists(csv_path)
         df = pd.read_csv(csv_path)
         assert len(df) >= 1
@@ -109,7 +109,7 @@ class TestScoreCorpus:
         )
         main()
 
-        csv_path = os.path.join(scores_dir, "v7", "test_corpus.csv")
+        csv_path = os.path.join(scores_dir, "v8", "test_corpus.csv")
         assert os.path.exists(csv_path)
         mtime1 = os.path.getmtime(csv_path)
         row_count1 = len(pd.read_csv(csv_path))
@@ -154,6 +154,6 @@ class TestScoreCorpora:
         main()
 
         assert len(calls) == 1
-        assert os.path.exists(os.path.join(scores_dir, "v7", "corpus_a.csv"))
-        assert os.path.exists(os.path.join(scores_dir, "v7", "corpus_b.csv"))
-        assert not os.path.exists(os.path.join(scores_dir, "v7", "corpus_c.csv"))
+        assert os.path.exists(os.path.join(scores_dir, "v8", "corpus_a.csv"))
+        assert os.path.exists(os.path.join(scores_dir, "v8", "corpus_b.csv"))
+        assert not os.path.exists(os.path.join(scores_dir, "v8", "corpus_c.csv"))

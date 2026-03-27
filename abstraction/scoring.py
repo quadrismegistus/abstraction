@@ -368,7 +368,7 @@ def score_all_corpora(
     -------
     dict of {corpus_name: DataFrame}
     """
-    output_dir = os.path.join(output_dir, "v7")
+    output_dir = os.path.join(output_dir, "v8")
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
@@ -653,7 +653,7 @@ def count_all_corpora(
     """
     if output_dir is None:
         output_dir = COUNT_DIR
-    output_dir = os.path.join(output_dir, "v1")
+    output_dir = os.path.join(output_dir, "v2")
     os.makedirs(output_dir, exist_ok=True)
 
     allnorms = get_allnorms()

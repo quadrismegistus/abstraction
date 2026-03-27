@@ -18,7 +18,7 @@ def cmd_score_corpus(args):
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    out_dir = os.path.join(SCORES_DIR, "v7")
+    out_dir = os.path.join(SCORES_DIR, "v8")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{args.corpus}.csv")
     if args.force and os.path.exists(out_path):
@@ -60,7 +60,7 @@ def cmd_count_corpus(args):
     if not os.path.isdir(corpus_dir):
         print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
         sys.exit(1)
-    out_dir = os.path.join(COUNT_DIR, "v1")
+    out_dir = os.path.join(COUNT_DIR, "v2")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"{args.corpus}.jsonl")
     if args.force and os.path.exists(out_path):

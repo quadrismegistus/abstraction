@@ -346,7 +346,7 @@ class TestScoreAllCorpora:
         assert "corpus_c" not in results
         assert len(results["corpus_a"]) == 1
         # CSVs were written under v7/
-        assert os.path.exists(os.path.join(out_dir, "v7", "corpus_a.csv"))
+        assert os.path.exists(os.path.join(out_dir, "v8", "corpus_a.csv"))
 
     def test_force_flag(self, tmp_path, monkeypatch):
         corpora_dir = self._setup_corpora_dir(tmp_path)
@@ -355,7 +355,7 @@ class TestScoreAllCorpora:
         out_dir = str(tmp_path / "scores")
         # first run
         score_all_corpora(corpora_dir=corpora_dir, output_dir=out_dir)
-        csv_path = os.path.join(out_dir, "v7", "corpus_a.csv")
+        csv_path = os.path.join(out_dir, "v8", "corpus_a.csv")
         mtime1 = os.path.getmtime(csv_path)
         # second run with force — should re-score
         import time; time.sleep(0.05)
