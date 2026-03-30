@@ -198,35 +198,57 @@ def save_passage_html(txt, path, col="Abs-Conc.Median.median", title="", **kwarg
     return path
 
 
-def _playwright_render(html, path, ext, width, scale):
-    """Render HTML to image/PDF via Playwright, handling Jupyter's asyncio loop."""
-    def _in_event_loop():
-        try:
-            loop = asyncio.get_running_loop()
-            return loop is not None
-        except RuntimeError:
-            return False
-
-    if _in_event_loop():
-        import nest_asyncio
-        nest_asyncio.apply()
-
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(
+async def _playwright_render_async(html, path, ext, width, scale):
+    """Render HTML to image/PDF via Playwright async API (for Jupyter)."""
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page(
             viewport={"width": width, "height": 100},
             device_scale_factor=scale,
         )
-        page.set_content(html)
-        page.wait_for_load_state("networkidle")
-        height = page.evaluate("document.body.scrollHeight")
-        page.set_viewport_size({"width": width, "height": height + 40})
+        await page.set_content(html)
+        await page.wait_for_load_state("networkidle")
+        height = await page.evaluate("document.body.scrollHeight")
+        await page.set_viewport_size({"width": width, "height": height + 40})
         if ext == ".pdf":
-            page.pdf(path=path, width=f"{width}px")
+            await page.pdf(path=path, width=f"{width}px")
         else:
-            page.screenshot(path=path, full_page=True)
-        browser.close()
+            await page.screenshot(path=path, full_page=True)
+        await browser.close()
+
+
+def _playwright_render(html, path, ext, width, scale):
+    """Render HTML to image/PDF via Playwright, using async API inside Jupyter."""
+    try:
+        asyncio.get_running_loop()
+        in_loop = True
+    except RuntimeError:
+        in_loop = False
+
+    if in_loop:
+        import nest_asyncio
+        nest_asyncio.apply()
+        asyncio.get_event_loop().run_until_complete(
+            _playwright_render_async(html, path, ext, width, scale)
+        )
+    else:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page(
+                viewport={"width": width, "height": 100},
+                device_scale_factor=scale,
+            )
+            page.set_content(html)
+            page.wait_for_load_state("networkidle")
+            height = page.evaluate("document.body.scrollHeight")
+            page.set_viewport_size({"width": width, "height": height + 40})
+            if ext == ".pdf":
+                page.pdf(path=path, width=f"{width}px")
+            else:
+                page.screenshot(path=path, full_page=True)
+            browser.close()
 
 
 def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
