@@ -22,43 +22,40 @@ from .tokenize import tokenize_agnostic, get_spelling_modernizer
 # Per-word HTML rendering
 # ---------------------------------------------------------------------------
 
-def _word_style(z, abs_cutoff=-1.0, conc_cutoff=1.0, max_z=3.0):
+def _word_style(z, max_z=3.0):
     """Return inline CSS for a word given its z-score.
 
-    Abstract (z <= abs_cutoff): border whose width scales with |z|.
-    Concrete (z >= conc_cutoff): bold weight + gray background box that
-        darkens with concreteness.
-    Neither: no special styling.
+    Continuous scale — every scored word gets styled proportionally:
+    - z < 0 (abstract): bordered rectangle, thicker with |z|
+    - z > 0 (concrete): gray background shading, darker with z
+    - z == 0: minimal styling (very thin border)
+    - NaN (unrecognized): no styling
     """
     if np.isnan(z):
-        return None, "neither"
+        return None, "unscored"
 
-    if z <= abs_cutoff:
-        # More abstract → thicker border.  Map |z| from [cutoff .. max_z] to [1px .. 4px]
-        intensity = (min(abs(z), max_z) - abs(abs_cutoff)) / (max_z - abs(abs_cutoff))
-        intensity = max(0.0, min(1.0, intensity))
+    if z <= 0:
+        # Abstract: border scales from 1px (z=0) to 6px (z=-max_z)
+        intensity = min(abs(z), max_z) / max_z  # 0..1
         border_px = 1 + round(intensity * 5)  # 1..6
-        css = f"border:{border_px}px solid #555; border-radius:2px; padding:0 2px"
-        return css, "abstract"
+        alpha = 0.15 + intensity * 0.70  # 0.15..0.85
+        css = (f"border:{border_px}px solid rgba(0,0,0,{alpha:.2f}); "
+               f"border-radius:2px; padding:0 2px")
+        cls = "abstract" if z < -1.0 else "neither"
+        return css, cls
 
-    if z >= conc_cutoff:
-        # More concrete → bolder + darker gray background box
-        # Map z from [cutoff .. max_z] to 0..1
-        intensity = (min(z, max_z) - conc_cutoff) / (max_z - conc_cutoff)
-        intensity = max(0.0, min(1.0, intensity))
-        weight = 400 + round(intensity * 500)  # 400..900
-        # Gray background: rgba black from 0.08 (light) to 0.40 (dark)
-        alpha = 0.08 + intensity * 0.32
-        css = (f"font-weight:{weight}; "
-               f"background:rgba(0,0,0,{alpha:.2f}); "
-               f"padding:1px 4px; border-radius:2px")
-        return css, "concrete"
-
-    return None, "neither"
+    # z > 0: concrete shading scales from barely visible to bold+dark
+    intensity = min(z, max_z) / max_z  # 0..1
+    weight = 400 + round(intensity * 500)  # 400..900
+    alpha = 0.04 + intensity * 0.36  # 0.04..0.40
+    css = (f"font-weight:{weight}; "
+           f"background:rgba(0,0,0,{alpha:.2f}); "
+           f"padding:1px 4px; border-radius:2px")
+    cls = "concrete" if z > 1.0 else "neither"
+    return css, cls
 
 
-def _render_body(txt, col="Abs-Conc.Median.median",
-                 abs_cutoff=-1.0, conc_cutoff=1.0):
+def _render_body(txt, col="Abs-Conc.Median.median"):
     """Render passage text to styled HTML fragment (no wrapper)."""
     scores = get_norm_dict(col)
     spelling_d = get_spelling_modernizer()
@@ -78,7 +75,7 @@ def _render_body(txt, col="Abs-Conc.Median.median",
 
         s, _ = _modernize_score(tok_lower, scores, spelling_d)
         z = s if s is not None else np.nan
-        css, cls = _word_style(z, abs_cutoff, conc_cutoff)
+        css, cls = _word_style(z)
 
         if css:
             parts.append((f'<span class="w {cls}" style="{css}">{escaped}</span>', False))
@@ -96,10 +93,14 @@ def _render_body(txt, col="Abs-Conc.Median.median",
 
 
 def render_passage_html(txt, col="Abs-Conc.Median.median",
-                        abs_cutoff=-1.0, conc_cutoff=1.0,
                         title="", show_title=True, show_legend=True, font_size=14,
                         line_height=2.2, max_width=700):
     """Render a passage as an HTML string with per-word styling.
+
+    Every scored word is styled on a continuous scale:
+    - z < 0 (abstract): bordered rectangle, thicker/darker with |z|
+    - z > 0 (concrete): gray background shading, darker/bolder with z
+    - Unrecognized words: plain text (no styling)
 
     Parameters
     ----------
@@ -107,10 +108,6 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
         The passage text.
     col : str
         Norm column to use for scoring.
-    abs_cutoff : float
-        Z-score threshold for abstract classification (words <= this).
-    conc_cutoff : float
-        Z-score threshold for concrete classification (words >= this).
     title : str
         Optional title/header above the passage.
     show_legend : bool
@@ -127,15 +124,17 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
     str
         Complete HTML document string.
     """
-    body = _render_body(txt, col=col, abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
+    body = _render_body(txt, col=col)
 
     legend_html = ""
     if show_legend:
         legend_html = f"""
         <div style="margin-bottom:12px; font-size:{font_size - 2}px; color:#555;">
-            <span style="border:2px solid #555; border-radius:2px; padding:0 3px; margin-right:8px;">abstract</span>
-            <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:0 3px; border-radius:2px; margin-right:8px;">concrete</span>
-            <span style="color:#888;">plain = unscored or neither</span>
+            <span style="border:3px solid rgba(0,0,0,0.60); border-radius:2px; padding:0 3px; margin-right:8px;">abstract</span>
+            <span style="border:1px solid rgba(0,0,0,0.15); border-radius:2px; padding:0 3px; margin-right:8px;">slightly abstract</span>
+            <span style="font-weight:500; background:rgba(0,0,0,0.08); padding:0 3px; border-radius:2px; margin-right:8px;">slightly concrete</span>
+            <span style="font-weight:800; background:rgba(0,0,0,0.30); padding:0 3px; border-radius:2px; margin-right:8px;">concrete</span>
+            <span style="color:#888; margin-left:4px;">plain = unscored</span>
         </div>"""
 
     title_html = ""
@@ -310,7 +309,6 @@ def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
 # ---------------------------------------------------------------------------
 
 def render_comparison_html(passages, col="Abs-Conc.Median.median",
-                           abs_cutoff=-1.0, conc_cutoff=1.0,
                            show_legend=True, show_titles=True,
                            font_size=13, line_height=2.2, col_width=380):
     """Render multiple passages side-by-side for comparison.
@@ -338,7 +336,7 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
     for psg in passages:
         txt = psg["text"]
         title = psg.get("title", "")
-        body = _render_body(txt, col=col, abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff)
+        body = _render_body(txt, col=col)
         title_html = f"<h4>{title}</h4>" if (title and show_titles) else ""
         cells.append(f"<td>{title_html}<div class='passage'>{body}</div></td>")
 
@@ -347,9 +345,11 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
     legend_html = ""
     if show_legend:
         legend_html = f"""<div class="legend">
-    <span style="border:2px solid #555; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
-    <span style="font-weight:800; background:rgba(0,0,0,0.18); padding:1px 4px; border-radius:2px;">concrete</span>&ensp;
-    <span style="color:#888;">plain = unscored / neither</span>
+    <span style="border:3px solid rgba(0,0,0,0.60); border-radius:2px; padding:0 3px;">abstract</span>&ensp;
+    <span style="border:1px solid rgba(0,0,0,0.15); border-radius:2px; padding:0 3px;">slightly abstract</span>&ensp;
+    <span style="font-weight:500; background:rgba(0,0,0,0.08); padding:0 3px; border-radius:2px;">slightly concrete</span>&ensp;
+    <span style="font-weight:800; background:rgba(0,0,0,0.30); padding:1px 4px; border-radius:2px;">concrete</span>&ensp;
+    <span style="color:#888;">plain = unscored</span>
 </div>"""
 
     html = f"""<!DOCTYPE html>

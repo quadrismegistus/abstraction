@@ -45,10 +45,10 @@ def patch_norms(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestWordStyle:
-    def test_nan_returns_neither(self):
+    def test_nan_returns_unscored(self):
         css, cls = _word_style(np.nan)
         assert css is None
-        assert cls == "neither"
+        assert cls == "unscored"
 
     def test_abstract_gets_border(self):
         css, cls = _word_style(-2.0)
@@ -62,38 +62,44 @@ class TestWordStyle:
         assert "font-weight:" in css
         assert "background:rgba" in css
 
-    def test_neither_range(self):
+    def test_zero_gets_light_border(self):
         css, cls = _word_style(0.0)
-        assert css is None
+        assert css is not None
+        assert "border:" in css
+        assert cls == "neither"
+
+    def test_slightly_abstract_gets_border(self):
+        css, cls = _word_style(-0.5)
+        assert css is not None
+        assert "border:" in css
+        assert cls == "neither"
+
+    def test_slightly_concrete_gets_shading(self):
+        css, cls = _word_style(0.5)
+        assert css is not None
+        assert "background:rgba" in css
         assert cls == "neither"
 
     def test_abstract_border_scales_with_z(self):
-        _, _ = _word_style(-1.0)  # baseline
-        css_mild, _ = _word_style(-1.5)
+        css_mild, _ = _word_style(-0.5)
         css_extreme, _ = _word_style(-3.0)
-        # Extract border width
         mild_px = int(css_mild.split("border:")[1].split("px")[0])
         extreme_px = int(css_extreme.split("border:")[1].split("px")[0])
         assert extreme_px > mild_px
 
     def test_concrete_weight_scales_with_z(self):
-        css_mild, _ = _word_style(1.5)
+        css_mild, _ = _word_style(0.5)
         css_extreme, _ = _word_style(3.0)
         mild_weight = int(css_mild.split("font-weight:")[1].split(";")[0])
         extreme_weight = int(css_extreme.split("font-weight:")[1].split(";")[0])
         assert extreme_weight > mild_weight
 
     def test_concrete_alpha_scales_with_z(self):
-        css_mild, _ = _word_style(1.0)
+        css_mild, _ = _word_style(0.5)
         css_extreme, _ = _word_style(3.0)
         mild_alpha = float(css_mild.split("rgba(0,0,0,")[1].split(")")[0])
         extreme_alpha = float(css_extreme.split("rgba(0,0,0,")[1].split(")")[0])
         assert extreme_alpha > mild_alpha
-
-    def test_custom_cutoffs(self):
-        # z=-0.5 should be neither with default cutoff, but abstract with -0.3
-        css, cls = _word_style(-0.5, abs_cutoff=-0.3)
-        assert cls == "abstract"
 
 
 # ---------------------------------------------------------------------------
@@ -111,14 +117,15 @@ class TestRenderBody:
         assert 'class="w concrete"' in html
         assert "font-weight:" in html
 
-    def test_neither_word_no_style(self):
+    def test_neither_word_gets_light_style(self):
         html = _render_body("old")
         assert 'class="w neither"' in html
-        assert "style=" not in html
+        assert "style=" in html
 
     def test_unknown_word_no_style(self):
         html = _render_body("xyzzyplugh")
-        assert 'class="w neither"' in html
+        assert 'class="w unscored"' in html
+        assert "style=" not in html
 
     def test_punctuation_no_leading_space(self):
         html = _render_body("the wall, old")
