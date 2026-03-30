@@ -4,6 +4,7 @@ LLM text generation with caching via litellm + hashstash.
 Requires optional dependencies: pip install abstraction[llm]
 """
 
+import json
 import os
 
 from .config import PATH_STASH
@@ -17,6 +18,11 @@ def _get_stash():
     except ImportError:
         raise ImportError("Install llm extras: pip install abstraction[llm]")
     return HashStash(os.path.join(PATH_STASH, "llms"), engine="pairtree")
+
+
+def get_llm_stash():
+    """Get the LLM response cache (pairtree HashStash)."""
+    return _get_stash()
 
 
 def generate_text(user_prompt, model=DEFAULT_MODEL, system_prompt="",
@@ -61,3 +67,19 @@ def generate_text(user_prompt, model=DEFAULT_MODEL, system_prompt="",
     if use_cache:
         _get_stash()[cache_key] = result
     return result
+
+
+def generate_json(user_prompt, model=DEFAULT_MODEL, system_prompt="", **options):
+    """Generate text and parse the response as JSON."""
+    response = generate_text(
+        user_prompt=user_prompt, model=model,
+        system_prompt=system_prompt, **options,
+    )
+    try:
+        response = response.split("```json", 1)[-1]
+        parts = response.split("```")
+        response = parts[1] if len(parts) > 1 and parts[1] else parts[0]
+        return json.loads(response.strip())
+    except Exception as e:
+        print(f"Error parsing JSON: {e}")
+        return None

@@ -13,8 +13,8 @@ dynamic = ["dependencies"]
 dependencies = {file = ["requirements.txt"]}
 
 [project.optional-dependencies]
-llm = ["litellm", "hashstash"]
-all = ["litellm", "hashstash", "tabula-py", "stanza"]
+llm = ["litellm", "hashstash[rec]"]
+all = ["litellm", "hashstash[rec]", "tabula-py", "stanza"]
 
 [project.scripts]
 abstraction = "abstraction.cli:main"

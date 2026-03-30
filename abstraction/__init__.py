@@ -30,4 +30,5 @@ from .words import (
     word_score_shifts,
     summarize_correlations, summarize_contributions, summarize_score_shifts,
 )
-from .utils import read_df, save_df, get_avgs_df
+from .llm import get_llm_stash, generate_text, generate_json, DEFAULT_MODEL
+from .utils import read_df, save_df, get_avgs_df, parse_json_str
