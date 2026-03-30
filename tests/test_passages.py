@@ -53,7 +53,7 @@ class TestWordStyle:
     def test_abstract_gets_border(self):
         css, cls = _word_style(-2.0)
         assert cls == "abstract"
-        assert "border:" in css
+        assert "outline:" in css
         assert "solid" in css
 
     def test_concrete_gets_bold_and_background(self):
@@ -65,13 +65,13 @@ class TestWordStyle:
     def test_zero_gets_light_border(self):
         css, cls = _word_style(0.0)
         assert css is not None
-        assert "border:" in css
+        assert "outline:" in css
         assert cls == "neither"
 
     def test_slightly_abstract_gets_border(self):
         css, cls = _word_style(-0.5)
         assert css is not None
-        assert "border:" in css
+        assert "outline:" in css
         assert cls == "neither"
 
     def test_slightly_concrete_gets_shading(self):
@@ -83,8 +83,8 @@ class TestWordStyle:
     def test_abstract_border_scales_with_z(self):
         css_mild, _ = _word_style(-0.5)
         css_extreme, _ = _word_style(-3.0)
-        mild_px = int(css_mild.split("border:")[1].split("px")[0])
-        extreme_px = int(css_extreme.split("border:")[1].split("px")[0])
+        mild_px = int(css_mild.split("outline:")[1].split("px")[0])
+        extreme_px = int(css_extreme.split("outline:")[1].split("px")[0])
         assert extreme_px > mild_px
 
     def test_concrete_weight_scales_with_z(self):
@@ -110,7 +110,7 @@ class TestRenderBody:
     def test_abstract_word_gets_border_span(self):
         html = _render_body("the virtue")
         assert 'class="w abstract"' in html
-        assert "border:" in html
+        assert "outline:" in html
 
     def test_concrete_word_gets_bold_span(self):
         html = _render_body("the stone wall")
@@ -138,9 +138,15 @@ class TestRenderBody:
         assert "- <" not in html  # no "- <span..." gap
         assert "-<span" in html   # hyphen directly abuts next span
 
-    def test_newline_becomes_br(self):
+    def test_paragraph_break_creates_paragraphs(self):
+        html = _render_body("the wall\n\nthe stone")
+        assert "<p " in html
+        assert html.count("<p ") == 2
+
+    def test_single_newline_collapses_to_space(self):
         html = _render_body("the\nwall")
-        assert "<br/>" in html
+        # Single newline should not create a new paragraph
+        assert html.count("<p ") == 1
 
     def test_html_escaping(self):
         # render_passage_html escapes title text

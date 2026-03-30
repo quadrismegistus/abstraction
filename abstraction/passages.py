@@ -35,12 +35,13 @@ def _word_style(z, max_z=3.0):
         return None, "unscored"
 
     if z <= 0:
-        # Abstract: border scales from 1px (z=0) to 6px (z=-max_z)
+        # Abstract: outline scales from 1px (z=0) to 4px (z=-max_z)
+        # Using outline instead of border so it doesn't affect layout
         intensity = min(abs(z), max_z) / max_z  # 0..1
-        border_px = 1 + round(intensity * 5)  # 1..6
+        border_px = 1 + round(intensity * 3)  # 1..4
         alpha = 0.15 + intensity * 0.70  # 0.15..0.85
-        css = (f"border:{border_px}px solid rgba(0,0,0,{alpha:.2f}); "
-               f"border-radius:2px; padding:0 2px")
+        css = (f"outline:{border_px}px solid rgba(0,0,0,{alpha:.2f}); "
+               f"outline-offset:0px; border-radius:2px")
         cls = "abstract" if z < -1.0 else "neither"
         return css, cls
 
@@ -50,15 +51,43 @@ def _word_style(z, max_z=3.0):
     alpha = 0.04 + intensity * 0.36  # 0.04..0.40
     css = (f"font-weight:{weight}; "
            f"background:rgba(0,0,0,{alpha:.2f}); "
-           f"padding:1px 4px; border-radius:2px")
+           f"border-radius:2px")
     cls = "concrete" if z > 1.0 else "neither"
     return css, cls
 
 
 def _render_body(txt, col="Abs-Conc.Median.median"):
-    """Render passage text to styled HTML fragment (no wrapper)."""
+    """Render passage text to styled HTML fragment (no wrapper).
+
+    Paragraph breaks (blank lines) become indented new paragraphs
+    rather than double line breaks.
+    """
     scores = get_norm_dict(col)
     spelling_d = get_spelling_modernizer()
+
+    # Split into paragraphs on blank lines, render each
+    paragraphs = _split_paragraphs(txt)
+    rendered = []
+    for i, para in enumerate(paragraphs):
+        body = _render_paragraph(para, scores, spelling_d)
+        if i == 0:
+            rendered.append(f'<p class="psg-para psg-first">{body}</p>')
+        else:
+            rendered.append(f'<p class="psg-para">{body}</p>')
+    return "\n".join(rendered)
+
+
+def _split_paragraphs(txt):
+    """Split text into paragraphs on blank lines."""
+    import re
+    # Split on one or more blank lines (two+ consecutive newlines)
+    paras = re.split(r'\n\s*\n', txt.strip())
+    # Collapse remaining single newlines within paragraphs to spaces
+    return [re.sub(r'\n', ' ', p).strip() for p in paras if p.strip()]
+
+
+def _render_paragraph(txt, scores, spelling_d):
+    """Render a single paragraph to styled HTML."""
     tokens = tokenize_agnostic(txt)
 
     parts = []
@@ -67,10 +96,7 @@ def _render_body(txt, col="Abs-Conc.Median.median"):
         escaped = html_mod.escape(tok)
 
         if not tok or not tok[0].isalpha():
-            if tok == "\n":
-                parts.append(("<br/>", True))
-            else:
-                parts.append((escaped, True))
+            parts.append((escaped, True))
             continue
 
         s, _ = _modernize_score(tok_lower, scores, spelling_d)
@@ -130,10 +156,10 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
     if show_legend:
         legend_html = f"""
         <div style="margin-bottom:12px; font-size:{font_size - 2}px; color:#555;">
-            <span style="border:3px solid rgba(0,0,0,0.60); border-radius:2px; padding:0 3px; margin-right:8px;">abstract</span>
-            <span style="border:1px solid rgba(0,0,0,0.15); border-radius:2px; padding:0 3px; margin-right:8px;">slightly abstract</span>
-            <span style="font-weight:500; background:rgba(0,0,0,0.08); padding:0 3px; border-radius:2px; margin-right:8px;">slightly concrete</span>
-            <span style="font-weight:800; background:rgba(0,0,0,0.30); padding:0 3px; border-radius:2px; margin-right:8px;">concrete</span>
+            <span style="outline:3px solid rgba(0,0,0,0.60); outline-offset:0px; border-radius:2px; padding:0 3px; margin-right:12px;">abstract</span>
+            <span style="outline:1px solid rgba(0,0,0,0.15); outline-offset:0px; border-radius:2px; padding:0 3px; margin-right:12px;">slightly abstract</span>
+            <span style="font-weight:500; background:rgba(0,0,0,0.08); border-radius:2px; padding:0 3px; margin-right:12px;">slightly concrete</span>
+            <span style="font-weight:800; background:rgba(0,0,0,0.30); border-radius:2px; padding:0 3px; margin-right:12px;">concrete</span>
             <span style="color:#888; margin-left:4px;">plain = unscored</span>
         </div>"""
 
@@ -157,9 +183,12 @@ body {{
 .w {{
     display: inline;
 }}
-.abstract {{
-    display: inline-block;
-    margin: 1px 0;
+.psg-para {{
+    margin: 0;
+    text-indent: 2em;
+}}
+.psg-first {{
+    text-indent: 0;
 }}
 </style>
 </head>
@@ -345,10 +374,10 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
     legend_html = ""
     if show_legend:
         legend_html = f"""<div class="legend">
-    <span style="border:3px solid rgba(0,0,0,0.60); border-radius:2px; padding:0 3px;">abstract</span>&ensp;
-    <span style="border:1px solid rgba(0,0,0,0.15); border-radius:2px; padding:0 3px;">slightly abstract</span>&ensp;
-    <span style="font-weight:500; background:rgba(0,0,0,0.08); padding:0 3px; border-radius:2px;">slightly concrete</span>&ensp;
-    <span style="font-weight:800; background:rgba(0,0,0,0.30); padding:1px 4px; border-radius:2px;">concrete</span>&ensp;
+    <span style="outline:3px solid rgba(0,0,0,0.60); outline-offset:0px; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
+    <span style="outline:1px solid rgba(0,0,0,0.15); outline-offset:0px; border-radius:2px; padding:0 3px;">slightly abstract</span>&ensp;
+    <span style="font-weight:500; background:rgba(0,0,0,0.08); border-radius:2px; padding:0 3px;">slightly concrete</span>&ensp;
+    <span style="font-weight:800; background:rgba(0,0,0,0.30); border-radius:2px; padding:0 3px;">concrete</span>&ensp;
     <span style="color:#888;">plain = unscored</span>
 </div>"""
 
@@ -373,8 +402,8 @@ td {{
 }}
 td:last-child {{ border-right: none; }}
 h4 {{ margin: 0 0 8px 0; font-family: serif; }}
-.abstract {{ display: inline-block; margin: 1px 0; }}
-.concrete {{ display: inline-block; margin: 1px 0; }}
+.psg-para {{ margin: 0; text-indent: 2em; }}
+.psg-first {{ text-indent: 0; }}
 .legend {{
     margin-bottom: 12px; font-size: {font_size - 2}px; color: #555;
 }}
