@@ -7,6 +7,7 @@ Grayscale-friendly design for print:
   - Neutral words: plain text
 """
 
+import asyncio
 import html as html_mod
 import os
 import textwrap
@@ -197,6 +198,37 @@ def save_passage_html(txt, path, col="Abs-Conc.Median.median", title="", **kwarg
     return path
 
 
+def _playwright_render(html, path, ext, width, scale):
+    """Render HTML to image/PDF via Playwright, handling Jupyter's asyncio loop."""
+    def _in_event_loop():
+        try:
+            loop = asyncio.get_running_loop()
+            return loop is not None
+        except RuntimeError:
+            return False
+
+    if _in_event_loop():
+        import nest_asyncio
+        nest_asyncio.apply()
+
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(
+            viewport={"width": width, "height": 100},
+            device_scale_factor=scale,
+        )
+        page.set_content(html)
+        page.wait_for_load_state("networkidle")
+        height = page.evaluate("document.body.scrollHeight")
+        page.set_viewport_size({"width": width, "height": height + 40})
+        if ext == ".pdf":
+            page.pdf(path=path, width=f"{width}px")
+        else:
+            page.screenshot(path=path, full_page=True)
+        browser.close()
+
+
 def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
                        width=800, dpi=300, **kwargs):
     """Save a styled passage as a PNG image.
@@ -230,25 +262,8 @@ def save_passage_image(txt, path, col="Abs-Conc.Median.median", title="",
 
     scale = max(1, round(dpi / 96))  # 96 CSS px per inch baseline
 
-    # Try playwright (headless Chromium)
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch()
-            page = browser.new_page(
-                viewport={"width": width, "height": 100},
-                device_scale_factor=scale,
-            )
-            page.set_content(html)
-            page.wait_for_load_state("networkidle")
-            # Auto-height: measure content
-            height = page.evaluate("document.body.scrollHeight")
-            page.set_viewport_size({"width": width, "height": height + 40})
-            if ext == ".pdf":
-                page.pdf(path=path, width=f"{width}px")
-            else:
-                page.screenshot(path=path, full_page=True)
-            browser.close()
+        _playwright_render(html, path, ext, width, scale)
         return path
     except ImportError:
         pass
@@ -382,20 +397,5 @@ def save_comparison_image(passages, path, width=900, dpi=300, **kwargs):
 
     scale = max(1, round(dpi / 96))
 
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(
-            viewport={"width": width, "height": 100},
-            device_scale_factor=scale,
-        )
-        page.set_content(html)
-        page.wait_for_load_state("networkidle")
-        height = page.evaluate("document.body.scrollHeight")
-        page.set_viewport_size({"width": width, "height": height + 40})
-        if ext == ".pdf":
-            page.pdf(path=path, width=f"{width}px")
-        else:
-            page.screenshot(path=path, full_page=True)
-        browser.close()
+    _playwright_render(html, path, ext, width, scale)
     return path
