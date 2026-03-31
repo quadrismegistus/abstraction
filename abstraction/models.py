@@ -80,20 +80,19 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 
 
-def load_skipgrams(fn, num_skips=None, max_memory_gb=40):
+def load_skipgrams(fn, num_skips=None, max_memory_gb=1.0):
     """Load skipgrams from a file into memory, optionally sampling.
 
     Returns a list of word-lists. If the file is larger than max_memory_gb
     (estimated), returns a StreamingSkipgrams iterator instead to avoid
     memory issues.
     """
-    # Estimate: compressed file ~10x expansion, ~100 bytes per sentence in Python
+    # Conservative: 2.2GB compressed BPO → 151GB in Python (70x).
+    # Use compressed size directly with a low threshold.
     file_size_gb = os.path.getsize(fn) / (1024**3)
-    estimated_mem_gb = file_size_gb * 10  # rough expansion factor
 
-    if estimated_mem_gb > max_memory_gb:
-        print(f"  File too large for memory ({file_size_gb:.1f}GB compressed, "
-              f"~{estimated_mem_gb:.0f}GB in RAM). Streaming from disk.")
+    if file_size_gb > max_memory_gb:
+        print(f"  Large file ({file_size_gb:.1f}GB compressed). Streaming from disk.")
         return StreamingSkipgrams(fn, num_skips)
 
     opener = gzip.open(fn, "rb") if fn.endswith(".gz") else open(fn, "rb")
