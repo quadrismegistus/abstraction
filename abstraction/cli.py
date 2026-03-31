@@ -139,8 +139,12 @@ def cmd_report_full(args):
 
 
 def cmd_train_model(args):
+    import logging
     import time
     from .models import gen_model
+    if args.verbose:
+        logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+        logging.getLogger('gensim').setLevel(logging.INFO)
     skipgram_path = args.skipgrams
     print(f"Training on: {skipgram_path}")
     print(f"  runs={args.runs}, workers={args.workers}, dims={args.dims}, "
@@ -261,6 +265,7 @@ def main():
     p.add_argument("--min-count", type=int, default=10, help="Min word frequency (default: 10)")
     p.add_argument("--window", type=int, default=10, help="Context window size (default: 10)")
     p.add_argument("--num-skips", type=int, default=None, help="Max skipgrams to sample (default: all)")
+    p.add_argument("--verbose", "-v", action="store_true", help="Show gensim training progress")
 
     # train-skipgrams: generate skipgram files from a corpus
     p = sub.add_parser("train-skipgrams", help="Generate skipgram files from a corpus by period")
