@@ -15,7 +15,7 @@ from .config import (
     FIELD_DIR, SOURCE_DIR, ZCUT, PATH_NORMS, PATH_ALLNORMS, PATH_VECNORMS,
     REMOVE_STOPWORDS, BAD_SOURCES,
 )
-from .tokenize import get_stopwords
+from .tokenize import get_stopwords, get_stopwords_and_names
 from .utils import zfy, download_tqdm, read_df, save_df
 
 
@@ -158,7 +158,7 @@ def get_contrasts(dfnorms, zcut=ZCUT):
 
 def get_fields_from_norms(dfnorms, zcut=ZCUT, remove_stopwords=True):
     if remove_stopwords:
-        dfnorms = dfnorms.loc[list(set(dfnorms.index) - get_stopwords())]
+        dfnorms = dfnorms.loc[list(set(dfnorms.index) - get_stopwords_and_names())]
     fields = {}
     for cdx in get_contrasts(dfnorms, zcut=zcut):
         neg, pos = cdx["contrast"].split("-")
@@ -175,7 +175,11 @@ def get_origfields():
 
 
 def get_origcontrasts(remove_stopwords=REMOVE_STOPWORDS):
-    return get_contrasts(get_orignorms(remove_stopwords=remove_stopwords))
+    df = get_orignorms(remove_stopwords=False)
+    if remove_stopwords:
+        exclude = get_stopwords_and_names()
+        df = df.loc[[w for w in df.index if w not in exclude]]
+    return get_contrasts(df)
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +255,11 @@ def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
 
 
 def get_allcontrasts(remove_stopwords=REMOVE_STOPWORDS):
-    return get_contrasts(get_allnorms(remove_stopwords=remove_stopwords))
+    df = get_allnorms(remove_stopwords=False)
+    if remove_stopwords:
+        exclude = get_stopwords_and_names()
+        df = df.loc[[w for w in df.index if w not in exclude]]
+    return get_contrasts(df)
 
 
 def get_allfields():

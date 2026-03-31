@@ -33,19 +33,43 @@ _REPLACEMENTS_UNICODE = {
 
 # Caches
 _STOPWORDS = None
+_NAMES = None
 _SPELLING_D = None
 
 
-def get_stopwords():
+def get_stopwords(use_nltk=True):
+    """Return the set of stopwords (function words).
+
+    If use_nltk=True (default), uses NLTK's 198 English stopwords.
+    If False, uses the project's stopwords.txt file.
+    """
     global _STOPWORDS
     if _STOPWORDS is None:
-        words = set()
-        for path in [PATH_STOPWORDS, PATH_NAMES]:
-            if os.path.exists(path):
-                with open(path) as f:
-                    words |= {w.strip().lower() for w in f if w.strip()}
-        _STOPWORDS = words
+        if use_nltk:
+            from nltk.corpus import stopwords as nltk_stops
+            _STOPWORDS = set(nltk_stops.words("english"))
+        else:
+            _STOPWORDS = set()
+            if os.path.exists(PATH_STOPWORDS):
+                with open(PATH_STOPWORDS) as f:
+                    _STOPWORDS = {w.strip().lower() for w in f if w.strip()}
     return _STOPWORDS
+
+
+def get_names():
+    """Return the set of proper names (for filtering contrast vector seeds)."""
+    global _NAMES
+    if _NAMES is None:
+        _NAMES = set()
+        if os.path.exists(PATH_NAMES):
+            with open(PATH_NAMES) as f:
+                _NAMES = {w.strip().lower() for w in f if w.strip()}
+    return _NAMES
+
+
+def get_stopwords_and_names():
+    """Return stopwords + names combined (for contrast vector seed filtering)."""
+    return get_stopwords() | get_names()
 
 
 def get_spelling_modernizer():
