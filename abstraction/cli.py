@@ -202,7 +202,10 @@ def cmd_train_all(args):
 
 def cmd_train_skipgrams(args):
     from .models import gen_skipgrams_corpus
+    output_dir = args.output_dir
     print(f"Generating skipgrams for {args.corpus} (period_len={args.period_len})")
+    if output_dir:
+        print(f"  output_dir={output_dir}")
     gen_skipgrams_corpus(
         args.corpus,
         period_len=args.period_len,
@@ -210,6 +213,7 @@ def cmd_train_skipgrams(args):
         max_year=args.max_year,
         num_proc=args.workers,
         force=args.force,
+        output_dir=output_dir,
     )
     print("Done")
 
@@ -319,6 +323,7 @@ def main():
     p.add_argument("--max-year", type=int, default=None)
     p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
     p.add_argument("--force", action="store_true", help="Regenerate even if files exist")
+    p.add_argument("--output-dir", default=None, help="Output directory (default: data/models/)")
 
     # gen-vecnorms: generate vector-based word norms from trained models
     p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")

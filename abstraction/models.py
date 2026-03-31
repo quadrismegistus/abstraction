@@ -52,10 +52,11 @@ def save_skipgrams_from_paths(paths, ofn, min_len=10):
 
 
 def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
-                         min_year=None, max_year=None, num_proc=1, force=False):
+                         min_year=None, max_year=None, num_proc=1, force=False,
+                         output_dir=None):
     """Generate skipgram files for each time period in a corpus."""
     corpus = load_corpus(corpus_name)
-    oroot = os.path.join(PATH_MODELS, corpus.id)
+    oroot = os.path.join(output_dir or PATH_MODELS, corpus.id)
     df = corpus.metadata.copy()
     df["period"] = df["year"].apply(
         lambda y: f"{int(y) // period_len * period_len}-{int(y) // period_len * period_len + period_len}"
