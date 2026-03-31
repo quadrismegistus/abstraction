@@ -138,6 +138,55 @@ def cmd_report_full(args):
         print(f"\nSaved markdown to {args.output}")
 
 
+def cmd_train_model(args):
+    import time
+    from .models import gen_model
+    skipgram_path = args.skipgrams
+    print(f"Training on: {skipgram_path}")
+    print(f"  runs={args.runs}, workers={args.workers}, dims={args.dims}, "
+          f"min_count={args.min_count}, window={args.window}")
+    if args.num_skips:
+        print(f"  num_skips={args.num_skips:,}")
+    else:
+        print(f"  num_skips=all (no cap)")
+    t0 = time.time()
+    gen_model(
+        skipgram_path,
+        num_runs=args.runs,
+        num_workers=args.workers,
+        min_count=args.min_count,
+        num_dimensions=args.dims,
+        skipgram_size=args.window,
+        num_skips=args.num_skips,
+    )
+    elapsed = time.time() - t0
+    print(f"Done in {elapsed:.0f}s")
+
+
+def cmd_train_skipgrams(args):
+    from .models import gen_skipgrams_corpus
+    print(f"Generating skipgrams for {args.corpus} (period_len={args.period_len})")
+    gen_skipgrams_corpus(
+        args.corpus,
+        period_len=args.period_len,
+        min_year=args.min_year,
+        max_year=args.max_year,
+        num_proc=args.workers,
+        force=args.force,
+    )
+    print("Done")
+
+
+def cmd_gen_vecnorms(args):
+    import time
+    from .models import gen_vecnorms
+    print(f"Generating vector norms (period_len={args.period_len})")
+    t0 = time.time()
+    gen_vecnorms(bin_year_by=args.period_len, num_proc=args.workers)
+    elapsed = time.time() - t0
+    print(f"Done in {elapsed:.0f}s")
+
+
 def cmd_report_arc(args):
     from .analysis import report_arc, load_all_scored
     genres = args.genres.split(",") if args.genres else None
@@ -203,6 +252,30 @@ def main():
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized data")
     p.add_argument("--compare", action="store_true", help="Compare raw vs modernized side by side (loads all 4 datasets)")
 
+    # train-model: train Word2Vec from a skipgrams file
+    p = sub.add_parser("train-model", help="Train Word2Vec model from a skipgrams file")
+    p.add_argument("skipgrams", help="Path to skipgrams.txt.gz file")
+    p.add_argument("--runs", type=int, default=1, help="Number of training runs (default: 1)")
+    p.add_argument("--workers", type=int, default=8, help="Number of threads (default: 8)")
+    p.add_argument("--dims", type=int, default=100, help="Embedding dimensions (default: 100)")
+    p.add_argument("--min-count", type=int, default=10, help="Min word frequency (default: 10)")
+    p.add_argument("--window", type=int, default=10, help="Context window size (default: 10)")
+    p.add_argument("--num-skips", type=int, default=None, help="Max skipgrams to sample (default: all)")
+
+    # train-skipgrams: generate skipgram files from a corpus
+    p = sub.add_parser("train-skipgrams", help="Generate skipgram files from a corpus by period")
+    p.add_argument("corpus", help="Corpus name (e.g. CanonFiction)")
+    p.add_argument("--period-len", type=int, default=100, help="Period length in years (default: 100)")
+    p.add_argument("--min-year", type=int, default=None)
+    p.add_argument("--max-year", type=int, default=None)
+    p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
+    p.add_argument("--force", action="store_true", help="Regenerate even if files exist")
+
+    # gen-vecnorms: generate vector-based word norms from trained models
+    p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")
+    p.add_argument("--period-len", type=int, default=100, help="Period length for binning (default: 100)")
+    p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
+
     # report-arc: piecewise arc report with ratios (score-based)
     p = sub.add_parser("report-arc", help="Report piecewise arc statistics per genre")
     p.add_argument("--genres", default=None, help="Comma-separated genres (default: Fiction,Poetry,Periodical)")
@@ -241,6 +314,12 @@ def main():
         cmd_report_arc(args)
     elif args.command == "report-arc-counts":
         cmd_report_arc_counts(args)
+    elif args.command == "train-model":
+        cmd_train_model(args)
+    elif args.command == "train-skipgrams":
+        cmd_train_skipgrams(args)
+    elif args.command == "gen-vecnorms":
+        cmd_gen_vecnorms(args)
     else:
         parser.print_help()
         sys.exit(1)
