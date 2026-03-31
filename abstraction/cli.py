@@ -167,6 +167,39 @@ def cmd_train_model(args):
     print(f"Done in {elapsed:.0f}s")
 
 
+def cmd_train_all(args):
+    import glob
+    import logging
+    import os
+    import time
+    from .models import gen_model
+    if args.verbose:
+        logging.basicConfig(format='%(asctime)s %(message)s', level=logging.INFO)
+        logging.getLogger('gensim').setLevel(logging.INFO)
+    model_dir = args.model_dir.rstrip("/")
+    skipgram_files = sorted(glob.glob(os.path.join(model_dir, "*", "*", "skipgrams.txt.gz")))
+    if not skipgram_files:
+        print(f"No skipgrams.txt.gz files found under {model_dir}")
+        sys.exit(1)
+    print(f"Found {len(skipgram_files)} skipgram files under {model_dir}")
+    for i, sf in enumerate(skipgram_files, 1):
+        rel = sf.replace(model_dir + "/", "").replace("/skipgrams.txt.gz", "")
+        print(f"\n[{i}/{len(skipgram_files)}] {rel}")
+        t0 = time.time()
+        gen_model(
+            sf,
+            num_runs=args.runs,
+            num_workers=args.workers,
+            min_count=args.min_count,
+            num_dimensions=args.dims,
+            skipgram_size=args.window,
+            num_skips=args.num_skips,
+        )
+        elapsed = time.time() - t0
+        print(f"  Done in {elapsed:.0f}s")
+    print("\nAll done.")
+
+
 def cmd_train_skipgrams(args):
     from .models import gen_skipgrams_corpus
     print(f"Generating skipgrams for {args.corpus} (period_len={args.period_len})")
@@ -267,6 +300,17 @@ def main():
     p.add_argument("--num-skips", type=int, default=None, help="Max skipgrams to sample (default: all)")
     p.add_argument("--verbose", "-v", action="store_true", help="Show gensim training progress")
 
+    # train-all: train models for all skipgram files under a directory
+    p = sub.add_parser("train-all", help="Train Word2Vec models for all skipgram files under a directory")
+    p.add_argument("model_dir", help="Root model directory (e.g. /Volumes/diderot/DH/data/models_century5)")
+    p.add_argument("--runs", type=int, default=5, help="Number of training runs (default: 5)")
+    p.add_argument("--workers", type=int, default=8, help="Number of threads (default: 8)")
+    p.add_argument("--dims", type=int, default=100, help="Embedding dimensions (default: 100)")
+    p.add_argument("--min-count", type=int, default=10, help="Min word frequency (default: 10)")
+    p.add_argument("--window", type=int, default=10, help="Context window size (default: 10)")
+    p.add_argument("--num-skips", type=int, default=None, help="Max skipgrams to sample (default: all)")
+    p.add_argument("--verbose", "-v", action="store_true", help="Show gensim training progress")
+
     # train-skipgrams: generate skipgram files from a corpus
     p = sub.add_parser("train-skipgrams", help="Generate skipgram files from a corpus by period")
     p.add_argument("corpus", help="Corpus name (e.g. CanonFiction)")
@@ -321,6 +365,8 @@ def main():
         cmd_report_arc_counts(args)
     elif args.command == "train-model":
         cmd_train_model(args)
+    elif args.command == "train-all":
+        cmd_train_all(args)
     elif args.command == "train-skipgrams":
         cmd_train_skipgrams(args)
     elif args.command == "gen-vecnorms":
