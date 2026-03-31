@@ -129,7 +129,7 @@ def gen_orignorms():
 def get_orignorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_csv(PATH_NORMS).set_index("word")
     if remove_stopwords:
-        df = df.loc[[w for w in df.index if w not in get_stopwords()]]
+        df = df.loc[[w for w in df.index if w not in get_stopwords_and_names()]]
     df["Abs-Conc.Median"] = df.median(axis=1)
     return df
 
@@ -230,7 +230,7 @@ def format_norms_as_long(dfnorms, zcut=ZCUT):
 def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_csv(PATH_VECNORMS).set_index("word")
     if remove_stopwords:
-        df = df.loc[[w for w in df.index if w not in get_stopwords()]]
+        df = df.loc[[w for w in df.index if w not in get_stopwords_and_names()]]
     # add median across periods for each contrast.source group
     colgroups = defaultdict(set)
     for col in df.columns:

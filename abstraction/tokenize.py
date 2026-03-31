@@ -37,11 +37,12 @@ _NAMES = None
 _SPELLING_D = None
 
 
-def get_stopwords(use_nltk=True):
-    """Return the set of stopwords (function words).
+def get_stopwords(use_nltk=False):
+    """Return the set of stopwords.
 
-    If use_nltk=True (default), uses NLTK's 198 English stopwords.
-    If False, uses the project's stopwords.txt file.
+    If use_nltk=True, uses NLTK's 198 English stopwords (minimal).
+    If False (default), uses the project's stopwords.txt file (~2K words,
+    includes high-frequency semi-function words like 'said', 'must', etc.).
     """
     global _STOPWORDS
     if _STOPWORDS is None:
