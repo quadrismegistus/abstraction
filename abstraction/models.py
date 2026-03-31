@@ -15,7 +15,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from .config import (
-    PATH_MODELS, MODEL_MIN_COUNT, MODEL_NUM_DIM, MODEL_NUM_SKIPS,
+    PATH_MODELS, MODEL_MIN_COUNT, MODEL_NUM_DIM,
     MODEL_PERIOD_LEN, PATH_VECNORMS, FIELD_DIR,
 )
 from .corpus import load_corpus, pmap, pmap_iter
@@ -80,14 +80,17 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
 
 
 class SkipgramsSampler:
-    """Samples a fixed number of skipgrams from a file for Word2Vec training."""
+    """Iterates over skipgrams from a file, optionally sampling a subset."""
 
-    def __init__(self, fn, num_skips):
+    def __init__(self, fn, num_skips=None):
         self.fn = fn
         self.num_skips = num_skips
-        self.total_lines = self._count_lines()
-        sample_size = min(num_skips, self.total_lines)
-        self.sampled_lines = set(random.sample(range(self.total_lines), sample_size))
+        if num_skips is not None:
+            self.total_lines = self._count_lines()
+            sample_size = min(num_skips, self.total_lines)
+            self.sampled_lines = set(random.sample(range(self.total_lines), sample_size))
+        else:
+            self.sampled_lines = None
 
     def _count_lines(self):
         opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
@@ -100,10 +103,11 @@ class SkipgramsSampler:
         opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
         with opener as f:
             for i, line in enumerate(f):
-                if i in self.sampled_lines:
-                    if isinstance(line, bytes):
-                        line = line.decode("utf-8")
-                    yield line.strip().split()
+                if self.sampled_lines is not None and i not in self.sampled_lines:
+                    continue
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                yield line.strip().split()
 
 
 # ---------------------------------------------------------------------------
@@ -111,16 +115,17 @@ class SkipgramsSampler:
 # ---------------------------------------------------------------------------
 
 def _train_single_model(args):
-    ifn, ofn_txt, ofn_bin, ofn_vocab, train_kwargs = args
-    skips = SkipgramsSampler(ifn, MODEL_NUM_SKIPS)
+    ifn, ofn_txt, ofn_bin, ofn_vocab, train_kwargs, num_skips = args
+    skips = SkipgramsSampler(ifn, num_skips)
     model = gensim.models.Word2Vec(skips, **train_kwargs)
-    model.init_sims(replace=True)
+    model.wv.fill_norms()
     model.wv.save_word2vec_format(ofn_txt, ofn_vocab)
     model.save(ofn_bin)
 
 
 def gen_model(skipgram_path, num_runs=1, num_workers=8, min_count=MODEL_MIN_COUNT,
-              num_dimensions=MODEL_NUM_DIM, skipgram_size=10, num_proc=1):
+              num_dimensions=MODEL_NUM_DIM, skipgram_size=10, num_skips=None,
+              num_proc=1):
     objs = []
     for run in range(num_runs):
         odir = os.path.join(os.path.dirname(skipgram_path), f"run_{str(run + 1).zfill(2)}")
@@ -135,6 +140,7 @@ def gen_model(skipgram_path, num_runs=1, num_workers=8, min_count=MODEL_MIN_COUN
             os.path.join(odir, "vocab.txt"),
             dict(workers=num_workers, sg=1, min_count=min_count,
                  vector_size=num_dimensions, window=skipgram_size),
+            num_skips,
         ))
     if objs:
         pmap(_train_single_model, objs, num_proc=num_proc)
