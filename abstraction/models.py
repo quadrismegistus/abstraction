@@ -79,35 +79,22 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 
 
-class SkipgramsSampler:
-    """Iterates over skipgrams from a file, optionally sampling a subset."""
+def load_skipgrams(fn, num_skips=None):
+    """Load skipgrams from a file into memory, optionally sampling.
 
-    def __init__(self, fn, num_skips=None):
-        self.fn = fn
-        self.num_skips = num_skips
-        if num_skips is not None:
-            self.total_lines = self._count_lines()
-            sample_size = min(num_skips, self.total_lines)
-            self.sampled_lines = set(random.sample(range(self.total_lines), sample_size))
-        else:
-            self.sampled_lines = None
-
-    def _count_lines(self):
-        opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
-        with opener as f:
-            for i, _ in enumerate(f):
-                pass
-        return i + 1
-
-    def __iter__(self):
-        opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
-        with opener as f:
-            for i, line in enumerate(f):
-                if self.sampled_lines is not None and i not in self.sampled_lines:
-                    continue
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8")
-                yield line.strip().split()
+    Returns a list of word-lists. Reads the file once and holds
+    everything in RAM — avoids re-reading gzipped files on each epoch.
+    """
+    opener = gzip.open(fn, "rb") if fn.endswith(".gz") else open(fn, "rb")
+    sentences = []
+    with opener as f:
+        for line in tqdm(f, desc=f"Loading {os.path.basename(fn)}"):
+            if isinstance(line, bytes):
+                line = line.decode("utf-8")
+            sentences.append(line.strip().split())
+    if num_skips is not None and num_skips < len(sentences):
+        sentences = random.sample(sentences, num_skips)
+    return sentences
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +103,8 @@ class SkipgramsSampler:
 
 def _train_single_model(args):
     ifn, ofn_txt, ofn_bin, ofn_vocab, train_kwargs, num_skips = args
-    skips = SkipgramsSampler(ifn, num_skips)
-    model = gensim.models.Word2Vec(skips, **train_kwargs)
+    sentences = load_skipgrams(ifn, num_skips)
+    model = gensim.models.Word2Vec(sentences, **train_kwargs)
     model.wv.fill_norms()
     model.wv.save_word2vec_format(ofn_txt, ofn_vocab)
     model.save(ofn_bin)
