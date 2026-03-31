@@ -80,7 +80,7 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 
 
-def load_skipgrams(fn, num_skips=None, max_memory_gb=4.0):
+def load_skipgrams(fn, num_skips=None, max_memory_gb=1.0):
     """Load skipgrams from a file into memory, optionally sampling.
 
     Returns a list of word-lists. If the file is larger than max_memory_gb
