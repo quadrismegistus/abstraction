@@ -80,12 +80,22 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 
 
-def load_skipgrams(fn, num_skips=None):
+def load_skipgrams(fn, num_skips=None, max_memory_gb=40):
     """Load skipgrams from a file into memory, optionally sampling.
 
-    Returns a list of word-lists. Reads the file once and holds
-    everything in RAM — avoids re-reading gzipped files on each epoch.
+    Returns a list of word-lists. If the file is larger than max_memory_gb
+    (estimated), returns a StreamingSkipgrams iterator instead to avoid
+    memory issues.
     """
+    # Estimate: compressed file ~10x expansion, ~100 bytes per sentence in Python
+    file_size_gb = os.path.getsize(fn) / (1024**3)
+    estimated_mem_gb = file_size_gb * 10  # rough expansion factor
+
+    if estimated_mem_gb > max_memory_gb:
+        print(f"  File too large for memory ({file_size_gb:.1f}GB compressed, "
+              f"~{estimated_mem_gb:.0f}GB in RAM). Streaming from disk.")
+        return StreamingSkipgrams(fn, num_skips)
+
     opener = gzip.open(fn, "rb") if fn.endswith(".gz") else open(fn, "rb")
     sentences = []
     with opener as f:
@@ -96,6 +106,40 @@ def load_skipgrams(fn, num_skips=None):
     if num_skips is not None and num_skips < len(sentences):
         sentences = random.sample(sentences, num_skips)
     return sentences
+
+
+class StreamingSkipgrams:
+    """Streams skipgrams from a file, re-reading on each epoch.
+
+    Used for large files that don't fit in memory.
+    """
+
+    def __init__(self, fn, num_skips=None):
+        self.fn = fn
+        self.num_skips = num_skips
+        if num_skips is not None:
+            self.total_lines = self._count_lines()
+            sample_size = min(num_skips, self.total_lines)
+            self.sampled_lines = set(random.sample(range(self.total_lines), sample_size))
+        else:
+            self.sampled_lines = None
+
+    def _count_lines(self):
+        opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
+        with opener as f:
+            for i, _ in enumerate(f):
+                pass
+        return i + 1
+
+    def __iter__(self):
+        opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
+        with opener as f:
+            for i, line in enumerate(f):
+                if self.sampled_lines is not None and i not in self.sampled_lines:
+                    continue
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8")
+                yield line.strip().split()
 
 
 # ---------------------------------------------------------------------------
