@@ -1,6 +1,6 @@
 pandas>=1.5
 pyarrow>=10.0
-numpy>=1.23
+numpy>=1.23,<2
 scipy>=1.9
 plotnine>=0.12
 adjustText
