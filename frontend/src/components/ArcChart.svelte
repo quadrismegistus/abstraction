@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, yearRange } from '$lib/stores';
+  import { norm, selectedGenres, yearRange, periodMatched } from '$lib/stores';
   import { fetchArcByGenre } from '$lib/api';
   import type { GenreArc } from '$lib/types';
 
@@ -35,6 +35,7 @@
     p.genre = genres;
     p.year_min = String($yearRange[0]);
     p.year_max = String($yearRange[1]);
+    if ($periodMatched) p.period_matched = 'true';
     return p;
   }
 
@@ -183,7 +184,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $yearRange;
+    $norm; $selectedGenres; $yearRange; $periodMatched;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();

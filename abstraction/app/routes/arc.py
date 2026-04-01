@@ -201,39 +201,70 @@ def arc_by_genre(
     year_max: float = 2020,
     loess_span: float = 0.3,
     invert: bool = True,
+    period_matched: bool = False,
 ):
     """Return corpus-adjusted decade bins + LOESS per genre.
 
     Calls analysis.adjust_scores() per genre to remove corpus fixed effects,
     then fits LOESS on the adjusted points. Matches the book figure approach.
+
+    When period_matched=True, each text is scored with its century-matched
+    vecnorms (e.g. C17 texts use Abs-Conc.Median.C17) and norm_period is
+    added as a second fixed effect to absorb hinge points at century boundaries.
     """
     import pandas as pd
-    from ...analysis import adjust_scores, load_all_scored
+    from ...analysis import adjust_scores, assign_period_score
 
-    # Load from SQLite into a DataFrame for adjust_scores
+    # Parse source from col (e.g. "Abs-Conc.Median.median" → "Median")
+    col_parts = col.split(".")
+    source = col_parts[1] if len(col_parts) >= 2 else "Median"
+
     conn = get_connection()
-    norm_cols = [r[1] for r in conn.execute("PRAGMA table_info(texts)").fetchall()
-                 if r[1].startswith("Abs-Conc.")]
-    # Only load the column we need + metadata
-    rows = conn.execute(f"""
-        SELECT id, corpus_name, year, genre_harmonized, "{col}"
-        FROM texts
-        WHERE year IS NOT NULL AND "{col}" IS NOT NULL
-              AND year >= ? AND year <= ?
-    """, [year_min, year_max]).fetchall()
+
+    if period_matched:
+        # Load all per-century columns for this source + the median fallback
+        all_cols = [r[1] for r in conn.execute("PRAGMA table_info(texts)").fetchall()]
+        source_cols = [c for c in all_cols if c.startswith(f"Abs-Conc.{source}.")]
+        col_sql = ", ".join(f'"{c}"' for c in source_cols)
+        rows = conn.execute(f"""
+            SELECT id, corpus_name, year, genre_harmonized, {col_sql}
+            FROM texts
+            WHERE year IS NOT NULL AND year >= ? AND year <= ?
+        """, [year_min, year_max]).fetchall()
+        columns = ["id", "corpus_name", "year", "genre_harmonized"] + source_cols
+    else:
+        rows = conn.execute(f"""
+            SELECT id, corpus_name, year, genre_harmonized, "{col}"
+            FROM texts
+            WHERE year IS NOT NULL AND "{col}" IS NOT NULL
+                  AND year >= ? AND year <= ?
+        """, [year_min, year_max]).fetchall()
+        columns = ["id", "corpus_name", "year", "genre_harmonized", col]
+
     conn.close()
 
-    df = pd.DataFrame(rows, columns=["id", "corpus_name", "year", "genre_harmonized", col])
+    df = pd.DataFrame(rows, columns=columns)
     df["year"] = pd.to_numeric(df["year"], errors="coerce")
+
+    if period_matched:
+        df = assign_period_score(df, source=source)
+        score_col = "period_score"
+        fe = ["norm_period"]
+    else:
+        score_col = col
+        fe = None
 
     results = []
     for g in genre:
         gdf = df[df["genre_harmonized"] == g]
+        if period_matched:
+            gdf = gdf.dropna(subset=[score_col])
         if len(gdf) < 30:
             continue
 
         adj = adjust_scores(
-            gdf, score_col=col, min_year=year_min, max_year=year_max,
+            gdf, score_col=score_col, min_year=year_min, max_year=year_max,
+            fixed_effects=fe,
         )
         if adj.empty:
             continue

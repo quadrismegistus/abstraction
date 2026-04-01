@@ -6,6 +6,7 @@ export const selectedGenres = writable<string[]>(['Fiction', 'Poetry', 'Periodic
 export const selectedCorpora = writable<string[]>([]);
 export const yearRange = writable<[number, number]>([1500, 2020]);
 export const chunkSize = writable(500);
+export const periodMatched = writable(false);
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

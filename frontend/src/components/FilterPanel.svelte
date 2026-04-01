@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -48,6 +48,11 @@
         <option value={n.col} selected={n.col === $norm}>{n.label}</option>
       {/each}
     </select>
+    <label class="toggle">
+      <input type="checkbox" checked={$periodMatched}
+             onchange={() => $periodMatched = !$periodMatched} />
+      Period-matched norms
+    </label>
   </section>
 
   <section>
@@ -107,6 +112,7 @@
   h4 { margin: 0.75rem 0 0.25rem; font-size: 0.85rem; color: #555; }
   section { margin-bottom: 0.5rem; }
   select { width: 100%; padding: 0.25rem; font-size: 0.8rem; }
+  .toggle { margin-top: 6px; font-size: 0.8rem; color: #666; }
   .checkbox-group { display: flex; flex-direction: column; gap: 2px; }
   .checkbox-group.scrollable { max-height: 200px; overflow-y: auto; }
   label { display: flex; align-items: center; gap: 4px; cursor: pointer; }

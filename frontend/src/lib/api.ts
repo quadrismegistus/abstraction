@@ -37,6 +37,7 @@ export function fetchArcAggregated(params: {
 export function fetchArcByGenre(params: {
   col?: string; genre?: string[];
   year_min?: string; year_max?: string;
+  period_matched?: string;
 }) {
   return fetchJson<GenreArc[]>('/arc/by-genre', params);
 }
