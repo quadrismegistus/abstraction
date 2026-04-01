@@ -3,7 +3,11 @@
 from fastapi import APIRouter, Query
 
 from ..db import get_connection
-from ..models import ArcAggregated, ArcBin, ArcText, ArcTexts, CorpusArc, CorpusArcBin
+from ..models import (
+    ArcAggregated, ArcBin, ArcText, ArcTexts,
+    CorpusArc, CorpusArcBin,
+    GenreArc, AdjustedPoint, LoessPoint,
+)
 
 router = APIRouter()
 
@@ -187,3 +191,115 @@ def arc_texts(
     ]
 
     return ArcTexts(texts=texts, total=total, page=page, page_size=page_size)
+
+
+@router.get("/by-genre", response_model=list[GenreArc])
+def arc_by_genre(
+    col: str = DEFAULT_COL,
+    genre: list[str] = Query(default=["Fiction", "Poetry", "Periodical"]),
+    year_min: float = 1600,
+    year_max: float = 2020,
+    loess_span: float = 0.3,
+    invert: bool = True,
+):
+    """Return corpus-adjusted decade bins + LOESS per genre.
+
+    Calls analysis.adjust_scores() per genre to remove corpus fixed effects,
+    then fits LOESS on the adjusted points. Matches the book figure approach.
+    """
+    import pandas as pd
+    from ...analysis import adjust_scores, load_all_scored
+
+    # Load from SQLite into a DataFrame for adjust_scores
+    conn = get_connection()
+    norm_cols = [r[1] for r in conn.execute("PRAGMA table_info(texts)").fetchall()
+                 if r[1].startswith("Abs-Conc.")]
+    # Only load the column we need + metadata
+    rows = conn.execute(f"""
+        SELECT id, corpus_name, year, genre_harmonized, "{col}"
+        FROM texts
+        WHERE year IS NOT NULL AND "{col}" IS NOT NULL
+              AND year >= ? AND year <= ?
+    """, [year_min, year_max]).fetchall()
+    conn.close()
+
+    df = pd.DataFrame(rows, columns=["id", "corpus_name", "year", "genre_harmonized", col])
+    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+
+    results = []
+    for g in genre:
+        gdf = df[df["genre_harmonized"] == g]
+        if len(gdf) < 30:
+            continue
+
+        adj = adjust_scores(
+            gdf, score_col=col, min_year=year_min, max_year=year_max,
+        )
+        if adj.empty:
+            continue
+
+        sign = -1.0 if invert else 1.0
+
+        # Build points
+        points = []
+        for _, row in adj.iterrows():
+            points.append(AdjustedPoint(
+                year=float(row["year"]),
+                score=float(row["score"]) * sign,
+                adjusted=float(row["adjusted"]) * sign,
+                n_texts=int(row["n_texts"]),
+                corpus=row.get("corpus"),
+            ))
+
+        # LOESS on adjusted scores
+        loess_points = _compute_loess(
+            adj["year"].values,
+            adj["adjusted"].values * sign,
+            span=loess_span,
+        )
+
+        results.append(GenreArc(
+            genre=g,
+            points=points,
+            loess=loess_points,
+            n_texts_total=int(adj["n_texts"].sum()),
+            n_corpora=adj["corpus"].nunique() if "corpus" in adj.columns else 1,
+        ))
+
+    return results
+
+
+def _compute_loess(years, values, span=0.3, n_points=200):
+    """Compute LOESS smooth with SE band."""
+    from statsmodels.nonparametric.smoothers_lowess import lowess
+    import numpy as np
+
+    # Sort
+    order = np.argsort(years)
+    x = years[order].astype(float)
+    y = values[order].astype(float)
+
+    # Fit LOESS
+    result = lowess(y, x, frac=span, return_sorted=True)
+    lx, ly = result[:, 0], result[:, 1]
+
+    # Estimate SE via residuals (simple approach: local residual SD)
+    residuals = y - np.interp(x, lx, ly)
+    # Rolling window SE approximation
+    window = max(3, int(len(x) * span))
+    se_vals = np.full_like(ly, np.std(residuals))
+    for i in range(len(ly)):
+        lo = max(0, i - window // 2)
+        hi = min(len(residuals), i + window // 2 + 1)
+        if hi - lo >= 3:
+            se_vals[i] = np.std(residuals[lo:hi])
+
+    points = []
+    for i in range(len(lx)):
+        points.append(LoessPoint(
+            year=float(lx[i]),
+            fitted=float(ly[i]),
+            se_lo=float(ly[i] - se_vals[i]),
+            se_hi=float(ly[i] + se_vals[i]),
+        ))
+    return points

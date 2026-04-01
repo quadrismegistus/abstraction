@@ -70,6 +70,29 @@ export interface TrajectoryResponse {
   overall_score: number | null;
 }
 
+export interface AdjustedPoint {
+  year: number;
+  score: number;
+  adjusted: number;
+  n_texts: number;
+  corpus: string | null;
+}
+
+export interface LoessPoint {
+  year: number;
+  fitted: number;
+  se_lo: number;
+  se_hi: number;
+}
+
+export interface GenreArc {
+  genre: string;
+  points: AdjustedPoint[];
+  loess: LoessPoint[];
+  n_texts_total: number;
+  n_corpora: number;
+}
+
 export interface PassageToken {
   text: string;
   is_punct: boolean;

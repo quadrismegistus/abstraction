@@ -1,52 +1,47 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange } from '$lib/stores';
-  import { fetchArcByCorpus, fetchArcAggregated } from '$lib/api';
-  import type { CorpusArc, ArcBin } from '$lib/types';
+  import { norm, selectedGenres, yearRange } from '$lib/stores';
+  import { fetchArcByGenre } from '$lib/api';
+  import type { GenreArc } from '$lib/types';
 
   let plotDiv: HTMLDivElement;
   let Plotly: any;
-  let corpora: CorpusArc[] = $state([]);
-  let overallBins: ArcBin[] = $state([]);
+  let genreArcs: GenreArc[] = $state([]);
   let loading = $state(true);
-  let totalTexts = $state(0);
 
-  const genreColors: Record<string, string> = {
-    'Fiction': '#2196F3',
-    'Poetry': '#4CAF50',
-    'Drama': '#FF9800',
-    'Periodical': '#9C27B0',
-    'Essay/Treatise': '#795548',
-    'Letters': '#00BCD4',
-    'Legal': '#607D8B',
-    'Political': '#F44336',
-    'Sermon': '#FF5722',
-    'Biography': '#3F51B5',
-    'Nonfiction': '#8BC34A',
-    'Criticism': '#E91E63',
+  // Match the book figure's visual style
+  const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
+    'Fiction':    { color: '#222',    dash: 'solid',    width: 3 },
+    'Poetry':     { color: '#666',    dash: 'dashdot',  width: 2.5 },
+    'Periodical': { color: '#aaa',    dash: 'dash',     width: 2.5 },
+    'Drama':      { color: '#cc6600', dash: 'dot',      width: 2 },
+    'Essay/Treatise': { color: '#336699', dash: 'longdash', width: 2 },
   };
+
+  // Corpus shapes for scatter points
+  const corpusShapes: string[] = [
+    'circle', 'square', 'diamond', 'triangle-up', 'triangle-down',
+    'pentagon', 'hexagon', 'star', 'cross', 'x',
+    'triangle-left', 'triangle-right', 'diamond-wide', 'hourglass',
+  ];
 
   function getParams() {
     const p: Record<string, string | string[]> = {};
     p.col = $norm;
-    if ($selectedGenres.length) p.genre = $selectedGenres;
-    if ($selectedCorpora.length) p.corpus = $selectedCorpora;
-    if ($yearRange[0] > 1000) p.year_min = String($yearRange[0]);
-    if ($yearRange[1] < 2025) p.year_max = String($yearRange[1]);
+    const genres = $selectedGenres.length
+      ? $selectedGenres
+      : ['Fiction', 'Poetry', 'Periodical'];
+    p.genre = genres;
+    p.year_min = String($yearRange[0]);
+    p.year_max = String($yearRange[1]);
     return p;
   }
 
   async function loadData() {
     loading = true;
     try {
-      const [corpusData, aggData] = await Promise.all([
-        fetchArcByCorpus(getParams()),
-        fetchArcAggregated(getParams()),
-      ]);
-      corpora = corpusData;
-      overallBins = aggData.bins;
-      totalTexts = aggData.total;
+      genreArcs = await fetchArcByGenre(getParams());
       renderPlot();
     } catch (e) {
       console.error('Failed to load arc data:', e);
@@ -55,80 +50,120 @@
   }
 
   function renderPlot() {
-    if (!Plotly || !plotDiv) return;
+    if (!Plotly || !plotDiv || genreArcs.length === 0) return;
 
     const traces: any[] = [];
 
-    // Overall ribbon (q25-q75) from aggregated data
-    if (overallBins.length > 0) {
-      const decades = overallBins.map(b => b.decade);
-      traces.push({
-        x: decades,
-        y: overallBins.map(b => b.q75),
-        type: 'scatter', mode: 'lines',
-        line: { color: 'transparent' },
-        showlegend: false, hoverinfo: 'skip',
-      });
-      traces.push({
-        x: decades,
-        y: overallBins.map(b => b.q25),
-        type: 'scatter', mode: 'lines',
-        fill: 'tonexty',
-        fillcolor: 'rgba(0, 0, 0, 0.06)',
-        line: { color: 'transparent' },
-        name: 'Overall IQR',
-        hoverinfo: 'skip',
-      });
-      traces.push({
-        x: decades,
-        y: overallBins.map(b => b.median),
-        type: 'scatter', mode: 'lines',
-        line: { color: 'rgba(0, 0, 0, 0.3)', width: 1.5, dash: 'dot' },
-        name: 'Overall median',
-        hovertemplate: 'Decade: %{x}<br>Median: %{y:.3f}<extra></extra>',
-      });
+    // Build a global corpus→shape map
+    const allCorpora = [...new Set(genreArcs.flatMap(g => g.points.map(p => p.corpus)))];
+    const corpusShapeMap: Record<string, string> = {};
+    allCorpora.forEach((c, i) => {
+      if (c) corpusShapeMap[c] = corpusShapes[i % corpusShapes.length];
+    });
+
+    // Max n_texts for sizing
+    const maxN = Math.max(...genreArcs.flatMap(g => g.points.map(p => p.n_texts)), 1);
+
+    for (const arc of genreArcs) {
+      const style = genreStyles[arc.genre] || { color: '#999', dash: 'solid', width: 2 };
+
+      // SE ribbon (filled area between se_lo and se_hi)
+      if (arc.loess.length > 0) {
+        const lx = arc.loess.map(p => p.year);
+        traces.push({
+          x: [...lx, ...lx.slice().reverse()],
+          y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
+          type: 'scatter',
+          mode: 'lines',
+          fill: 'toself',
+          fillcolor: `rgba(150,150,150,0.15)`,
+          line: { color: 'transparent' },
+          showlegend: false,
+          hoverinfo: 'skip',
+        });
+      }
+
+      // Scatter: corpus-adjusted points, sized by n_texts, shaped by corpus
+      const pts = arc.points;
+      // Group by corpus for shapes
+      const byCorpus: Record<string, typeof pts> = {};
+      for (const p of pts) {
+        const c = p.corpus || 'unknown';
+        (byCorpus[c] ??= []).push(p);
+      }
+
+      for (const [corpus, cPts] of Object.entries(byCorpus)) {
+        traces.push({
+          x: cPts.map(p => p.year),
+          y: cPts.map(p => p.adjusted),
+          customdata: cPts.map(p => [corpus, p.n_texts]),
+          type: 'scatter',
+          mode: 'markers',
+          marker: {
+            color: style.color,
+            symbol: corpusShapeMap[corpus] || 'circle',
+            size: cPts.map(p => 3 + Math.sqrt(p.n_texts / maxN) * 12),
+            opacity: 0.35,
+            line: { width: 0.5, color: style.color },
+          },
+          name: `${arc.genre}: ${corpus}`,
+          legendgroup: arc.genre,
+          showlegend: false,
+          hovertemplate:
+            `<b>${arc.genre}</b> — ${corpus}<br>` +
+            'Decade: %{x}<br>' +
+            'Score: %{y:.3f}<br>' +
+            'Texts: %{customdata[1]:,}' +
+            '<extra></extra>',
+        });
+      }
+
+      // LOESS line
+      if (arc.loess.length > 0) {
+        traces.push({
+          x: arc.loess.map(p => p.year),
+          y: arc.loess.map(p => p.fitted),
+          type: 'scatter',
+          mode: 'lines',
+          line: { color: style.color, dash: style.dash, width: style.width },
+          name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts, ${arc.n_corpora} corpora)`,
+          legendgroup: arc.genre,
+          hovertemplate:
+            `<b>${arc.genre}</b><br>` +
+            'Year: %{x}<br>' +
+            'Score: %{y:.3f}<extra></extra>',
+        });
+      }
     }
 
-    // One line per corpus, colored by genre
-    for (const c of corpora) {
-      if (c.bins.length < 2) continue; // skip corpora with too few decades
-      const color = genreColors[c.genre || ''] || '#999';
-      traces.push({
-        x: c.bins.map(b => b.decade),
-        y: c.bins.map(b => b.mean),
-        customdata: c.bins.map(() => c.corpus),
-        type: 'scatter',
-        mode: 'lines',
-        line: { color, width: 2 },
-        name: `${c.corpus} (${c.genre || '?'}, ${c.n_texts.toLocaleString()})`,
-        hovertemplate:
-          `<b>${c.corpus}</b><br>` +
-          `${c.genre} &middot; ${c.n_texts.toLocaleString()} texts<br>` +
-          'Decade: %{x}<br>' +
-          'Mean: %{y:.3f}<extra></extra>',
-      });
-    }
+    const totalTexts = genreArcs.reduce((s, g) => s + g.n_texts_total, 0);
 
     Plotly.react(plotDiv, traces, {
       title: {
-        text: `Abstraction Arc — ${corpora.length} corpora, ${totalTexts.toLocaleString()} texts`,
+        text: `Abstraction Arc (${totalTexts.toLocaleString()} texts)`,
         font: { size: 14 },
       },
-      xaxis: { title: 'Year', range: [$yearRange[0], $yearRange[1]] },
-      yaxis: { title: 'Abstractness (mean score)', zeroline: true },
+      xaxis: {
+        title: 'Decade of publication',
+        range: [$yearRange[0], $yearRange[1]],
+        dtick: 50,
+        gridcolor: 'rgba(0,0,0,0.08)',
+      },
+      yaxis: {
+        title: '<< More concrete | More abstract >>',
+        zeroline: true,
+        zerolinecolor: 'rgba(0,0,0,0.2)',
+        gridcolor: 'rgba(0,0,0,0.08)',
+      },
       margin: { t: 40, r: 20, b: 50, l: 60 },
-      legend: { orientation: 'v' as const, x: 1.02, y: 1, font: { size: 10 } },
+      legend: {
+        orientation: 'v' as const,
+        x: 1.02, y: 1,
+        font: { size: 11 },
+      },
       hovermode: 'closest' as const,
+      plot_bgcolor: 'white',
     }, { responsive: true, scrollZoom: true });
-
-    // Click a corpus line → navigate to corpus detail view
-    plotDiv.removeAllListeners?.('plotly_click');
-    plotDiv.on('plotly_click', (data: any) => {
-      const point = data.points[0];
-      if (point?.customdata) {
-        goto(`/corpus/${point.customdata}`);
-      }
-    });
   }
 
   onMount(async () => {
@@ -137,7 +172,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange;
+    $norm; $selectedGenres; $yearRange;
     if (Plotly) loadData();
   });
 </script>
@@ -151,7 +186,7 @@
 
 <style>
   .chart-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .plot { flex: 1; min-height: 400px; }
+  .plot { flex: 1; min-height: 500px; }
   .loading {
     padding: 1rem; text-align: center; color: #666;
     font-style: italic;

@@ -93,6 +93,29 @@ class PassageResponse(BaseModel):
     n_neutral: int = 0
 
 
+class AdjustedPoint(BaseModel):
+    year: float
+    score: float
+    adjusted: float
+    n_texts: int
+    corpus: str | None = None
+
+
+class LoessPoint(BaseModel):
+    year: float
+    fitted: float
+    se_lo: float
+    se_hi: float
+
+
+class GenreArc(BaseModel):
+    genre: str
+    points: list[AdjustedPoint]
+    loess: list[LoessPoint]
+    n_texts_total: int
+    n_corpora: int
+
+
 class ScoreRequest(BaseModel):
     text: str
     col: str = "Abs-Conc.Median.median"
