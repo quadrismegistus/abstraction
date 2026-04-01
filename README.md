@@ -346,3 +346,63 @@ python -m pytest tests/ -v
 **Scoring** (continuous): weighted-mean concreteness per text across 56 norm columns. Used for trend fitting and regression.
 
 **Counting** (proportions): sliding 100-word window, counting abstract/concrete/neither words. Used for human-readable ratios ("26% of words were abstract at the 1750s peak vs 10% in the 1990s").
+
+## How historical word norms are built
+
+Modern psycholinguistic norms (Paivio, Brysbaert, etc.) tell us how abstract or concrete a word is *today*. But language changes: "virtue" was used more concretely in the 17th century (a force you could almost touch) than in the 19th (a vague moral quality). To capture this, we train Word2Vec models on period-specific corpora and use them to build historical concreteness scores.
+
+### The pipeline
+
+**Step 1: Skipgrams.** For each corpus-period (e.g. EEBO-TCP 1500-1600, ECCO 1700-1800), extract word co-occurrence pairs from the texts. These are saved as compressed text files.
+
+```
+abstraction train-skipgrams BLBooks --output-dir data/models
+```
+
+**Step 2: Word2Vec training.** Train Word2Vec (100 dimensions, window=10) on the skipgrams. Multiple runs per corpus-period (target: 5) provide robustness — the median across runs smooths out random initialization effects.
+
+```
+abstraction train-all data/models --runs 5
+```
+
+**Step 3: Contrast vectors.** From the modern norms, we know which words are abstract (z <= -1: *virtue, justice, reason*...) and which are concrete (z >= 1: *stone, rock, hand*...). In each trained model, we average the embeddings of the abstract words and the concrete words to get two centroids, then take their difference. This "contrast vector" defines the abstract-concrete axis *in that model's embedding space*. Only NLTK function words (the, of, is...) are excluded from the centroids; all content words participate.
+
+**Step 4: Projection.** Every word in the model's vocabulary is scored by its cosine similarity to the contrast vector, then z-scored. The result: a concreteness score for every word, in the semantic context of that century. Negative = abstract, positive = concrete, matching the convention of the empirical norms.
+
+```
+abstraction gen-vecnorms
+```
+
+**Step 5: Aggregation.** Within each century, scores are medianed across runs (within a corpus), then across corpora (giving each corpus equal weight regardless of size). The result is one z-score per word per century: `Abs-Conc.Median.C16`, `Abs-Conc.Median.C17`, etc. A final cross-century median (`Abs-Conc.Median.median`) provides a single stable score informed by all periods.
+
+**Step 6: Combined norms.** The vector norms are merged with the empirical norms into a single lookup table (`allnorms`): 8 empirical sources x 1 period ("orig") + 8 sources x 6 centuries + 8 sources x 1 median = 64 columns. This is what the scoring pipeline uses to evaluate texts.
+
+### Current models (models_century5)
+
+| Century | Corpora | Total words | Runs |
+|---------|---------|------------:|------|
+| C16 | EEBO-TCP | 67M | 1 |
+| C17 | EEBO-TCP, BL Books | 550M | 1-5 |
+| C18 | ECCO, ECCO-TCP, Evans-TCP, BPO, BL Books | 2.9B | 1-5 |
+| C19 | BL Books, BPO, COHA | 4.3B | 1-5 |
+| C20 | BPO, COHA, COCA | 747M | 1-2 |
+| C21 | COCA | 299M | 1-2 |
+
+Per-corpus median aggregation gives each corpus equal weight. More corpora per century means more robust norms. The literary corpora being *scored* (Chadwyck Fiction, Hathi, etc.) are distinct from the corpora used to *build* the models, so the measurement is not circular.
+
+## Scoring texts
+
+Once the combined norms exist, scoring a text is a weighted mean: tokenize, look up each word's z-score, average. Stopwords and proper names are excluded from scoring (they would dominate token counts) but the underlying norms table contains all words.
+
+```bash
+# Score the 19 corpora that contribute to Fiction/Poetry/Periodical
+abstraction score-corpora [--force]
+
+# Score ALL corpora with freqs/ folders (including ECCO, etc.)
+abstraction score-corpora --all [--force]
+
+# Score a single corpus
+abstraction score-corpus canon_fiction [--force]
+```
+
+Scores are written as incremental CSVs to `data/scores/v8-raw/` (one per corpus, one row per text, 56 norm columns). The arc analysis pipeline then loads these, merges with corpus metadata, applies corpus fixed effects (`adjust_scores()`), and fits piecewise or LOESS trends per genre.
