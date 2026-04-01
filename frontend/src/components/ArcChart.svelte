@@ -175,6 +175,8 @@
     });
   }
 
+  let debounceTimer: ReturnType<typeof setTimeout>;
+
   onMount(async () => {
     Plotly = await import('plotly.js-dist-min');
     loadData();
@@ -182,7 +184,10 @@
 
   $effect(() => {
     $norm; $selectedGenres; $yearRange;
-    if (Plotly) loadData();
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      if (Plotly) loadData();
+    }, 400);
   });
 </script>
 
