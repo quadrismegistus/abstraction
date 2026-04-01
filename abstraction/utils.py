@@ -37,7 +37,7 @@ def save_df(df, fn):
     os.makedirs(os.path.dirname(fn), exist_ok=True)
     if fn.endswith(".feather") or fn.endswith(".ft"):
         df.reset_index().to_feather(fn)
-    elif fn.endswith(".pkl"):
+    elif fn.endswith(".pkl") or fn.endswith(".pkl.gz"):
         df.to_pickle(fn)
     elif fn.endswith(".csv.gz"):
         df.to_csv(fn, index=True)

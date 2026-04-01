@@ -319,6 +319,12 @@ def _gen_vecnorms_for_model(pathd, words=None):
     else:
         word2vec = {w: kv[w] for w in words if w in kv}
     dfdist = compute_vec2vec_dists(word2vec, field2vec)
+    # Negate distances so that words CLOSE to the concrete pole get HIGH
+    # values, matching the orig norms convention (positive = concrete).
+    # cosine distance: low = similar to Conc-Abs vector = concrete.
+    # After negation: high = concrete, low = abstract. Then z-scoring
+    # preserves this: positive z = concrete, negative z = abstract.
+    dfdist = -dfdist
     norms = []
     for col in dfdist.columns:
         _add_series_to_norms(dfdist[col], source=col, norms=norms)
