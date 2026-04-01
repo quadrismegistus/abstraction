@@ -842,6 +842,20 @@ DEFAULT_MIN_YEAR = 1600
 DEFAULT_MAX_YEAR = 2000
 DEFAULT_AGG_BIN = 10  # aggregate by decade
 
+# Corpora that contribute to the three main genres (Fiction, Poetry, Periodical).
+# Used as the default for score-corpora and arc analysis.
+ARC_CORPORA = [
+    # Fiction
+    "canon_fiction", "chadwyck", "chicago", "gale_amfic", "gildedage",
+    "hathi_englit", "internet_archive", "litlab", "long_arc_prestige", "markmark",
+    # Poetry
+    "chadwyck_poetry", "eebo_tcp",
+    # Periodical
+    "bpo", "coha", "new_yorker", "spectator",
+    # Other (contribute texts to multiple genres via metadata)
+    "clmet", "sellers", "tedjdh",
+]
+
 # Corpora to exclude from cross-corpus analyses
 EXCLUDE_CORPORA = {
     "artfl",        # French

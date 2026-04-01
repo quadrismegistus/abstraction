@@ -6,7 +6,8 @@ import sys
 
 def cmd_score_corpora(args):
     from .scoring import score_all_corpora
-    score_all_corpora(force=args.force, modernize=args.modernize)
+    only = "all" if args.all else None
+    score_all_corpora(force=args.force, modernize=args.modernize, only=only)
 
 
 def cmd_score_corpus(args):
@@ -251,7 +252,8 @@ def main():
     sub = parser.add_subparsers(dest="command")
 
     # score-corpora: score all corpora with freqs/ folders
-    p = sub.add_parser("score-corpora", help="Score all corpora with freqs/ folders")
+    p = sub.add_parser("score-corpora", help="Score corpora (default: arc corpora only)")
+    p.add_argument("--all", action="store_true", help="Score ALL corpora with freqs/ folders (default: arc corpora only)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v8/ instead of v8-raw/)")
 

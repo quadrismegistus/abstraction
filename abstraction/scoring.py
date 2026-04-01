@@ -362,8 +362,9 @@ def score_all_corpora(
     output_dir=SCORES_DIR,
     force=False,
     modernize=False,
+    only=None,
 ):
-    """Score all corpora that have freqs/ folders.
+    """Score corpora that have freqs/ folders.
 
     Saves one CSV per corpus to output_dir/v8/, appending incrementally.
     Resumable: skips already-scored text IDs within each corpus.
@@ -381,20 +382,36 @@ def score_all_corpora(
     modernize : bool
         If True (default), prefer modernized spelling for norm lookups.
         Outputs go to v8/ (modernized) or v8-raw/ (unmodernized).
+    only : list of str, optional
+        If provided, score only these corpora. If None, defaults to
+        ARC_CORPORA (the corpora that contribute to Fiction/Poetry/Periodical).
+        Pass only="all" to score every corpus with a freqs/ folder.
 
     Returns
     -------
     dict of {corpus_name: DataFrame}
     """
+    from .analysis import ARC_CORPORA
+
     output_dir = _version_dir(output_dir, "v8", modernize)
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
 
+    # Resolve which corpora to include
+    if only == "all":
+        include = None  # no filter
+    elif only is not None:
+        include = set(only)
+    else:
+        include = set(ARC_CORPORA)
+
     # discover corpora with freqs/ dirs, dedup by realpath
     seen_realpaths = {}
     corpora = []
     for name in sorted(os.listdir(corpora_dir)):
+        if include is not None and name not in include:
+            continue
         corpus_dir = os.path.join(corpora_dir, name)
         freqs_dir = os.path.join(corpus_dir, "freqs")
         if not os.path.isdir(freqs_dir):
