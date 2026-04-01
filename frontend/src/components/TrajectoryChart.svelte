@@ -79,7 +79,7 @@
     plotDiv.on('plotly_click', (d: any) => {
       const idx = d.points[0]?.x;
       if (idx !== undefined) {
-        goto(`/passage/${corpus}/${textId}/${idx}?chunk_size=${$chunkSize}`);
+        goto(`/passage/${corpus}/${textId}?chunk=${idx}&chunk_size=${$chunkSize}`);
       }
     });
   }

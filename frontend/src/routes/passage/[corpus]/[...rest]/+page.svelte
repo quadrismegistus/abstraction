@@ -1,13 +1,14 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { chunkSize } from '$lib/stores';
-  import PassageReader from '../../../../../components/PassageReader.svelte';
+  import PassageReader from '../../../../components/PassageReader.svelte';
 
   let corpus = $derived(page.params.corpus);
-  let textId = $derived(page.params.id);
-  let chunkIndex = $derived(Number(page.params.index));
+  // rest = the text ID (may contain slashes)
+  // chunk index and chunk_size come from query params
+  let textId = $derived(page.params.rest);
+  let chunkIndex = $derived(Number(page.url.searchParams.get('chunk') ?? '0'));
 
-  // Read chunk_size from URL if present, sync to store
   $effect(() => {
     const urlChunk = page.url.searchParams.get('chunk_size');
     if (urlChunk) $chunkSize = Number(urlChunk);
