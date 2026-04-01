@@ -46,15 +46,20 @@
     return 'transparent';
   }
 
-  /** Whether to insert a space before this token (mirrors passages.py spacing logic). */
+  /**
+   * Whether to insert a space before this token.
+   * Mirrors passages.py:_render_paragraph spacing logic:
+   * - Space before words (not before punctuation)
+   * - No space after hyphens/dashes
+   */
   function needsSpaceBefore(tokens: PassageToken[], i: number): boolean {
     if (i === 0) return false;
     const cur = tokens[i];
     const prev = tokens[i - 1];
-    // No space after hyphens/dashes
-    if (prev.is_punct && ['-', '\u2013', '\u2014'].includes(prev.text.trim())) return false;
     // No space before punctuation
     if (cur.is_punct) return false;
+    // No space after hyphens/dashes
+    if (prev.is_punct && ['-', '\u2013', '\u2014'].includes(prev.text)) return false;
     return true;
   }
 
@@ -70,32 +75,14 @@
   {:else if error}
     <div class="error">Error: {error}</div>
   {:else if data}
+    {@const total = data.n_abstract + data.n_concrete + data.n_neutral}
     <div class="stats">
-      {@const total = data.n_abstract + data.n_concrete + data.n_neutral}
       <span class="stat abstract">{data.n_abstract} abstract ({total ? (data.n_abstract/total*100).toFixed(1) : 0}%)</span>
       <span class="stat concrete">{data.n_concrete} concrete ({total ? (data.n_concrete/total*100).toFixed(1) : 0}%)</span>
       <span class="stat neutral">{data.n_neutral} neutral</span>
     </div>
 
-    <div class="passage">
-      {#each data.tokens as token, i}
-        {#if needsSpaceBefore(data.tokens, i)}{' '}{/if}
-        {#if token.is_punct}
-          <span class="punct">{token.text}</span>
-        {:else}
-          <span
-            class="word"
-            class:abstract={token.is_abstract}
-            class:concrete={token.is_concrete}
-            class:unscored={token.score === null}
-            style="color: {wordColor(token)}; background: {wordBg(token)}"
-            role="term"
-            onmouseenter={() => hoveredToken = token}
-            onmouseleave={() => hoveredToken = null}
-          >{token.text}</span>
-        {/if}
-      {/each}
-    </div>
+    <div class="passage">{#each data.tokens as token, i}{#if needsSpaceBefore(data.tokens, i)}{' '}{/if}{#if token.is_punct}<span class="punct">{token.text}</span>{:else}<span class="word" class:abstract={token.is_abstract} class:concrete={token.is_concrete} class:unscored={token.score === null} style="color: {wordColor(token)}; background: {wordBg(token)}" role="term" onmouseenter={() => hoveredToken = token} onmouseleave={() => hoveredToken = null}>{token.text}</span>{/if}{/each}</div>
 
     {#if hoveredToken && !hoveredToken.is_punct}
       <div class="tooltip">
@@ -128,10 +115,10 @@
   }
   .punct { color: #444; }
   .word {
-    cursor: default; padding: 1px 2px; border-radius: 2px;
+    cursor: default; border-radius: 2px;
     transition: background 0.1s;
   }
-  .word:hover { outline: 2px solid rgba(0,0,0,0.3); outline-offset: 1px; }
+  .word:hover { outline: 2px solid rgba(0,0,0,0.3); outline-offset: 0px; }
   .word.unscored { color: #888; }
   .word.abstract { font-weight: 500; }
   .word.concrete { font-weight: 600; }

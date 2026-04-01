@@ -27,6 +27,19 @@ export interface ArcAggregated {
   total: number;
 }
 
+export interface CorpusArcBin {
+  decade: number;
+  mean: number | null;
+  n: number;
+}
+
+export interface CorpusArc {
+  corpus: string;
+  genre: string | null;
+  n_texts: number;
+  bins: CorpusArcBin[];
+}
+
 export interface ArcText {
   id: string;
   corpus: string;

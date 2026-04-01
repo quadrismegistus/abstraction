@@ -1,5 +1,5 @@
 import type {
-  CorpusInfo, NormInfo, ArcAggregated, ArcTexts,
+  CorpusInfo, NormInfo, ArcAggregated, ArcTexts, CorpusArc,
   TrajectoryResponse, PassageResponse
 } from './types';
 
@@ -32,6 +32,13 @@ export function fetchArcAggregated(params: {
   year_min?: string; year_max?: string; bin_size?: string;
 }) {
   return fetchJson<ArcAggregated>('/arc/aggregated', params);
+}
+
+export function fetchArcByCorpus(params: {
+  col?: string; genre?: string[]; corpus?: string[];
+  year_min?: string; year_max?: string; bin_size?: string;
+}) {
+  return fetchJson<CorpusArc[]>('/arc/by-corpus', params);
 }
 
 export function fetchArcTexts(params: {

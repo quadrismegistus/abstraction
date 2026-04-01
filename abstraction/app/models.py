@@ -32,6 +32,19 @@ class ArcAggregated(BaseModel):
     total: int
 
 
+class CorpusArcBin(BaseModel):
+    decade: int
+    mean: float | None
+    n: int
+
+
+class CorpusArc(BaseModel):
+    corpus: str
+    genre: str | None
+    n_texts: int
+    bins: list[CorpusArcBin]
+
+
 class ArcText(BaseModel):
     id: str
     corpus: str

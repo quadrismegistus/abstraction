@@ -22,7 +22,8 @@ def _score_text(text: str, col: str) -> PassageResponse:
     """
     scores = get_norm_dict(col)
     spelling_d = get_spelling_modernizer()
-    tokens_raw = tokenize_agnostic(text.lower())
+    # Tokenize original text (preserve case), lowercase only for lookup
+    tokens_raw = tokenize_agnostic(text)
 
     tokens = []
     n_abs = 0
@@ -34,12 +35,16 @@ def _score_text(text: str, col: str) -> PassageResponse:
             continue
 
         if not tok[0].isalpha():
-            # Punctuation / whitespace token
+            # Skip whitespace-only tokens (spaces, newlines) —
+            # the frontend handles spacing between tokens.
+            if tok.strip() == '':
+                continue
+            # Meaningful punctuation (commas, periods, dashes, etc.)
             tokens.append(PassageToken(text=tok, is_punct=True))
             continue
 
-        # Alphabetic word — score it
-        s, _ = _modernize_score(tok, scores, spelling_d)
+        # Alphabetic word — score it (lowercase for lookup, keep original case)
+        s, _ = _modernize_score(tok.lower(), scores, spelling_d)
         z = float(s) if s is not None else None
         is_abs = z is not None and z <= -1.0
         is_conc = z is not None and z >= 1.0
