@@ -3,9 +3,10 @@
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
-from ...scoring import score_words
+from ...scoring import get_norm_dict, _modernize_score
+from ...tokenize import tokenize_agnostic, get_spelling_modernizer
 from ...passages import render_passage_html
-from ..models import PassageResponse, ScoredWord, ScoreRequest
+from ..models import PassageResponse, PassageToken, ScoreRequest
 
 router = APIRouter()
 
@@ -13,21 +14,61 @@ DEFAULT_COL = "Abs-Conc.Median.median"
 
 
 def _score_text(text: str, col: str) -> PassageResponse:
-    """Score a text passage and return word-level data + HTML."""
-    df = score_words(text, col=col)
-    words = []
-    for _, row in df.iterrows():
-        words.append(ScoredWord(
-            position=int(row["position"]),
-            word=row["word"],
-            score=float(row["score"]) if not np.isnan(row["score"]) else None,
-            is_abstract=bool(row.get("is_abstract", False)),
-            is_concrete=bool(row.get("is_concrete", False)),
+    """Score a text passage, returning all tokens (words + punctuation) + HTML.
+
+    Mirrors the logic in passages.py:_render_paragraph — iterates over all
+    tokens from tokenize_agnostic, scores alphabetic ones, passes through
+    punctuation as-is.
+    """
+    scores = get_norm_dict(col)
+    spelling_d = get_spelling_modernizer()
+    tokens_raw = tokenize_agnostic(text.lower())
+
+    tokens = []
+    n_abs = 0
+    n_conc = 0
+    n_neutral = 0
+
+    for tok in tokens_raw:
+        if not tok:
+            continue
+
+        if not tok[0].isalpha():
+            # Punctuation / whitespace token
+            tokens.append(PassageToken(text=tok, is_punct=True))
+            continue
+
+        # Alphabetic word — score it
+        s, _ = _modernize_score(tok, scores, spelling_d)
+        z = float(s) if s is not None else None
+        is_abs = z is not None and z <= -1.0
+        is_conc = z is not None and z >= 1.0
+
+        if is_abs:
+            n_abs += 1
+        elif is_conc:
+            n_conc += 1
+        else:
+            n_neutral += 1
+
+        tokens.append(PassageToken(
+            text=tok,
+            is_punct=False,
+            score=z,
+            is_abstract=is_abs,
+            is_concrete=is_conc,
         ))
 
     html = render_passage_html(text, col=col)
 
-    return PassageResponse(text=text, words=words, html=html)
+    return PassageResponse(
+        text=text,
+        tokens=tokens,
+        html=html,
+        n_abstract=n_abs,
+        n_concrete=n_conc,
+        n_neutral=n_neutral,
+    )
 
 
 @router.get("/{corpus}/{text_id:path}/{chunk_index}", response_model=PassageResponse)
@@ -39,7 +80,6 @@ def get_passage(
     chunk_size: int = Query(default=500, ge=50, le=5000),
 ):
     """Get a specific passage chunk with word-level scoring."""
-    # Load the text and extract the requested chunk
     from .trajectory import _get_text_and_metadata, _chunk_text_simple
 
     txt, _meta, lltk_text = _get_text_and_metadata(corpus, text_id)

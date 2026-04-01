@@ -57,9 +57,9 @@ export interface TrajectoryResponse {
   overall_score: number | null;
 }
 
-export interface ScoredWord {
-  position: number;
-  word: string;
+export interface PassageToken {
+  text: string;
+  is_punct: boolean;
   score: number | null;
   is_abstract: boolean;
   is_concrete: boolean;
@@ -67,6 +67,9 @@ export interface ScoredWord {
 
 export interface PassageResponse {
   text: string;
-  words: ScoredWord[];
+  tokens: PassageToken[];
   html: string;
+  n_abstract: number;
+  n_concrete: number;
+  n_neutral: number;
 }
