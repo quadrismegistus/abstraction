@@ -33,16 +33,17 @@
 
     const chunks = data.chunks;
     const x = chunks.map(c => c.index);
-    const y = chunks.map(c => c.score);
+    // Invert: more abstract = up (positive)
+    const y = chunks.map(c => c.score !== null ? -c.score : null);
 
     const traces: any[] = [
       {
         x, y,
         type: 'scatter',
         mode: 'lines+markers',
-        line: { color: '#2196F3', width: 2 },
+        line: { color: '#555', width: 2 },
         marker: { size: 6, color: y.map(s =>
-          s === null ? '#999' : s < 0 ? '#1565C0' : '#E65100'
+          s === null ? '#999' : s > 0 ? 'hsla(220,70%,55%,0.7)' : 'hsla(25,85%,55%,0.7)'
         )},
         hovertemplate: 'Passage %{x}<br>Score: %{y:.3f}<extra></extra>',
       },
@@ -50,13 +51,14 @@
 
     // Overall score reference line
     if (data.overall_score !== null) {
+      const invOverall = -data.overall_score;
       traces.push({
         x: [x[0], x[x.length - 1]],
-        y: [data.overall_score, data.overall_score],
+        y: [invOverall, invOverall],
         type: 'scatter',
         mode: 'lines',
         line: { color: '#999', dash: 'dash', width: 1 },
-        name: `Overall: ${data.overall_score.toFixed(3)}`,
+        name: `Overall: ${invOverall.toFixed(3)}`,
         hoverinfo: 'skip',
       });
     }
@@ -70,7 +72,7 @@
     Plotly.react(plotDiv, traces, {
       title: { text: title || `${corpus}/${textId}`, font: { size: 14 } },
       xaxis: { title: `Passage (${$chunkSize}-word chunks)` },
-      yaxis: { title: 'Abstractness score', zeroline: true },
+      yaxis: { title: '<< More concrete | More abstract >>', zeroline: true },
       margin: { t: 40, r: 20, b: 50, l: 60 },
       hovermode: 'closest',
     }, { responsive: true });

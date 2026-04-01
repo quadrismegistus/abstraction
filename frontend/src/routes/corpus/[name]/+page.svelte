@@ -79,7 +79,7 @@
     for (const [genre, gTexts] of Object.entries(byGenre)) {
       traces.push({
         x: gTexts.map(t => t.year),
-        y: gTexts.map(t => t.score),
+        y: gTexts.map(t => t.score !== null ? -t.score : null),
         customdata: gTexts.map(t => [t.id, t.corpus, t.title, t.author]),
         type: 'scattergl',
         mode: 'markers',
@@ -101,7 +101,7 @@
     Plotly.react(plotDiv, traces, {
       title: { text: `${corpusName} (${totalTexts.toLocaleString()} texts)`, font: { size: 14 } },
       xaxis: { title: 'Year' },
-      yaxis: { title: 'Abstractness', zeroline: true },
+      yaxis: { title: '<< More concrete | More abstract >>', zeroline: true },
       margin: { t: 40, r: 20, b: 50, l: 60 },
       legend: { orientation: 'h' as const, y: -0.15 },
       hovermode: 'closest' as const,
