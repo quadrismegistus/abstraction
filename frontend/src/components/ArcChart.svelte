@@ -9,6 +9,14 @@
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
 
+  function pStars(p: number | null): string {
+    if (p === null) return '';
+    if (p < 0.001) return '***';
+    if (p < 0.01) return '**';
+    if (p < 0.05) return '*';
+    return 'n.s.';
+  }
+
 
   // Match the book figure's visual style
   const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
@@ -195,9 +203,72 @@
 
 <div class="chart-container">
   <div bind:this={plotDiv} class="plot"></div>
+
+  {#if genreArcs.length > 0}
+    <div class="stats-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Genre</th>
+            <th>Texts</th>
+            <th>Corpora</th>
+            <th>Breakpoint</th>
+            <th>Peak (LOESS)</th>
+            <th>Rise slope</th>
+            <th>Fall slope</th>
+            <th>R²</th>
+            <th>Fall (SD)</th>
+            <th>Start</th>
+            <th>End</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each genreArcs as arc}
+            {@const s = arc.stats}
+            <tr>
+              <td class="genre">{arc.genre}</td>
+              <td>{s.n_texts.toLocaleString()}</td>
+              <td>{s.n_corpora}</td>
+              <td>{s.breakpoint ?? '—'}</td>
+              <td>{s.peak_year ?? '—'}</td>
+              <td class="slope" class:sig={s.rise_slope_p !== null && s.rise_slope_p < 0.001}>
+                {s.rise_slope !== null ? (s.rise_slope > 0 ? '+' : '') + s.rise_slope.toFixed(4) + '/dec' : '—'}
+                {#if s.rise_slope_p !== null}
+                  <span class="p">{pStars(s.rise_slope_p)}</span>
+                {/if}
+              </td>
+              <td class="slope" class:sig={s.fall_slope_p !== null && s.fall_slope_p < 0.001}>
+                {s.fall_slope !== null ? (s.fall_slope > 0 ? '+' : '') + s.fall_slope.toFixed(4) + '/dec' : '—'}
+                {#if s.fall_slope_p !== null}
+                  <span class="p">{pStars(s.fall_slope_p)}</span>
+                {/if}
+              </td>
+              <td>{s.r2 !== null ? s.r2.toFixed(3) : '—'}</td>
+              <td>{s.change_sd !== null ? s.change_sd.toFixed(1) + ' SD' : '—'}</td>
+              <td class="score">{s.start_score !== null ? s.start_score.toFixed(3) : '—'}</td>
+              <td class="score">{s.end_score !== null ? s.end_score.toFixed(3) : '—'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
 </div>
+
 
 <style>
   .chart-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .plot { flex: 1; min-height: 500px; }
+  .stats-table {
+    padding: 0.5rem 1rem; border-top: 1px solid #eee;
+    overflow-x: auto; flex-shrink: 0;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+  th { text-align: left; padding: 4px 8px; border-bottom: 2px solid #ddd; color: #555; font-weight: 600; }
+  td { padding: 4px 8px; border-bottom: 1px solid #eee; }
+  .genre { font-weight: 600; }
+  .slope { font-family: monospace; font-size: 0.75rem; }
+  .slope.sig { color: #1a1a2e; }
+  .score { font-family: monospace; font-size: 0.75rem; color: #666; }
+  .p { font-size: 0.7rem; color: #999; margin-left: 2px; }
 </style>

@@ -6,7 +6,7 @@ from ..db import get_connection
 from ..models import (
     ArcAggregated, ArcBin, ArcText, ArcTexts,
     CorpusArc, CorpusArcBin,
-    GenreArc, AdjustedPoint, LoessPoint,
+    GenreArc, AdjustedPoint, LoessPoint, ArcStats,
 )
 
 router = APIRouter()
@@ -283,21 +283,97 @@ def arc_by_genre(
             ))
 
         # LOESS on adjusted scores
+        adj_vals = adj["adjusted"].values * sign
         loess_points = _compute_loess(
-            adj["year"].values,
-            adj["adjusted"].values * sign,
-            span=loess_span,
+            adj["year"].values, adj_vals, span=loess_span,
         )
 
+        # Piecewise stats on adjusted scores (inverted)
+        stats = _compute_arc_stats(adj, sign, loess_points)
+
+        n_corpora = adj["corpus"].nunique() if "corpus" in adj.columns else 1
         results.append(GenreArc(
             genre=g,
             points=points,
             loess=loess_points,
+            stats=stats,
             n_texts_total=int(adj["n_texts"].sum()),
-            n_corpora=adj["corpus"].nunique() if "corpus" in adj.columns else 1,
+            n_corpora=n_corpora,
         ))
 
     return results
+
+
+def _compute_arc_stats(adj, sign, loess_points):
+    """Compute piecewise regression stats + peak/start/end from LOESS."""
+    import numpy as np
+    from ...analysis import fit_piecewise
+
+    years = adj["year"].values
+    scores = adj["adjusted"].values * sign
+    groups = adj["corpus"].values if "corpus" in adj.columns else None
+    n_texts = int(adj["n_texts"].sum())
+    n_corpora = int(adj["corpus"].nunique()) if "corpus" in adj.columns else 1
+
+    # Piecewise fit on the inverted adjusted scores
+    pw = fit_piecewise(years, scores, groups=groups)
+
+    # Slopes: fit was on inverted scores, so signs are already correct
+    # (positive slope = becoming more abstract = moving up on inverted axis)
+    breakpoint = pw.get("pw_break_year")
+    rise_slope = pw.get("pw_slope_before")  # per year
+    fall_slope = pw.get("pw_slope_after")   # per year
+    if rise_slope is not None and np.isfinite(rise_slope):
+        rise_slope *= 10  # convert to per decade
+    if fall_slope is not None and np.isfinite(fall_slope):
+        fall_slope *= 10
+
+    # Peak, start, end from LOESS
+    peak_year = peak_score = start_score = end_score = None
+    if loess_points:
+        peak_pt = max(loess_points, key=lambda p: p.fitted)
+        peak_year = int(round(peak_pt.year))
+        peak_score = peak_pt.fitted
+        start_score = loess_points[0].fitted
+        end_score = loess_points[-1].fitted
+
+    # Change in SD units (peak to end)
+    change_sd = None
+    if peak_score is not None and end_score is not None:
+        sd = np.std(scores)
+        if sd > 0:
+            change_sd = round((peak_score - end_score) / sd, 2)
+
+    def _clean(v):
+        """Convert numpy types and NaN to None for JSON."""
+        if v is None:
+            return None
+        try:
+            if np.isnan(v):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if isinstance(v, (np.integer,)):
+            return int(v)
+        if isinstance(v, (np.floating,)):
+            return round(float(v), 6)
+        return v
+
+    return ArcStats(
+        n_texts=n_texts,
+        n_corpora=n_corpora,
+        breakpoint=_clean(breakpoint),
+        rise_slope=_clean(rise_slope),
+        fall_slope=_clean(fall_slope),
+        rise_slope_p=_clean(pw.get("pw_slope_before_p")),
+        fall_slope_p=_clean(pw.get("pw_slope_after_p")),
+        r2=_clean(pw.get("pw_r2")),
+        peak_year=_clean(peak_year),
+        peak_score=_clean(peak_score),
+        start_score=_clean(start_score),
+        end_score=_clean(end_score),
+        change_sd=_clean(change_sd),
+    )
 
 
 def _compute_loess(years, values, span=0.3, n_points=200):

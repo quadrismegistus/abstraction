@@ -85,10 +85,27 @@ export interface LoessPoint {
   se_hi: number;
 }
 
+export interface ArcStats {
+  n_texts: number;
+  n_corpora: number;
+  breakpoint: number | null;
+  rise_slope: number | null;
+  fall_slope: number | null;
+  rise_slope_p: number | null;
+  fall_slope_p: number | null;
+  r2: number | null;
+  peak_year: number | null;
+  peak_score: number | null;
+  start_score: number | null;
+  end_score: number | null;
+  change_sd: number | null;
+}
+
 export interface GenreArc {
   genre: string;
   points: AdjustedPoint[];
   loess: LoessPoint[];
+  stats: ArcStats;
   n_texts_total: number;
   n_corpora: number;
 }

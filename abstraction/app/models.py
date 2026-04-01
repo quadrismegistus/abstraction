@@ -100,10 +100,27 @@ class LoessPoint(BaseModel):
     se_hi: float
 
 
+class ArcStats(BaseModel):
+    n_texts: int
+    n_corpora: int
+    breakpoint: int | None = None
+    rise_slope: float | None = None        # per decade
+    fall_slope: float | None = None        # per decade
+    rise_slope_p: float | None = None
+    fall_slope_p: float | None = None
+    r2: float | None = None
+    peak_year: int | None = None
+    peak_score: float | None = None
+    start_score: float | None = None       # score at earliest decade
+    end_score: float | None = None         # score at latest decade
+    change_sd: float | None = None         # peak-to-end in SD units
+
+
 class GenreArc(BaseModel):
     genre: str
     points: list[AdjustedPoint]
     loess: list[LoessPoint]
+    stats: ArcStats
     n_texts_total: int
     n_corpora: int
 
