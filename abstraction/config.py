@@ -17,7 +17,7 @@ DIST_DIR = os.path.join(PATH_DATA, "dists")
 
 PATH_NORMS = os.path.join(FIELD_DIR, "data.wordnorms_orig.csv")
 PATH_ALLNORMS = os.path.join(FIELD_DIR, "data.allnorms.pkl.gz")
-PATH_VECNORMS = os.path.join(FIELD_DIR, "data.wordnorms_vec.csv.gz")
+PATH_VECNORMS = os.path.join(FIELD_DIR, "data.wordnorms_vec.pkl.gz")
 PATH_VECFIELDS = os.path.join(FIELD_DIR, "data.fields_vec.csv.gz")
 PATH_STOPWORDS = os.path.join(FIELD_DIR, "stopwords.txt")
 PATH_NAMES = os.path.join(FIELD_DIR, "capslocked.CanonFiction.txt")

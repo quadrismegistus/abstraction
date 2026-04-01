@@ -245,7 +245,7 @@ def format_norms_as_long(dfnorms, zcut=ZCUT):
 # ---------------------------------------------------------------------------
 
 def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
-    df = pd.read_csv(PATH_VECNORMS).set_index("word")
+    df = pd.read_pickle(PATH_VECNORMS)
     if remove_stopwords:
         exclude = get_stopwords_and_names()
         df = df[~df.index.isin(exclude)]

@@ -394,7 +394,7 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
     rows = [{"word": w, **fields} for w, fields in word2field2z.items()]
     df = pd.DataFrame(rows).set_index("word")
     os.makedirs(os.path.dirname(PATH_VECNORMS), exist_ok=True)
-    df.to_csv(PATH_VECNORMS)
+    df.to_pickle(PATH_VECNORMS)
     print(f"\nWrote {len(df):,} words × {len(df.columns)} columns to {PATH_VECNORMS}")
 
     # Regenerate allnorms (orig + vec combined)
