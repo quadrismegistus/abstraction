@@ -1,7 +1,7 @@
 <script lang="ts">
   import { norm, chunkSize } from '$lib/stores';
   import { fetchPassage } from '$lib/api';
-  import type { PassageResponse, PassageToken } from '$lib/types';
+  import type { PassageResponse } from '$lib/types';
 
   let { corpus, textId, chunkIndex }: {
     corpus: string; textId: string; chunkIndex: number;
@@ -10,7 +10,13 @@
   let data: PassageResponse | null = $state(null);
   let loading = $state(true);
   let error = $state('');
-  let hoveredToken: PassageToken | null = $state(null);
+  let mode: 'color' | 'print' = $state('color');
+
+  // Tooltip state
+  let tooltipWord = $state('');
+  let tooltipZ = $state('');
+  let tooltipClass = $state('');
+  let showTooltip = $state(false);
 
   async function loadData() {
     loading = true;
@@ -26,41 +32,31 @@
     loading = false;
   }
 
-  function wordColor(token: PassageToken): string {
-    if (token.is_punct || token.score === null) return '#444';
-    if (token.score <= -1.0) {
-      const intensity = Math.min(Math.abs(token.score), 3) / 3;
-      return `rgba(21, 101, 192, ${0.5 + intensity * 0.5})`;  // blue
-    }
-    if (token.score >= 1.0) {
-      const intensity = Math.min(token.score, 3) / 3;
-      return `rgba(230, 81, 0, ${0.5 + intensity * 0.5})`;  // orange
-    }
-    return '#444';
+  function handleMouseOver(e: MouseEvent) {
+    const el = e.target as HTMLElement;
+    if (!el.classList.contains('w')) return;
+    const z = el.dataset.z;
+    tooltipWord = el.textContent || '';
+    tooltipZ = z || '';
+    tooltipClass = el.classList.contains('abstract') ? 'abstract'
+      : el.classList.contains('concrete') ? 'concrete'
+      : el.classList.contains('unscored') ? 'unscored'
+      : 'neither';
+    showTooltip = true;
   }
 
-  function wordBg(token: PassageToken): string {
-    if (token.is_punct || token.score === null) return 'transparent';
-    if (token.is_abstract) return 'rgba(21, 101, 192, 0.1)';
-    if (token.is_concrete) return 'rgba(230, 81, 0, 0.1)';
-    return 'transparent';
+  function handleMouseOut(e: MouseEvent) {
+    const el = e.target as HTMLElement;
+    if (el.classList.contains('w')) showTooltip = false;
   }
 
-  /**
-   * Whether to insert a space before this token.
-   * Mirrors passages.py:_render_paragraph spacing logic:
-   * - Space before words (not before punctuation)
-   * - No space after hyphens/dashes
-   */
-  function needsSpaceBefore(tokens: PassageToken[], i: number): boolean {
-    if (i === 0) return false;
-    const cur = tokens[i];
-    const prev = tokens[i - 1];
-    // No space before punctuation
-    if (cur.is_punct) return false;
-    // No space after hyphens/dashes
-    if (prev.is_punct && ['-', '\u2013', '\u2014'].includes(prev.text)) return false;
-    return true;
+  function exportPrint() {
+    if (!data) return;
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(data.print_html);
+      w.document.close();
+    }
   }
 
   $effect(() => {
@@ -76,21 +72,57 @@
     <div class="error">Error: {error}</div>
   {:else if data}
     {@const total = data.n_abstract + data.n_concrete + data.n_neutral}
-    <div class="stats">
-      <span class="stat abstract">{data.n_abstract} abstract ({total ? (data.n_abstract/total*100).toFixed(1) : 0}%)</span>
-      <span class="stat concrete">{data.n_concrete} concrete ({total ? (data.n_concrete/total*100).toFixed(1) : 0}%)</span>
-      <span class="stat neutral">{data.n_neutral} neutral</span>
+    <div class="toolbar">
+      <div class="stats">
+        <span class="stat abstract">{data.n_abstract} abstract ({total ? (data.n_abstract/total*100).toFixed(1) : 0}%)</span>
+        <span class="stat concrete">{data.n_concrete} concrete ({total ? (data.n_concrete/total*100).toFixed(1) : 0}%)</span>
+        <span class="stat neutral">{data.n_neutral} neutral</span>
+      </div>
+      <div class="controls">
+        <button class:active={mode === 'color'} onclick={() => mode = 'color'}>Color</button>
+        <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
+        <button class="export-btn" onclick={exportPrint}>Export</button>
+      </div>
     </div>
 
-    <div class="passage">{#each data.tokens as token, i}{#if needsSpaceBefore(data.tokens, i)}{' '}{/if}{#if token.is_punct}<span class="punct">{token.text}</span>{:else}<span class="word" class:abstract={token.is_abstract} class:concrete={token.is_concrete} class:unscored={token.score === null} style="color: {wordColor(token)}; background: {wordBg(token)}" role="term" onmouseenter={() => hoveredToken = token} onmouseleave={() => hoveredToken = null}>{token.text}</span>{/if}{/each}</div>
+    <div class="legend">
+      {#if mode === 'color'}
+        <span class="legend-item" style="color: hsl(220, 70%, 35%);">abstract</span>
+        <span class="legend-arrow">&larr;</span>
+        <span class="legend-item" style="color: #888;">neutral</span>
+        <span class="legend-arrow">&rarr;</span>
+        <span class="legend-item" style="color: hsl(25, 90%, 40%);">concrete</span>
+        <span class="legend-sep">|</span>
+        <span class="legend-item unscored-label">plain = unscored</span>
+      {:else}
+        <span class="legend-item" style="outline:3px solid rgba(0,0,0,0.6); outline-offset:0; border-radius:2px; padding:0 3px;">abstract</span>
+        <span class="legend-item" style="outline:1px solid rgba(0,0,0,0.15); outline-offset:0; border-radius:2px; padding:0 3px;">slightly abstract</span>
+        <span class="legend-item" style="font-weight:500; background:rgba(0,0,0,0.08); border-radius:2px; padding:0 3px;">slightly concrete</span>
+        <span class="legend-item" style="font-weight:800; background:rgba(0,0,0,0.30); border-radius:2px; padding:0 3px;">concrete</span>
+        <span class="legend-item" style="color:#888;">plain = unscored</span>
+      {/if}
+    </div>
 
-    {#if hoveredToken && !hoveredToken.is_punct}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="passage-body"
+      onmouseover={handleMouseOver}
+      onmouseout={handleMouseOut}
+    >
+      {#if mode === 'color'}
+        {@html data.body_html}
+      {:else}
+        {@html data.print_html}
+      {/if}
+    </div>
+
+    {#if showTooltip}
       <div class="tooltip">
-        <strong>{hoveredToken.text}</strong>
-        {#if hoveredToken.score !== null}
-          <span>z = {hoveredToken.score.toFixed(2)}</span>
-          <span class:abstract={hoveredToken.is_abstract} class:concrete={hoveredToken.is_concrete}>
-            {hoveredToken.is_abstract ? 'Abstract' : hoveredToken.is_concrete ? 'Concrete' : 'Neutral'}
+        <strong>{tooltipWord}</strong>
+        {#if tooltipZ}
+          <span>z = {tooltipZ}</span>
+          <span class={tooltipClass}>
+            {tooltipClass === 'abstract' ? 'Abstract' : tooltipClass === 'concrete' ? 'Concrete' : 'Neutral'}
           </span>
         {:else}
           <span class="unscored">Not in vocabulary</span>
@@ -102,26 +134,45 @@
 
 <style>
   .passage-container { flex: 1; padding: 1rem; overflow-y: auto; }
-  .stats {
-    display: flex; gap: 1rem; margin-bottom: 1rem; padding: 0.5rem;
-    background: #f5f5f5; border-radius: 4px; font-size: 0.85rem;
+
+  .toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 0.5rem; padding: 0.5rem;
+    background: #f5f5f5; border-radius: 4px;
   }
-  .stat.abstract { color: #1565C0; }
-  .stat.concrete { color: #E65100; }
+  .stats { display: flex; gap: 1rem; font-size: 0.85rem; }
+  .stat.abstract { color: hsl(220, 70%, 35%); }
+  .stat.concrete { color: hsl(25, 90%, 40%); }
   .stat.neutral { color: #666; }
-  .passage {
-    line-height: 2.0; font-size: 1.05rem; font-family: Georgia, "Times New Roman", serif;
+  .controls { display: flex; gap: 4px; }
+  .controls button {
+    padding: 3px 10px; font-size: 0.8rem; border: 1px solid #ccc;
+    background: white; border-radius: 3px; cursor: pointer;
+  }
+  .controls button.active { background: #333; color: white; border-color: #333; }
+  .export-btn { margin-left: 8px; }
+
+  .legend {
+    display: flex; gap: 0.75rem; align-items: center;
+    margin-bottom: 0.75rem; font-size: 0.8rem; color: #555;
+  }
+  .legend-arrow { color: #bbb; }
+  .legend-sep { color: #ccc; }
+  .unscored-label { color: #888; }
+
+  /* Passage body */
+  .passage-body {
+    line-height: 2.2; font-size: 1.05rem;
+    font-family: Georgia, "Times New Roman", serif;
     max-width: 700px;
   }
-  .punct { color: #444; }
-  .word {
-    cursor: default; border-radius: 2px;
-    transition: background 0.1s;
-  }
-  .word:hover { outline: 2px solid rgba(0,0,0,0.3); outline-offset: 0px; }
-  .word.unscored { color: #888; }
-  .word.abstract { font-weight: 500; }
-  .word.concrete { font-weight: 600; }
+  .passage-body :global(.psg-para) { margin: 0; text-indent: 2em; }
+  .passage-body :global(.psg-first) { text-indent: 0; }
+  .passage-body :global(.w) { cursor: default; border-radius: 2px; }
+  .passage-body :global(.w:hover) { outline: 2px solid rgba(0,0,0,0.3); outline-offset: 0; }
+  .passage-body :global(.w.unscored) { color: #888; }
+
+  /* Tooltip */
   .tooltip {
     position: fixed; bottom: 1rem; right: 1rem;
     background: white; border: 1px solid #ddd; border-radius: 6px;
@@ -129,9 +180,10 @@
     display: flex; gap: 0.75rem; align-items: center; font-size: 0.85rem;
     z-index: 100;
   }
-  .tooltip .abstract { color: #1565C0; font-weight: 600; }
-  .tooltip .concrete { color: #E65100; font-weight: 600; }
+  .tooltip .abstract { color: hsl(220, 70%, 35%); font-weight: 600; }
+  .tooltip .concrete { color: hsl(25, 90%, 40%); font-weight: 600; }
   .tooltip .unscored { color: #999; font-style: italic; }
+
   .loading, .error { padding: 2rem; text-align: center; }
   .loading { color: #666; font-style: italic; }
   .error { color: #d32f2f; }

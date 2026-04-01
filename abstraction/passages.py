@@ -56,7 +56,7 @@ def _word_style(z, max_z=3.0):
     return css, cls
 
 
-def _render_body(txt, col="Abs-Conc.Median.median"):
+def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True):
     """Render passage text to styled HTML fragment (no wrapper).
 
     Paragraph breaks (blank lines) become indented new paragraphs
@@ -69,7 +69,7 @@ def _render_body(txt, col="Abs-Conc.Median.median"):
     paragraphs = _split_paragraphs(txt)
     rendered = []
     for i, para in enumerate(paragraphs):
-        body = _render_paragraph(para, scores, spelling_d)
+        body = _render_paragraph(para, scores, spelling_d, inline_styles=inline_styles)
         if i == 0:
             rendered.append(f'<p class="psg-para psg-first">{body}</p>')
         else:
@@ -86,8 +86,21 @@ def _split_paragraphs(txt):
     return [re.sub(r'\n', ' ', p).strip() for p in paras if p.strip()]
 
 
-def _render_paragraph(txt, scores, spelling_d):
-    """Render a single paragraph to styled HTML."""
+def _render_paragraph(txt, scores, spelling_d, inline_styles=True):
+    """Render a single paragraph to styled HTML.
+
+    Each scored word gets:
+      - class="w {abstract|concrete|neither|unscored}"
+      - data-z="{z:.2f}" (or "" if unscored)
+      - Inline styles depending on mode
+
+    Parameters
+    ----------
+    inline_styles : bool or str
+        True  = grayscale inline CSS (for print/export)
+        False = no inline styles (classes + data-z only)
+        "color" = blue↔orange continuous color scale (for web)
+    """
     tokens = tokenize_agnostic(txt)
 
     parts = []
@@ -101,12 +114,21 @@ def _render_paragraph(txt, scores, spelling_d):
 
         s, _ = _modernize_score(tok_lower, scores, spelling_d)
         z = s if s is not None else np.nan
-        css, cls = _word_style(z)
+        z_attr = f'{z:.2f}' if np.isfinite(z) else ''
+
+        if inline_styles == "color":
+            css = _word_color_style(z)
+        elif inline_styles:
+            css, _ = _word_style(z)
+        else:
+            css = None
+
+        cls = _word_style(z)[1]  # always need the class name
 
         if css:
-            parts.append((f'<span class="w {cls}" style="{css}">{escaped}</span>', False))
+            parts.append((f'<span class="w {cls}" data-z="{z_attr}" style="{css}">{escaped}</span>', False))
         else:
-            parts.append((f'<span class="w {cls}">{escaped}</span>', False))
+            parts.append((f'<span class="w {cls}" data-z="{z_attr}">{escaped}</span>', False))
 
     chunks = []
     prev_is_hyphen = False
@@ -116,6 +138,47 @@ def _render_paragraph(txt, scores, spelling_d):
         chunks.append(html_str)
         prev_is_hyphen = is_punct and html_str.strip() in ("-", "\u2013", "\u2014")
     return "".join(chunks)
+
+
+def _word_color_style(z, max_z=3.0):
+    """Return inline CSS for color mode (blue↔orange continuous scale).
+
+    - z < 0 (abstract): blue, more saturated/darker with |z|
+    - z > 0 (concrete): orange, more saturated/darker with z
+    - z == 0: neutral gray
+    - NaN: no color styling
+    """
+    if np.isnan(z):
+        return None
+
+    intensity = min(abs(z), max_z) / max_z  # 0..1
+
+    if z <= 0:
+        # Abstract: blue hue=220, increasing saturation and darkness
+        sat = 30 + round(intensity * 50)   # 30..80%
+        light = 50 - round(intensity * 20)  # 50..30%
+        weight = 400 + round(intensity * 200)  # 400..600
+        return f"color:hsl(220,{sat}%,{light}%); font-weight:{weight}"
+
+    # Concrete: orange hue=25, increasing saturation and darkness
+    sat = 40 + round(intensity * 50)   # 40..90%
+    light = 48 - round(intensity * 18)  # 48..30%
+    weight = 400 + round(intensity * 300)  # 400..700
+    return f"color:hsl(25,{sat}%,{light}%); font-weight:{weight}"
+
+
+def render_passage_body(txt, col="Abs-Conc.Median.median"):
+    """Render passage text to an HTML fragment with color styling + data-z.
+
+    Returns a <div class="passage"> containing word spans with:
+    - class="w {abstract|concrete|neither|unscored}"
+    - data-z="{z:.2f}"
+    - inline color styles (blue↔orange continuous scale)
+
+    Intended for web display. For grayscale print, use render_passage_html().
+    """
+    body = _render_body(txt, col=col, inline_styles="color")
+    return f'<div class="passage">\n{body}\n</div>'
 
 
 def render_passage_html(txt, col="Abs-Conc.Median.median",

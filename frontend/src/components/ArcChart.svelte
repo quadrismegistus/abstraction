@@ -164,6 +164,15 @@
       hovermode: 'closest' as const,
       plot_bgcolor: 'white',
     }, { responsive: true, scrollZoom: true });
+
+    // Click a point → navigate to that corpus
+    plotDiv.removeAllListeners?.('plotly_click');
+    plotDiv.on('plotly_click', (data: any) => {
+      const point = data.points[0];
+      if (point?.customdata?.[0]) {
+        goto(`/corpus/${point.customdata[0]}`);
+      }
+    });
   }
 
   onMount(async () => {

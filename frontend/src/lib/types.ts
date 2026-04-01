@@ -93,18 +93,10 @@ export interface GenreArc {
   n_corpora: number;
 }
 
-export interface PassageToken {
-  text: string;
-  is_punct: boolean;
-  score: number | null;
-  is_abstract: boolean;
-  is_concrete: boolean;
-}
-
 export interface PassageResponse {
   text: string;
-  tokens: PassageToken[];
-  html: string;
+  body_html: string;     // Color-styled HTML fragment with data-z (for web)
+  print_html: string;    // Full grayscale HTML document (for export)
   n_abstract: number;
   n_concrete: number;
   n_neutral: number;

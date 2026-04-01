@@ -75,19 +75,10 @@ class TrajectoryResponse(BaseModel):
     overall_score: float | None
 
 
-class PassageToken(BaseModel):
-    """A token in a passage — either a scored word or punctuation/whitespace."""
-    text: str
-    is_punct: bool
-    score: float | None = None
-    is_abstract: bool = False
-    is_concrete: bool = False
-
-
 class PassageResponse(BaseModel):
     text: str
-    tokens: list[PassageToken]
-    html: str
+    body_html: str       # HTML fragment with data-z attrs, no inline styles (for web)
+    print_html: str      # Full HTML document with grayscale inline styles (for export)
     n_abstract: int = 0
     n_concrete: int = 0
     n_neutral: int = 0

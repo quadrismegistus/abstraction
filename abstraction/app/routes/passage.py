@@ -1,75 +1,48 @@
-"""Passage endpoint: word-level scoring and colored HTML rendering."""
+"""Passage endpoint: server-rendered HTML with data-z attributes."""
 
-import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
+from ...passages import render_passage_body, render_passage_html
 from ...scoring import get_norm_dict, _modernize_score
 from ...tokenize import tokenize_agnostic, get_spelling_modernizer
-from ...passages import render_passage_html
-from ..models import PassageResponse, PassageToken, ScoreRequest
+from ..models import PassageResponse, ScoreRequest
 
 router = APIRouter()
 
 DEFAULT_COL = "Abs-Conc.Median.median"
 
 
-def _score_text(text: str, col: str) -> PassageResponse:
-    """Score a text passage, returning all tokens (words + punctuation) + HTML.
-
-    Mirrors the logic in passages.py:_render_paragraph — iterates over all
-    tokens from tokenize_agnostic, scores alphabetic ones, passes through
-    punctuation as-is.
-    """
+def _count_words(txt: str, col: str):
+    """Count abstract/concrete/neutral words in text."""
     scores = get_norm_dict(col)
     spelling_d = get_spelling_modernizer()
-    # Tokenize original text (preserve case), lowercase only for lookup
-    tokens_raw = tokenize_agnostic(text)
-
-    tokens = []
-    n_abs = 0
-    n_conc = 0
-    n_neutral = 0
-
-    for tok in tokens_raw:
-        if not tok:
+    tokens = tokenize_agnostic(txt)
+    n_abs = n_conc = n_neutral = 0
+    for tok in tokens:
+        if not tok or not tok[0].isalpha():
             continue
-
-        if not tok[0].isalpha():
-            # Skip whitespace-only tokens (spaces, newlines) —
-            # the frontend handles spacing between tokens.
-            if tok.strip() == '':
-                continue
-            # Meaningful punctuation (commas, periods, dashes, etc.)
-            tokens.append(PassageToken(text=tok, is_punct=True))
-            continue
-
-        # Alphabetic word — score it (lowercase for lookup, keep original case)
         s, _ = _modernize_score(tok.lower(), scores, spelling_d)
-        z = float(s) if s is not None else None
-        is_abs = z is not None and z <= -1.0
-        is_conc = z is not None and z >= 1.0
-
-        if is_abs:
+        if s is None:
+            n_neutral += 1
+        elif s <= -1.0:
             n_abs += 1
-        elif is_conc:
+        elif s >= 1.0:
             n_conc += 1
         else:
             n_neutral += 1
+    return n_abs, n_conc, n_neutral
 
-        tokens.append(PassageToken(
-            text=tok,
-            is_punct=False,
-            score=z,
-            is_abstract=is_abs,
-            is_concrete=is_conc,
-        ))
 
-    html = render_passage_html(text, col=col)
+def _score_text(text: str, col: str) -> PassageResponse:
+    """Score a text passage using centralized rendering from passages.py."""
+    body_html = render_passage_body(text, col=col)
+    print_html = render_passage_html(text, col=col, show_legend=True)
+    n_abs, n_conc, n_neutral = _count_words(text, col)
 
     return PassageResponse(
         text=text,
-        tokens=tokens,
-        html=html,
+        body_html=body_html,
+        print_html=print_html,
         n_abstract=n_abs,
         n_concrete=n_conc,
         n_neutral=n_neutral,
