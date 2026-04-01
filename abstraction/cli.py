@@ -223,7 +223,8 @@ def cmd_gen_vecnorms(args):
     from .models import gen_vecnorms
     print(f"Generating vector norms (period_len={args.period_len})")
     t0 = time.time()
-    gen_vecnorms(bin_year_by=args.period_len, num_proc=args.workers)
+    gen_vecnorms(bin_year_by=args.period_len, num_proc=args.workers,
+                 model_dir=getattr(args, 'model_dir', None))
     elapsed = time.time() - t0
     print(f"Done in {elapsed:.0f}s")
 
@@ -328,6 +329,7 @@ def main():
     # gen-vecnorms: generate vector-based word norms from trained models
     p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")
     p.add_argument("--period-len", type=int, default=100, help="Period length for binning (default: 100)")
+    p.add_argument("--model-dir", default=None, help="Model directory (default: data/models/)")
     p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
 
     # report-arc: piecewise arc report with ratios (score-based)

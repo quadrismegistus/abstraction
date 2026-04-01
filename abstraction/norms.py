@@ -129,7 +129,8 @@ def gen_orignorms():
 def get_orignorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_csv(PATH_NORMS).set_index("word")
     if remove_stopwords:
-        df = df.loc[[w for w in df.index if w not in get_stopwords_and_names()]]
+        exclude = get_stopwords_and_names()
+        df = df[~df.index.isin(exclude)]
     df["Abs-Conc.Median"] = df.median(axis=1)
     return df
 
@@ -158,7 +159,7 @@ def get_contrasts(dfnorms, zcut=ZCUT):
 
 def get_fields_from_norms(dfnorms, zcut=ZCUT, remove_stopwords=True):
     if remove_stopwords:
-        dfnorms = dfnorms.loc[list(set(dfnorms.index) - get_stopwords_and_names())]
+        dfnorms = dfnorms[~dfnorms.index.isin(get_stopwords_and_names())]
     fields = {}
     for cdx in get_contrasts(dfnorms, zcut=zcut):
         neg, pos = cdx["contrast"].split("-")
@@ -230,7 +231,8 @@ def format_norms_as_long(dfnorms, zcut=ZCUT):
 def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_csv(PATH_VECNORMS).set_index("word")
     if remove_stopwords:
-        df = df.loc[[w for w in df.index if w not in get_stopwords_and_names()]]
+        exclude = get_stopwords_and_names()
+        df = df[~df.index.isin(exclude)]
     # add median across periods for each contrast.source group
     colgroups = defaultdict(set)
     for col in df.columns:
@@ -245,20 +247,25 @@ def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
 
 def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
     if not force and os.path.exists(PATH_ALLNORMS):
-        return read_df(PATH_ALLNORMS)
-    orig = get_orignorms(remove_stopwords=remove_stopwords)
+        df = read_df(PATH_ALLNORMS)
+        if remove_stopwords:
+            df = df[~df.index.isin(get_stopwords_and_names())]
+        return df
+    # Always save the FULL unfiltered table — filtering happens on read
+    orig = get_orignorms(remove_stopwords=False)
     orig.columns = [c + ".orig" for c in orig.columns]
-    vec = get_vecnorms(remove_stopwords=remove_stopwords)
+    vec = get_vecnorms(remove_stopwords=False)
     combined = vec.join(orig, how="outer")
     save_df(combined, PATH_ALLNORMS)
+    if remove_stopwords:
+        combined = combined[~combined.index.isin(get_stopwords_and_names())]
     return combined
 
 
 def get_allcontrasts(remove_stopwords=REMOVE_STOPWORDS):
     df = get_allnorms(remove_stopwords=False)
     if remove_stopwords:
-        exclude = get_stopwords_and_names()
-        df = df.loc[[w for w in df.index if w not in exclude]]
+        df = df[~df.index.isin(get_stopwords_and_names())]
     return get_contrasts(df)
 
 

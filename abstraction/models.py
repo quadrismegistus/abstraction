@@ -308,13 +308,16 @@ def compute_vec2vec_dists(x2vec, y2vec):
 # Generate vector-based norms
 # ---------------------------------------------------------------------------
 
-def _gen_vecnorms_for_model(pathd):
+def _gen_vecnorms_for_model(pathd, words=None):
     model = load_model(pathd["path"], pathd.get("path_vocab"), min_count=MODEL_MIN_COUNT)
     if model is None:
         return []
     kv = model.wv if hasattr(model, "wv") else model
     field2vec = get_fieldvecs_in_model(model, get_origcontrasts())
-    word2vec = {w: kv[w] for w in kv.index_to_key}
+    if words is None:
+        word2vec = {w: kv[w] for w in kv.index_to_key}
+    else:
+        word2vec = {w: kv[w] for w in words if w in kv}
     dfdist = compute_vec2vec_dists(word2vec, field2vec)
     norms = []
     for col in dfdist.columns:
@@ -322,8 +325,14 @@ def _gen_vecnorms_for_model(pathd):
     return norms
 
 
-def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1):
-    """Generate vector-based word norms aggregated by time period."""
+def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
+    """Generate vector-based word norms aggregated by time period.
+
+    Parameters
+    ----------
+    model_dir : str, optional
+        Directory containing trained models. If None, uses PATH_MODELS.
+    """
     def periodize(y):
         y = int(y)
         if bin_year_by == 100:
@@ -332,7 +341,7 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1):
             return f"C{(y // 100) + 1}{'e' if int(str(y)[2]) < 5 else 'l'}"
         return str(y // bin_year_by * bin_year_by)
 
-    paths_df = pd.DataFrame(get_model_paths())
+    paths_df = pd.DataFrame(get_model_paths(model_dir=model_dir))
     paths_df["period"] = paths_df["period_start"].apply(periodize)
 
     word2field2z = defaultdict(dict)
