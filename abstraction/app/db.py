@@ -31,7 +31,7 @@ def _scores_dir():
 
 
 def _is_stale(db_path):
-    """Check if DB is missing, empty, or older than any score CSV."""
+    """Check if DB is missing, empty, or older than score CSVs or analysis.py."""
     if not os.path.exists(db_path):
         return True
     if os.path.getsize(db_path) == 0:
@@ -44,6 +44,12 @@ def _is_stale(db_path):
     except Exception:
         return True
     db_mtime = os.path.getmtime(db_path)
+
+    # Check if analysis.py changed (genre constants, exclusions, etc.)
+    analysis_py = os.path.join(os.path.dirname(os.path.dirname(__file__)), "analysis.py")
+    if os.path.exists(analysis_py) and os.path.getmtime(analysis_py) > db_mtime:
+        return True
+
     scores_dir = _scores_dir()
     if not os.path.isdir(scores_dir):
         return False
