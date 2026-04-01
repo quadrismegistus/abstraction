@@ -74,66 +74,77 @@ def _get_text_and_metadata(corpus_name: str, text_id: str):
     """Try LLTK first, fall back to abstraction Corpus."""
     camel = _snake_to_camel(corpus_name)
 
-    # Try LLTK
-    try:
-        import lltk
-        c = lltk.load(camel)
-        if c is not None:
-            t = c[text_id]
-            if t is not None:
-                txt = t.txt
-                if txt:
-                    meta = {}
-                    for k in ("title", "author", "year"):
-                        v = t.get(k, None)
-                        if v is not None:
-                            meta[k] = v
-                    return txt, meta, t
-    except Exception:
-        pass
-
-    # Fallback: abstraction Corpus
+    # First, resolve the full metadata ID (score IDs are often simplified)
     from ...corpus import load_corpus
     import glob
+
+    full_id = text_id
+    meta = {}
     try:
         corpus = load_corpus(camel)
-
-        # Try direct read first
-        txt = None
-        try:
-            txt = corpus.read_text(text_id)
-        except FileNotFoundError:
-            pass
-
-        # If direct read fails, search for matching text file
-        if not txt:
-            txt_dir = os.path.join(corpus.path, "txt")
-            # Try glob match: *{text_id}*
-            pattern = os.path.join(txt_dir, f"*{text_id}*")
-            matches = glob.glob(pattern)
-            if matches:
-                with open(matches[0], encoding="utf-8", errors="ignore") as f:
-                    txt = f.read()
-
-        # Also try matching text_id against metadata IDs
-        meta = {}
+        # Try partial match against metadata
         row = corpus.metadata[corpus.metadata["id"].str.contains(text_id, regex=False)]
         if len(row) == 0:
             row = corpus.metadata[corpus.metadata["id"] == text_id]
         if len(row):
+            full_id = str(row.iloc[0]["id"])
             for k in ("title", "author", "year"):
                 if k in row.columns:
                     v = row.iloc[0][k]
                     if v is not None and str(v) != "nan":
                         meta[k] = v
+    except Exception:
+        pass
 
-            # If we still don't have text, try reading by the matched metadata ID
-            if not txt:
-                full_id = row.iloc[0]["id"]
+    # Try LLTK with the full ID (gives sentence-boundary chunks)
+    try:
+        import lltk
+        c = lltk.load(camel)
+        if c is not None:
+            # Try full_id first, then original text_id
+            t = None
+            for tid in [full_id, text_id]:
                 try:
-                    txt = corpus.read_text(full_id)
-                except FileNotFoundError:
-                    pass
+                    t = c[tid]
+                    if t is not None and t.txt:
+                        break
+                except Exception:
+                    continue
+            if t is not None:
+                txt = t.txt
+                if txt:
+                    # Fill in metadata from LLTK if we didn't get it from corpus
+                    for k in ("title", "author", "year"):
+                        if k not in meta:
+                            v = t.get(k, None)
+                            if v is not None:
+                                meta[k] = v
+                    return txt, meta, t
+    except Exception:
+        pass
+
+    # Fallback: read text file directly
+    try:
+        corpus = load_corpus(camel)
+        txt = None
+
+        # Try reading by full_id, then text_id
+        for tid in [full_id, text_id]:
+            try:
+                txt = corpus.read_text(tid)
+                if txt:
+                    break
+            except FileNotFoundError:
+                continue
+
+        # Last resort: glob search
+        if not txt:
+            txt_dir = os.path.join(corpus.path, "txt")
+            pattern = os.path.join(txt_dir, f"*{text_id}*")
+            matches = glob.glob(pattern)
+            if matches:
+                with open(matches[0], encoding="utf-8", errors="ignore") as f:
+                    txt = f.read()
 
         if txt:
             return txt, meta, None
