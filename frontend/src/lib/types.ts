@@ -95,8 +95,9 @@ export interface GenreArc {
 
 export interface PassageResponse {
   text: string;
-  body_html: string;     // Color-styled HTML fragment with data-z (for web)
-  print_html: string;    // Full grayscale HTML document (for export)
+  body_html: string;         // Color background HTML fragment (for web)
+  print_body_html: string;   // Grayscale HTML fragment (for inline print preview)
+  print_html: string;        // Full grayscale HTML document (for export/new window)
   n_abstract: number;
   n_concrete: number;
   n_neutral: number;

@@ -87,11 +87,11 @@
 
     <div class="legend">
       {#if mode === 'color'}
-        <span class="legend-item" style="color: hsl(220, 70%, 35%);">abstract</span>
+        <span class="legend-item" style="background:hsla(220,70%,55%,0.45); border-radius:2px; padding:1px 5px;">abstract</span>
         <span class="legend-arrow">&larr;</span>
-        <span class="legend-item" style="color: #888;">neutral</span>
+        <span class="legend-item" style="padding:1px 5px;">neutral</span>
         <span class="legend-arrow">&rarr;</span>
-        <span class="legend-item" style="color: hsl(25, 90%, 40%);">concrete</span>
+        <span class="legend-item" style="background:hsla(25,85%,55%,0.45); border-radius:2px; padding:1px 5px;">concrete</span>
         <span class="legend-sep">|</span>
         <span class="legend-item unscored-label">plain = unscored</span>
       {:else}
@@ -112,7 +112,7 @@
       {#if mode === 'color'}
         {@html data.body_html}
       {:else}
-        {@html data.print_html}
+        {@html data.print_body_html}
       {/if}
     </div>
 
@@ -141,8 +141,8 @@
     background: #f5f5f5; border-radius: 4px;
   }
   .stats { display: flex; gap: 1rem; font-size: 0.85rem; }
-  .stat.abstract { color: hsl(220, 70%, 35%); }
-  .stat.concrete { color: hsl(25, 90%, 40%); }
+  .stat.abstract { color: hsl(220, 70%, 40%); }
+  .stat.concrete { color: hsl(25, 85%, 40%); }
   .stat.neutral { color: #666; }
   .controls { display: flex; gap: 4px; }
   .controls button {

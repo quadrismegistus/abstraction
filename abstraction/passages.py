@@ -141,43 +141,44 @@ def _render_paragraph(txt, scores, spelling_d, inline_styles=True):
 
 
 def _word_color_style(z, max_z=3.0):
-    """Return inline CSS for color mode (blue↔orange continuous scale).
+    """Return inline CSS for color mode (blue↔orange background scale).
 
-    - z < 0 (abstract): blue, more saturated/darker with |z|
-    - z > 0 (concrete): orange, more saturated/darker with z
-    - z == 0: neutral gray
-    - NaN: no color styling
+    Background color encodes the z-score on a continuous scale:
+    - z < 0 (abstract): blue background, more saturated/opaque with |z|
+    - z > 0 (concrete): orange background, more saturated/opaque with z
+    - z ≈ 0: very faint or no background
+    - NaN: no styling
     """
     if np.isnan(z):
         return None
 
     intensity = min(abs(z), max_z) / max_z  # 0..1
+    alpha = 0.08 + intensity * 0.42         # 0.08..0.50
 
     if z <= 0:
-        # Abstract: blue hue=220, increasing saturation and darkness
-        sat = 30 + round(intensity * 50)   # 30..80%
-        light = 50 - round(intensity * 20)  # 50..30%
-        weight = 400 + round(intensity * 200)  # 400..600
-        return f"color:hsl(220,{sat}%,{light}%); font-weight:{weight}"
+        # Abstract: blue background
+        return (f"background:hsla(220,70%,55%,{alpha:.2f}); "
+                f"border-radius:2px")
 
-    # Concrete: orange hue=25, increasing saturation and darkness
-    sat = 40 + round(intensity * 50)   # 40..90%
-    light = 48 - round(intensity * 18)  # 48..30%
-    weight = 400 + round(intensity * 300)  # 400..700
-    return f"color:hsl(25,{sat}%,{light}%); font-weight:{weight}"
+    # Concrete: orange background
+    return (f"background:hsla(25,85%,55%,{alpha:.2f}); "
+            f"border-radius:2px")
 
 
-def render_passage_body(txt, col="Abs-Conc.Median.median"):
-    """Render passage text to an HTML fragment with color styling + data-z.
+def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color"):
+    """Render passage text to an HTML fragment with data-z attributes.
 
-    Returns a <div class="passage"> containing word spans with:
-    - class="w {abstract|concrete|neither|unscored}"
-    - data-z="{z:.2f}"
-    - inline color styles (blue↔orange continuous scale)
+    Parameters
+    ----------
+    mode : str
+        "color" — blue↔orange continuous color scale (for web)
+        "print" — grayscale outline+shading (for inline print preview)
 
-    Intended for web display. For grayscale print, use render_passage_html().
+    Returns a <div class="passage"> containing word spans with
+    class, data-z, and mode-appropriate inline styles.
     """
-    body = _render_body(txt, col=col, inline_styles="color")
+    style_mode = "color" if mode == "color" else True
+    body = _render_body(txt, col=col, inline_styles=style_mode)
     return f'<div class="passage">\n{body}\n</div>'
 
 

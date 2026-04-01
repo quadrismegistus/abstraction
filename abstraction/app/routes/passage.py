@@ -35,13 +35,15 @@ def _count_words(txt: str, col: str):
 
 def _score_text(text: str, col: str) -> PassageResponse:
     """Score a text passage using centralized rendering from passages.py."""
-    body_html = render_passage_body(text, col=col)
+    body_html = render_passage_body(text, col=col, mode="color")
+    print_body_html = render_passage_body(text, col=col, mode="print")
     print_html = render_passage_html(text, col=col, show_legend=True)
     n_abs, n_conc, n_neutral = _count_words(text, col)
 
     return PassageResponse(
         text=text,
         body_html=body_html,
+        print_body_html=print_body_html,
         print_html=print_html,
         n_abstract=n_abs,
         n_concrete=n_conc,

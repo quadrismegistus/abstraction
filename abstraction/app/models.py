@@ -77,8 +77,9 @@ class TrajectoryResponse(BaseModel):
 
 class PassageResponse(BaseModel):
     text: str
-    body_html: str       # HTML fragment with data-z attrs, no inline styles (for web)
-    print_html: str      # Full HTML document with grayscale inline styles (for export)
+    body_html: str           # Color-styled HTML fragment (for web display)
+    print_body_html: str     # Grayscale-styled HTML fragment (for inline print preview)
+    print_html: str          # Full grayscale HTML document (for export/new window)
     n_abstract: int = 0
     n_concrete: int = 0
     n_neutral: int = 0

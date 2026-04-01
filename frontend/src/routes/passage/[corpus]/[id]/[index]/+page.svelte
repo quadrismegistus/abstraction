@@ -1,15 +1,22 @@
 <script lang="ts">
   import { page } from '$app/state';
+  import { chunkSize } from '$lib/stores';
   import PassageReader from '../../../../../components/PassageReader.svelte';
 
   let corpus = $derived(page.params.corpus);
   let textId = $derived(page.params.id);
   let chunkIndex = $derived(Number(page.params.index));
+
+  // Read chunk_size from URL if present, sync to store
+  $effect(() => {
+    const urlChunk = page.url.searchParams.get('chunk_size');
+    if (urlChunk) $chunkSize = Number(urlChunk);
+  });
 </script>
 
 <div class="header">
   <a href="/text/{corpus}/{textId}">&larr; Back to trajectory</a>
-  <span class="breadcrumb">{corpus} / {textId} / passage {chunkIndex}</span>
+  <span class="breadcrumb">{corpus} / {textId} / passage {chunkIndex} ({$chunkSize}-word chunks)</span>
 </div>
 
 <PassageReader {corpus} {textId} {chunkIndex} />
