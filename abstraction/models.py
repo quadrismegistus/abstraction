@@ -369,14 +369,14 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
                 n_words = len(set(r["word"] for r in model_rows)) if model_rows else 0
                 print(f"{n_words:,} words scored")
             if rows:
-                cdf_norms = pd.DataFrame(rows).groupby(["word", "source"]).median().reset_index()
+                cdf_norms = pd.DataFrame(rows).groupby(["word", "source"]).median(numeric_only=True).reset_index()
                 cdf_norms["corpus"] = corpus
                 vecnorm_rows.append(cdf_norms)
                 print(f"    {corpus}: {len(cdf_norms)} word×source entries (median of {len(runs)} run(s))")
         if vecnorm_rows:
             newdf = pd.concat(vecnorm_rows)
             n_corpora = newdf["corpus"].nunique()
-            newdf = newdf.groupby(["word", "source"]).median().reset_index()
+            newdf = newdf.groupby(["word", "source"]).median(numeric_only=True).reset_index()
             n_words = newdf["word"].nunique()
             print(f"  {period}: {n_words:,} words (median of {n_corpora} corpora)")
             for _, row in newdf.iterrows():
