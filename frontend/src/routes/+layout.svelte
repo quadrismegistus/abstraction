@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import favicon from '$lib/assets/favicon.svg';
   import { fetchCorpora, fetchNorms, fetchGenres } from '$lib/api';
-  import { corporaList, normsList, genresList } from '$lib/stores';
+  import { corporaList, normsList, genresList, globalLoading } from '$lib/stores';
   import FilterPanel from '../components/FilterPanel.svelte';
 
   let { children } = $props();
@@ -32,6 +32,7 @@
   <header>
     <nav>
       <a href="/arc" class="brand">Abstraction Explorer</a>
+      {#if $globalLoading}<span class="header-loading">Loading...</span>{/if}
     </nav>
   </header>
 
@@ -56,7 +57,8 @@
     background: #1a1a2e; color: white; padding: 0.5rem 1rem;
     flex-shrink: 0;
   }
-  nav { display: flex; align-items: center; }
+  nav { display: flex; align-items: center; gap: 1rem; }
+  .header-loading { font-size: 0.8rem; color: rgba(255,255,255,0.6); font-style: italic; }
   .brand {
     color: white; text-decoration: none; font-weight: 600; font-size: 1rem;
     letter-spacing: 0.5px;

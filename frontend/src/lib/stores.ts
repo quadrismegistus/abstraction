@@ -7,6 +7,7 @@ export const selectedCorpora = writable<string[]>([]);
 export const yearRange = writable<[number, number]>([1580, 2020]);
 export const chunkSize = writable(500);
 export const periodMatched = writable(true);
+export const globalLoading = writable(false);
 export const loessSpan = writable(0.2);
 
 // Cached metadata (loaded once)

@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, yearRange, periodMatched, loessSpan } from '$lib/stores';
+  import { norm, selectedGenres, yearRange, periodMatched, loessSpan, globalLoading } from '$lib/stores';
   import { fetchArcByGenre } from '$lib/api';
   import type { GenreArc } from '$lib/types';
 
   let plotDiv: HTMLDivElement;
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
-  let loading = $state(true);
+
 
   // Match the book figure's visual style
   const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
@@ -41,14 +41,14 @@
   }
 
   async function loadData() {
-    loading = true;
+    $globalLoading = true;
     try {
       genreArcs = await fetchArcByGenre(getParams());
       renderPlot();
     } catch (e) {
       console.error('Failed to load arc data:', e);
     }
-    loading = false;
+    $globalLoading = false;
   }
 
   function renderPlot() {
@@ -194,17 +194,10 @@
 </script>
 
 <div class="chart-container">
-  {#if loading}
-    <div class="loading">Loading arc data...</div>
-  {/if}
   <div bind:this={plotDiv} class="plot"></div>
 </div>
 
 <style>
   .chart-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .plot { flex: 1; min-height: 500px; }
-  .loading {
-    padding: 1rem; text-align: center; color: #666;
-    font-style: italic;
-  }
 </style>
