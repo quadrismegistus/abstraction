@@ -9,3 +9,5 @@ gensim>=4.0
 tqdm>=4.64
 requests
 ftfy
+fastapi>=0.100
+uvicorn[standard]>=0.22
