@@ -842,6 +842,49 @@ DEFAULT_MIN_YEAR = 1600
 DEFAULT_MAX_YEAR = 2000
 DEFAULT_AGG_BIN = 10  # aggregate by decade
 
+# Century labels used for period-matched scoring
+CENTURY_BINS = [
+    (1500, 1600, "C16"),
+    (1600, 1700, "C17"),
+    (1700, 1800, "C18"),
+    (1800, 1900, "C19"),
+    (1900, 2000, "C20"),
+    (2000, 2100, "C21"),
+]
+
+
+def assign_period_score(df, source="Median", year_col="year"):
+    """Pick the period-matched norm score for each text based on its year.
+
+    Adds two columns to df:
+      - 'period_score': the z-score from the century-matched norm column
+      - 'norm_period': the century label (C16, C17, ...) used
+
+    For a text from 1750, uses 'Abs-Conc.{source}.C18'.
+    Falls back to the cross-century median if the period column is missing or NaN.
+    """
+    df = df.copy()
+    df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+    df["norm_period"] = None
+    df["period_score"] = np.nan
+
+    median_col = f"Abs-Conc.{source}.median"
+
+    for lo, hi, label in CENTURY_BINS:
+        col = f"Abs-Conc.{source}.{label}"
+        mask = (df[year_col] >= lo) & (df[year_col] < hi)
+        if col in df.columns:
+            df.loc[mask, "norm_period"] = label
+            df.loc[mask, "period_score"] = df.loc[mask, col]
+
+    # Fill NaN period_scores with the transhistorical median
+    if median_col in df.columns:
+        still_nan = df["period_score"].isna()
+        df.loc[still_nan, "period_score"] = df.loc[still_nan, median_col]
+        df.loc[still_nan & df["norm_period"].isna(), "norm_period"] = "median"
+
+    return df
+
 # Corpora that contribute to the three main genres (Fiction, Poetry, Periodical).
 # Used as the default for score-corpora and arc analysis.
 ARC_CORPORA = [
@@ -1137,27 +1180,40 @@ def load_all_scored(scores_dir=None, version="v8-raw", exclude=EXCLUDE_CORPORA):
 
 
 def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
-                  corpus_col="corpus_name", min_year=DEFAULT_MIN_YEAR,
+                  corpus_col="corpus_name", fixed_effects=None,
+                  min_year=DEFAULT_MIN_YEAR,
                   max_year=DEFAULT_MAX_YEAR, agg_bin=DEFAULT_AGG_BIN,
                   min_texts_per_bin=3, model="quadratic"):
-    """Fit a regression with corpus fixed effects and return adjusted scores.
+    """Fit a regression with fixed effects and return adjusted scores.
 
     Returns a DataFrame with columns:
-        year, score (raw), adjusted (corpus-corrected), fitted (trend line),
+        year, score (raw), adjusted (fixed-effect-corrected), fitted (trend line),
         corpus, n_texts
-    The 'adjusted' column removes corpus-specific intercepts while preserving
-    the shared time trend: adjusted = score - corpus_effect.
+    The 'adjusted' column removes fixed-effect intercepts while preserving
+    the shared time trend: adjusted = score - fixed_effects.
     The 'fitted' column is the predicted trend (intercept + time terms only).
 
     Parameters
     ----------
+    corpus_col : str or None
+        Column for corpus fixed effects. For backward compatibility.
+    fixed_effects : list of str, optional
+        Additional categorical columns to include as fixed effects (e.g.
+        ["norm_period"]). These are added alongside corpus_col.
     model : str
-        "quadratic" or "piecewise". Determines the trend shape.
+        "quadratic", "cubic", "quartic", or "piecewise".
     """
-    keep_cols = [year_col, score_col]
+    # Resolve all fixed-effect columns
+    fe_cols = []
     if corpus_col and corpus_col in df.columns:
-        keep_cols.append(corpus_col)
-    sub = df[keep_cols].copy()
+        fe_cols.append(corpus_col)
+    if fixed_effects:
+        for fe in fixed_effects:
+            if fe in df.columns and fe not in fe_cols:
+                fe_cols.append(fe)
+
+    keep_cols = [year_col, score_col] + fe_cols
+    sub = df[[c for c in keep_cols if c in df.columns]].copy()
     sub[year_col] = pd.to_numeric(sub[year_col], errors="coerce")
     sub = sub.dropna(subset=[year_col, score_col])
     if min_year is not None:
@@ -1168,22 +1224,21 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
     if len(sub) == 0:
         return pd.DataFrame()
 
-    # Aggregate by (decade, corpus)
+    # Aggregate by (decade, fixed_effect_cols...)
     sub["_bin"] = (sub[year_col] // agg_bin) * agg_bin
-    if corpus_col and corpus_col in sub.columns:
-        agg = sub.groupby(["_bin", corpus_col]).agg(
+    group_cols = ["_bin"] + fe_cols
+    if fe_cols:
+        agg = sub.groupby(group_cols).agg(
             score=(score_col, "mean"),
             n_texts=(score_col, "count"),
         ).reset_index()
         agg = agg[agg.n_texts >= min_texts_per_bin]
-        groups = agg[corpus_col].values
     else:
         agg = sub.groupby("_bin").agg(
             score=(score_col, "mean"),
             n_texts=(score_col, "count"),
         ).reset_index()
         agg = agg[agg.n_texts >= min_texts_per_bin]
-        groups = None
 
     years = agg["_bin"].values.astype(float)
     scores = agg["score"].values
@@ -1191,8 +1246,16 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
     mask = np.isfinite(years) & np.isfinite(scores)
     y = years[mask]
     s = scores[mask]
-    g = groups[mask] if groups is not None else None
     agg_masked = agg[mask].copy()
+
+    # Build combined dummy matrix from all fixed-effect columns
+    if fe_cols:
+        dummy_parts = []
+        for fe in fe_cols:
+            dummy_parts.append(_make_dummies(agg_masked[fe].values))
+        all_dummies = np.column_stack(dummy_parts) if dummy_parts else None
+    else:
+        all_dummies = None
 
     if len(y) < 10:
         return pd.DataFrame()
@@ -1205,10 +1268,10 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
             return None
         fitted = X_trend @ beta[:n_trend_cols]
         if X.shape[1] > n_trend_cols:
-            corpus_effect = X[:, n_trend_cols:] @ beta[n_trend_cols:]
+            fe_effect = X[:, n_trend_cols:] @ beta[n_trend_cols:]
         else:
-            corpus_effect = np.zeros(len(s))
-        adjusted = s - corpus_effect
+            fe_effect = np.zeros(len(s))
+        adjusted = s - fe_effect
 
         # Standard error of the fitted trend
         resid = s - X @ beta
@@ -1218,12 +1281,15 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
             XtX_inv = np.linalg.inv(X.T @ X)
         except np.linalg.LinAlgError:
             XtX_inv = np.linalg.pinv(X.T @ X)
-        # Variance of fitted = X_trend @ Cov(beta_trend) @ X_trend'
-        # but beta_trend covariance is the top-left block of mse * (X'X)^-1
         cov_trend = mse * XtX_inv[:n_trend_cols, :n_trend_cols]
-        # Per-point SE: sqrt(x_i @ cov_trend @ x_i')
         fitted_se = np.sqrt(np.sum((X_trend @ cov_trend) * X_trend, axis=1))
         return fitted, adjusted, fitted_se
+
+    def _append_dummies(X_trend):
+        """Append fixed-effect dummies to trend matrix."""
+        if all_dummies is not None and all_dummies.shape[1] > 0:
+            return np.column_stack([X_trend, all_dummies])
+        return X_trend
 
     _POLY_MODELS = {"quadratic": 2, "cubic": 3, "quartic": 4}
 
@@ -1232,13 +1298,8 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         y_center = y.mean()
         yc = y - y_center
 
-        # Design matrix: [intercept, year, year², ..., year^d, corpus_dummies...]
         X_trend = np.column_stack([yc ** i for i in range(degree + 1)])
-        if g is not None:
-            dummies = _make_dummies(g)
-            X = np.column_stack([X_trend, dummies]) if dummies.shape[1] > 0 else X_trend
-        else:
-            X = X_trend
+        X = _append_dummies(X_trend)
 
         fit_result = _fit_and_adjust(X_trend, X, s, degree + 1)
         if fit_result is None:
@@ -1246,8 +1307,8 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         fitted, adjusted, fitted_se = fit_result
 
     elif model == "piecewise":
-        # First find the best breakpoint
-        pw_result = fit_piecewise(y, s, groups=g)
+        pw_result = fit_piecewise(y, s,
+            groups=agg_masked[fe_cols[0]].values if fe_cols else None)
         break_year = pw_result.get("pw_break_year", np.nan)
         if not np.isfinite(break_year):
             return pd.DataFrame()
@@ -1258,11 +1319,7 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         ya = np.where(after, y - break_year, 0.0)
 
         X_trend = np.column_stack([np.ones(len(y)), yb, ya])
-        if g is not None:
-            dummies = _make_dummies(g)
-            X = np.column_stack([X_trend, dummies]) if dummies.shape[1] > 0 else X_trend
-        else:
-            X = X_trend
+        X = _append_dummies(X_trend)
 
         fit_result = _fit_and_adjust(X_trend, X, s, 3)
         if fit_result is None:
@@ -1280,8 +1337,9 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         "fitted_se": fitted_se,
         "n_texts": agg_masked["n_texts"].values,
     })
-    if g is not None:
-        result["corpus"] = g
+    # Include the first fixed-effect column (typically corpus) for plotting
+    if fe_cols:
+        result["corpus"] = agg_masked[fe_cols[0]].values
 
     return result
 
