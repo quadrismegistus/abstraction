@@ -19,6 +19,17 @@ from .tokenize import get_stopwords, get_stopwords_and_names
 from .utils import zfy, download_tqdm, read_df, save_df
 
 
+_NLTK_STOPWORDS = None
+
+def get_nltk_stopwords():
+    """Return NLTK English stopwords as a frozenset. Cached after first call."""
+    global _NLTK_STOPWORDS
+    if _NLTK_STOPWORDS is None:
+        from nltk.corpus import stopwords as _sw
+        _NLTK_STOPWORDS = frozenset(_sw.words("english"))
+    return _NLTK_STOPWORDS
+
+
 # ---------------------------------------------------------------------------
 # Adding norm series
 # ---------------------------------------------------------------------------
@@ -176,10 +187,15 @@ def get_origfields():
 
 
 def get_origcontrasts(remove_stopwords=REMOVE_STOPWORDS):
+    """Build contrast word sets (abstract/concrete/neither) from empirical norms.
+
+    When remove_stopwords=True, filters only NLTK function words — not names
+    or the broader stopwords.txt. Content words like 'servant', 'body' etc.
+    participate in defining the abstract/concrete axis.
+    """
     df = get_orignorms(remove_stopwords=False)
     if remove_stopwords:
-        exclude = get_stopwords_and_names()
-        df = df.loc[[w for w in df.index if w not in exclude]]
+        df = df[~df.index.isin(get_nltk_stopwords())]
     return get_contrasts(df)
 
 
@@ -263,9 +279,13 @@ def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
 
 
 def get_allcontrasts(remove_stopwords=REMOVE_STOPWORDS):
+    """Build contrast word sets from all norms (empirical + vector).
+
+    Filters only NLTK function words for contrast construction.
+    """
     df = get_allnorms(remove_stopwords=False)
     if remove_stopwords:
-        df = df[~df.index.isin(get_stopwords_and_names())]
+        df = df[~df.index.isin(get_nltk_stopwords())]
     return get_contrasts(df)
 
 
