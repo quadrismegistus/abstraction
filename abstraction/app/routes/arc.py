@@ -219,7 +219,11 @@ def arc_by_genre(
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
+    from ...analysis import EXCLUDE_CORPORA
     conn = get_connection()
+    exclude_sql = " AND ".join(f"corpus_name != '{c}'" for c in EXCLUDE_CORPORA)
+    if exclude_sql:
+        exclude_sql = " AND " + exclude_sql
 
     if period_matched:
         # Load all per-century columns for this source + the median fallback
@@ -229,7 +233,7 @@ def arc_by_genre(
         rows = conn.execute(f"""
             SELECT id, corpus_name, year, genre_harmonized, {col_sql}
             FROM texts
-            WHERE year IS NOT NULL AND year >= ? AND year <= ?
+            WHERE year IS NOT NULL AND year >= ? AND year <= ?{exclude_sql}
         """, [year_min, year_max]).fetchall()
         columns = ["id", "corpus_name", "year", "genre_harmonized"] + source_cols
     else:
@@ -237,7 +241,7 @@ def arc_by_genre(
             SELECT id, corpus_name, year, genre_harmonized, "{col}"
             FROM texts
             WHERE year IS NOT NULL AND "{col}" IS NOT NULL
-                  AND year >= ? AND year <= ?
+                  AND year >= ? AND year <= ?{exclude_sql}
         """, [year_min, year_max]).fetchall()
         columns = ["id", "corpus_name", "year", "genre_harmonized", col]
 
