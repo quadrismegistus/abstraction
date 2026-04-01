@@ -889,8 +889,8 @@ def assign_period_score(df, source="Median", year_col="year"):
 # Used as the default for score-corpora and arc analysis.
 ARC_CORPORA = [
     # Fiction
-    "canon_fiction", "chadwyck", "chicago", "gale_amfic", "gildedage",
-    "hathi_englit", "internet_archive", "litlab", "long_arc_prestige", "markmark",
+    "canon_fiction", "chicago", "gale_amfic", "gildedage",
+    "hathi_englit", "internet_archive", "litlab", "long_arc_prestige",
     # Poetry
     "chadwyck_poetry", "eebo_tcp",
     # Periodical
@@ -905,10 +905,11 @@ EXCLUDE_CORPORA = {
     "dta",          # German
     "evans_tcp0",   # duplicate of evans_tcp
     "oldbailey0",   # duplicate of oldbailey
+    "chadwyck",     # subset of canon_fiction
+    "markmark",     # subset of canon_fiction
     "txtlab",
     "fanfic",
-    "coca"
-    # "chadwyck_poetry",
+    "coca",
 }
 
 # Per-corpus year bounds to filter outlier texts.
