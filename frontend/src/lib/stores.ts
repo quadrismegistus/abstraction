@@ -7,6 +7,7 @@ export const selectedCorpora = writable<string[]>([]);
 export const yearRange = writable<[number, number]>([1500, 2020]);
 export const chunkSize = writable(500);
 export const periodMatched = writable(false);
+export const loessSpan = writable(0.3);
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

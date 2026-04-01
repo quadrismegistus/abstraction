@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -53,6 +53,13 @@
              onchange={() => $periodMatched = !$periodMatched} />
       Period-matched norms
     </label>
+    <h4>LOESS span</h4>
+    <div class="slider-row">
+      <input type="range" min="0.05" max="0.8" step="0.05"
+             value={$loessSpan}
+             oninput={(e) => $loessSpan = +(e.target as HTMLInputElement).value} />
+      <span class="slider-val">{$loessSpan.toFixed(2)}</span>
+    </div>
   </section>
 
   <section>
@@ -113,6 +120,9 @@
   section { margin-bottom: 0.5rem; }
   select { width: 100%; padding: 0.25rem; font-size: 0.8rem; }
   .toggle { margin-top: 6px; font-size: 0.8rem; color: #666; }
+  .slider-row { display: flex; align-items: center; gap: 6px; }
+  .slider-row input[type="range"] { flex: 1; }
+  .slider-val { font-size: 0.75rem; color: #888; min-width: 2.5em; }
   .checkbox-group { display: flex; flex-direction: column; gap: 2px; }
   .checkbox-group.scrollable { max-height: 200px; overflow-y: auto; }
   label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
