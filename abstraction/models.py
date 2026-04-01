@@ -396,3 +396,9 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
     os.makedirs(os.path.dirname(PATH_VECNORMS), exist_ok=True)
     df.to_csv(PATH_VECNORMS)
     print(f"\nWrote {len(df):,} words × {len(df.columns)} columns to {PATH_VECNORMS}")
+
+    # Regenerate allnorms (orig + vec combined)
+    from .norms import get_allnorms
+    print("Regenerating allnorms...")
+    allnorms = get_allnorms(force=True, remove_stopwords=False)
+    print(f"Wrote {len(allnorms):,} words × {len(allnorms.columns)} columns to allnorms")
