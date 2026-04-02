@@ -119,8 +119,8 @@
         const color = corpusColorMap[corpus] || '#999';
         const symbol = corpusShapeMap[corpus] || 'circle';
 
-        // Raw (unadjusted) points — faint background
-        traces.push({
+        // Raw (unadjusted) points — faint background (only when adjustment is on)
+        if ($corpusAdjusted) traces.push({
           x: cPts.map(p => p.year),
           y: cPts.map(p => p.score),
           customdata: cPts.map(p => [corpus, p.n_texts, arc.genre, p.year]),
@@ -140,10 +140,10 @@
             'Texts: %{customdata[1]:,}<extra>raw</extra>',
         });
 
-        // Adjusted points — bold foreground
+        // Main points — bold foreground (raw or adjusted depending on mode)
         traces.push({
           x: cPts.map(p => p.year),
-          y: cPts.map(p => p.adjusted),
+          y: cPts.map(p => $corpusAdjusted ? p.adjusted : p.score),
           customdata: cPts.map(p => [corpus, p.n_texts, arc.genre, p.year]),
           type: 'scatter', mode: 'markers',
           marker: {
