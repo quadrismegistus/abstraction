@@ -8,6 +8,7 @@
   let plotDiv: HTMLDivElement;
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
+  let mode: 'explore' | 'print' = $state('explore');
 
   function pStars(p: number | null): string {
     if (p === null) return '';
@@ -17,17 +18,24 @@
     return 'n.s.';
   }
 
-
-  // Match the book figure's visual style
+  // Print mode: grayscale, genre-distinguished lines (book figure style)
   const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
     'Fiction':    { color: '#222',    dash: 'solid',    width: 3 },
     'Poetry':     { color: '#666',    dash: 'dashdot',  width: 2.5 },
     'Periodical': { color: '#aaa',    dash: 'dash',     width: 2.5 },
     'Drama':      { color: '#cc6600', dash: 'dot',      width: 2 },
-    'Essay/Treatise': { color: '#336699', dash: 'longdash', width: 2 },
+    'Essay':      { color: '#336699', dash: 'longdash',  width: 2 },
+    'Treatise':   { color: '#669933', dash: 'longdashdot', width: 2 },
   };
 
-  // Corpus shapes for scatter points
+  // Explore mode: distinct colors per corpus
+  const corpusColors: string[] = [
+    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+    '#42d4f4', '#f032e6', '#bfef45', '#469990', '#dcbeff',
+    '#9a6324', '#800000', '#aaffc3', '#808000', '#000075',
+    '#a9a9a9', '#e6beff', '#ffe119', '#fabebe', '#7f7f7f',
+  ];
+
   const corpusShapes: string[] = [
     'circle', 'square', 'diamond', 'triangle-up', 'triangle-down',
     'pentagon', 'hexagon', 'star', 'cross', 'x',
@@ -61,57 +69,144 @@
 
   function renderPlot() {
     if (!Plotly || !plotDiv || genreArcs.length === 0) return;
+    if (mode === 'explore') renderExplore();
+    else renderPrint();
+  }
 
+  function renderExplore() {
     const traces: any[] = [];
 
-    // Build a global corpus→shape map
-    const allCorpora = [...new Set(genreArcs.flatMap(g => g.points.map(p => p.corpus)))];
+    // Build corpus → color/shape maps
+    const allCorpora = [...new Set(genreArcs.flatMap(g => g.points.map(p => p.corpus)).filter(Boolean))];
+    const corpusColorMap: Record<string, string> = {};
     const corpusShapeMap: Record<string, string> = {};
     allCorpora.forEach((c, i) => {
-      if (c) corpusShapeMap[c] = corpusShapes[i % corpusShapes.length];
+      corpusColorMap[c!] = corpusColors[i % corpusColors.length];
+      corpusShapeMap[c!] = corpusShapes[i % corpusShapes.length];
     });
 
-    // Max n_texts for sizing
     const maxN = Math.max(...genreArcs.flatMap(g => g.points.map(p => p.n_texts)), 1);
 
     for (const arc of genreArcs) {
-      const style = genreStyles[arc.genre] || { color: '#999', dash: 'solid', width: 2 };
-
-      // SE ribbon (filled area between se_lo and se_hi)
+      // SE ribbon
       if (arc.loess.length > 0) {
         const lx = arc.loess.map(p => p.year);
         traces.push({
           x: [...lx, ...lx.slice().reverse()],
           y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
-          type: 'scatter',
-          mode: 'lines',
-          fill: 'toself',
-          fillcolor: `rgba(150,150,150,0.15)`,
-          line: { color: 'transparent' },
-          showlegend: false,
-          hoverinfo: 'skip',
+          type: 'scatter', mode: 'lines', fill: 'toself',
+          fillcolor: 'rgba(0,0,0,0.06)', line: { color: 'transparent' },
+          showlegend: false, hoverinfo: 'skip',
         });
       }
 
-      // Scatter: corpus-adjusted points, sized by n_texts, shaped by corpus
-      const pts = arc.points;
-      // Group by corpus for shapes
-      const byCorpus: Record<string, typeof pts> = {};
-      for (const p of pts) {
+      // Group points by corpus
+      const byCorpus: Record<string, typeof arc.points> = {};
+      for (const p of arc.points) {
         const c = p.corpus || 'unknown';
         (byCorpus[c] ??= []).push(p);
       }
 
       for (const [corpus, cPts] of Object.entries(byCorpus)) {
+        const color = corpusColorMap[corpus] || '#999';
+        const symbol = corpusShapeMap[corpus] || 'circle';
+
+        // Raw (unadjusted) points — faint background
+        traces.push({
+          x: cPts.map(p => p.year),
+          y: cPts.map(p => p.score),
+          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre]),
+          type: 'scatter', mode: 'markers',
+          marker: {
+            color, symbol,
+            size: cPts.map(p => 2 + Math.sqrt(p.n_texts / maxN) * 8),
+            opacity: 0.15,
+            line: { width: 0 },
+          },
+          name: corpus,
+          legendgroup: corpus,
+          showlegend: false,
+          hovertemplate:
+            `<b>${corpus}</b> (${arc.genre})<br>` +
+            'Decade: %{x}<br>Raw: %{y:.3f}<br>' +
+            'Texts: %{customdata[1]:,}<extra>raw</extra>',
+        });
+
+        // Adjusted points — bold foreground
+        traces.push({
+          x: cPts.map(p => p.year),
+          y: cPts.map(p => p.adjusted),
+          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre]),
+          type: 'scatter', mode: 'markers',
+          marker: {
+            color, symbol,
+            size: cPts.map(p => 3 + Math.sqrt(p.n_texts / maxN) * 12),
+            opacity: 0.6,
+            line: { width: 0.5, color: 'white' },
+          },
+          name: corpus,
+          legendgroup: corpus,
+          showlegend: !traces.some(t => t.legendgroup === corpus && t.showlegend),
+          hovertemplate:
+            `<b>${corpus}</b> (${arc.genre})<br>` +
+            'Decade: %{x}<br>Adjusted: %{y:.3f}<br>' +
+            'Texts: %{customdata[1]:,}<extra>adjusted</extra>',
+        });
+      }
+
+      // LOESS line (black, on top)
+      if (arc.loess.length > 0) {
+        const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
+        traces.push({
+          x: arc.loess.map(p => p.year),
+          y: arc.loess.map(p => p.fitted),
+          type: 'scatter', mode: 'lines',
+          line: { color: gs.color, dash: gs.dash, width: gs.width },
+          name: `${arc.genre} LOESS`,
+          legendgroup: `_loess_${arc.genre}`,
+          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
+        });
+      }
+    }
+
+    _renderLayout(traces);
+  }
+
+  function renderPrint() {
+    const traces: any[] = [];
+    const maxN = Math.max(...genreArcs.flatMap(g => g.points.map(p => p.n_texts)), 1);
+
+    for (const arc of genreArcs) {
+      const style = genreStyles[arc.genre] || { color: '#999', dash: 'solid', width: 2 };
+
+      // SE ribbon
+      if (arc.loess.length > 0) {
+        const lx = arc.loess.map(p => p.year);
+        traces.push({
+          x: [...lx, ...lx.slice().reverse()],
+          y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
+          type: 'scatter', mode: 'lines', fill: 'toself',
+          fillcolor: 'rgba(150,150,150,0.15)', line: { color: 'transparent' },
+          showlegend: false, hoverinfo: 'skip',
+        });
+      }
+
+      // Adjusted points — grayscale, shaped by corpus
+      const byCorpus: Record<string, typeof arc.points> = {};
+      for (const p of arc.points) {
+        (byCorpus[p.corpus || 'unknown'] ??= []).push(p);
+      }
+
+      const corpusKeys = Object.keys(byCorpus);
+      for (const [ci, [corpus, cPts]] of Object.entries(Object.entries(byCorpus))) {
         traces.push({
           x: cPts.map(p => p.year),
           y: cPts.map(p => p.adjusted),
           customdata: cPts.map(p => [corpus, p.n_texts]),
-          type: 'scatter',
-          mode: 'markers',
+          type: 'scatter', mode: 'markers',
           marker: {
             color: style.color,
-            symbol: corpusShapeMap[corpus] || 'circle',
+            symbol: corpusShapes[Number(ci) % corpusShapes.length],
             size: cPts.map(p => 3 + Math.sqrt(p.n_texts / maxN) * 12),
             opacity: 0.35,
             line: { width: 0.5, color: style.color },
@@ -121,10 +216,8 @@
           showlegend: false,
           hovertemplate:
             `<b>${arc.genre}</b> — ${corpus}<br>` +
-            'Decade: %{x}<br>' +
-            'Score: %{y:.3f}<br>' +
-            'Texts: %{customdata[1]:,}' +
-            '<extra></extra>',
+            'Decade: %{x}<br>Score: %{y:.3f}<br>' +
+            'Texts: %{customdata[1]:,}<extra></extra>',
         });
       }
 
@@ -133,19 +226,19 @@
         traces.push({
           x: arc.loess.map(p => p.year),
           y: arc.loess.map(p => p.fitted),
-          type: 'scatter',
-          mode: 'lines',
+          type: 'scatter', mode: 'lines',
           line: { color: style.color, dash: style.dash, width: style.width },
           name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts, ${arc.n_corpora} corpora)`,
           legendgroup: arc.genre,
-          hovertemplate:
-            `<b>${arc.genre}</b><br>` +
-            'Year: %{x}<br>' +
-            'Score: %{y:.3f}<extra></extra>',
+          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
         });
       }
     }
 
+    _renderLayout(traces);
+  }
+
+  function _renderLayout(traces: any[]) {
     const totalTexts = genreArcs.reduce((s, g) => s + g.n_texts_total, 0);
 
     Plotly.react(plotDiv, traces, {
@@ -169,13 +262,12 @@
       legend: {
         orientation: 'v' as const,
         x: 1.02, y: 1,
-        font: { size: 11 },
+        font: { size: 10 },
       },
       hovermode: 'closest' as const,
       plot_bgcolor: 'white',
     }, { responsive: true, scrollZoom: true });
 
-    // Click a point → navigate to that corpus
     plotDiv.removeAllListeners?.('plotly_click');
     plotDiv.on('plotly_click', (data: any) => {
       const point = data.points[0];
@@ -199,9 +291,19 @@
       if (Plotly) loadData();
     }, 400);
   });
+
+  // Re-render (no reload) when mode toggles
+  $effect(() => {
+    mode;
+    if (Plotly && genreArcs.length > 0) renderPlot();
+  });
 </script>
 
 <div class="chart-container">
+  <div class="mode-toggle">
+    <button class:active={mode === 'explore'} onclick={() => mode = 'explore'}>Explore</button>
+    <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
+  </div>
   <div bind:this={plotDiv} class="plot"></div>
 
   {#if genreArcs.length > 0}
@@ -255,13 +357,20 @@
   {/if}
 </div>
 
-
 <style>
   .chart-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-  .plot { flex: 1; min-height: 500px; }
+  .mode-toggle {
+    display: flex; gap: 4px; padding: 4px 1rem; flex-shrink: 0;
+  }
+  .mode-toggle button {
+    padding: 3px 12px; font-size: 0.8rem; border: 1px solid #ccc;
+    background: white; border-radius: 3px; cursor: pointer;
+  }
+  .mode-toggle button.active { background: #333; color: white; border-color: #333; }
+  .plot { flex: 1; min-height: 300px; }
   .stats-table {
     padding: 0.5rem 1rem; border-top: 1px solid #eee;
-    overflow-x: auto; flex-shrink: 0;
+    overflow-x: auto; flex-shrink: 0; flex-grow: 0;
   }
   table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
   th { text-align: left; padding: 4px 8px; border-bottom: 2px solid #ddd; color: #555; font-weight: 600; }
