@@ -9,6 +9,7 @@
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
   let mode: 'explore' | 'print' = $state('explore');
+  let showRawTrend = $state(false);
 
   function pStars(p: number | null): string {
     if (p === null) return '';
@@ -154,7 +155,23 @@
         });
       }
 
-      // LOESS line (black, on top)
+      // Raw LOESS (pre-adjustment trend, thin dashed)
+      if (showRawTrend && arc.loess_raw.length > 0) {
+        const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
+        traces.push({
+          x: arc.loess_raw.map(p => p.year),
+          y: arc.loess_raw.map(p => p.fitted),
+          type: 'scatter', mode: 'lines',
+          line: { color: gs.color, dash: 'dot', width: 1.5, },
+          opacity: 0.5,
+          name: `${arc.genre} raw`,
+          legendgroup: `_loess_${arc.genre}`,
+          showlegend: false,
+          hovertemplate: `<b>${arc.genre}</b> (raw)<br>Year: %{x}<br>Score: %{y:.3f}<extra>unadjusted</extra>`,
+        });
+      }
+
+      // LOESS line (adjusted, on top)
       if (arc.loess.length > 0) {
         const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
         traces.push({
@@ -164,7 +181,7 @@
           line: { color: gs.color, dash: gs.dash, width: gs.width },
           name: `${arc.genre} LOESS`,
           legendgroup: `_loess_${arc.genre}`,
-          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
+          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra>adjusted</extra>`,
         });
       }
     }
@@ -221,7 +238,22 @@
         });
       }
 
-      // LOESS line
+      // Raw LOESS (pre-adjustment, thin dotted)
+      if (showRawTrend && arc.loess_raw.length > 0) {
+        traces.push({
+          x: arc.loess_raw.map(p => p.year),
+          y: arc.loess_raw.map(p => p.fitted),
+          type: 'scatter', mode: 'lines',
+          line: { color: style.color, dash: 'dot', width: 1.5 },
+          opacity: 0.4,
+          name: `${arc.genre} raw`,
+          legendgroup: arc.genre,
+          showlegend: false,
+          hovertemplate: `<b>${arc.genre}</b> (raw)<br>Year: %{x}<br>Score: %{y:.3f}<extra>unadjusted</extra>`,
+        });
+      }
+
+      // LOESS line (adjusted)
       if (arc.loess.length > 0) {
         traces.push({
           x: arc.loess.map(p => p.year),
@@ -230,7 +262,7 @@
           line: { color: style.color, dash: style.dash, width: style.width },
           name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts, ${arc.n_corpora} corpora)`,
           legendgroup: arc.genre,
-          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
+          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra>adjusted</extra>`,
         });
       }
     }
@@ -293,9 +325,9 @@
     }, 400);
   });
 
-  // Re-render (no reload) when mode toggles
+  // Re-render (no reload) when display toggles change
   $effect(() => {
-    mode;
+    mode; showRawTrend;
     if (Plotly && genreArcs.length > 0) renderPlot();
   });
 </script>
@@ -304,6 +336,7 @@
   <div class="mode-toggle">
     <button class:active={mode === 'explore'} onclick={() => mode = 'explore'}>Explore</button>
     <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
+    <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>Raw trend</button>
   </div>
   <div bind:this={plotDiv} class="plot"></div>
 

@@ -105,6 +105,7 @@ export interface GenreArc {
   genre: string;
   points: AdjustedPoint[];
   loess: LoessPoint[];
+  loess_raw: LoessPoint[];
   stats: ArcStats;
   n_texts_total: number;
   n_corpora: number;

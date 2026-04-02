@@ -268,6 +268,12 @@ def arc_by_genre(
             adj["year"].values, adj_vals, span=loess_span,
         )
 
+        # LOESS on raw (unadjusted) scores
+        raw_vals = adj["score"].values * sign
+        loess_raw_points = _compute_loess(
+            adj["year"].values, raw_vals, span=loess_span,
+        )
+
         stats = _compute_arc_stats(adj, sign, loess_points)
 
         n_corpora = adj["corpus"].nunique() if "corpus" in adj.columns else 1
@@ -275,6 +281,7 @@ def arc_by_genre(
             genre=g,
             points=points,
             loess=loess_points,
+            loess_raw=loess_raw_points,
             stats=stats,
             n_texts_total=int(adj["n_texts"].sum()),
             n_corpora=n_corpora,
