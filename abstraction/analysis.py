@@ -905,8 +905,7 @@ EXCLUDE_CORPORA = {
     "dta",          # German
     "evans_tcp0",   # duplicate of evans_tcp
     "oldbailey0",   # duplicate of oldbailey
-    "canon_fiction", # curated subset of chadwyck + markmark; use chadwyck directly
-    "markmark",     # subset of chadwyck
+    "canon_fiction", # curated subset of chadwyck + markmark; use originals directly
     "hathi_novels",    # overlaps with hathi_englit Fiction (23%)
     "hathi_stories",   # overlaps with hathi_englit Fiction (12%)
     "hathi_tales",     # overlaps with hathi_englit Fiction (27%)

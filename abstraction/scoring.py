@@ -500,10 +500,14 @@ def score_all_corpora(
 
     # Discover LLTK corpora
     skip = {"estc", "hathi", "test_fixture", "tmp", "BigHist"}
+    # Only apply EXCLUDE_CORPORA when not explicitly naming corpora
+    explicit = isinstance(only, list)
     corpus_list = []
     for corpus_name, corpus in lltk.corpora():
         cid = corpus.id
-        if cid in skip or cid in EXCLUDE_CORPORA:
+        if cid in skip:
+            continue
+        if not explicit and cid in EXCLUDE_CORPORA:
             continue
         if include is not None and cid not in include:
             continue
