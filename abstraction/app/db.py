@@ -155,9 +155,12 @@ def init_db(db_path=None):
         df["corpus_name"] = corpus_name
         df["id"] = df["id"].astype(str)
 
-        # Normalize IDs for hathi corpora
+        # Normalize IDs to match LLTK canonical form
         if hathi_id_normalize and corpus_name.startswith("hathi"):
             df["id_normalized"] = df["id"].apply(hathi_id_normalize)
+        elif corpus_name == "chicago":
+            # Chicago: freqs use bare numbers, LLTK uses zero-padded 8-digit
+            df["id_normalized"] = df["id"].apply(lambda x: str(x).zfill(8))
         else:
             df["id_normalized"] = df["id"]
 
