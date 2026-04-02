@@ -21,8 +21,9 @@ SCORES_DB_FILENAME = "scores.duckdb"
 SCORES_VERSION = "v8-raw"
 LLTK_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb.duckdb")
 
-# Connection pool (one per thread via DuckDB's cursor model)
-_conn = None
+import threading
+
+_local = threading.local()
 
 
 def _scores_db_path():
@@ -34,34 +35,34 @@ def _scores_dir():
 
 
 def get_connection():
-    """Get a DuckDB connection with both scores and LLTK metadata available.
+    """Get a per-thread DuckDB connection with scores + LLTK metadata.
 
-    Returns a connection where:
-    - 'scores' table: text scores from CSVs (local DB)
-    - 'meta' table: LLTK metadata (attached read-only)
-    - 'texts' view: JOIN of scores + meta on normalized IDs
+    Each thread gets its own connection (DuckDB connections are not thread-safe).
+    The LLTK DB is attached read-only for JOIN queries.
     """
-    global _conn
-    if _conn is None:
-        _conn = _build_connection()
-    return _conn
+    conn = getattr(_local, 'conn', None)
+    if conn is None:
+        conn = _build_connection()
+        _local.conn = conn
+    return conn
 
 
 def _build_connection():
-    """Create the DuckDB connection with scores + metadata."""
+    """Create a DuckDB connection with scores + metadata."""
     db_path = _scores_db_path()
-    conn = duckdb.connect(db_path)
+    conn = duckdb.connect(db_path, read_only=True)
 
     # Attach LLTK's metadata DB read-only
     if os.path.exists(LLTK_DB_PATH):
-        conn.execute(f"ATTACH '{LLTK_DB_PATH}' AS lltk (READ_ONLY)")
-    else:
-        print(f"[app] WARNING: LLTK DB not found at {LLTK_DB_PATH}")
+        try:
+            conn.execute(f"ATTACH '{LLTK_DB_PATH}' AS lltk (READ_ONLY)")
+        except duckdb.BinderException:
+            pass  # already attached
 
-    # Create the joined view if both tables exist
+    # Create the joined view
     try:
         conn.execute("""
-            CREATE OR REPLACE VIEW texts AS
+            CREATE OR REPLACE TEMP VIEW texts AS
             SELECT
                 s.id,
                 s.corpus_name,
