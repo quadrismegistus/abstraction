@@ -185,6 +185,7 @@ def arc_texts(
 def arc_by_genre(
     col: str = DEFAULT_COL,
     genre: list[str] = Query(default=["Fiction", "Poetry", "Periodical"]),
+    corpus: list[str] = Query(default=[]),
     year_min: float = 1580,
     year_max: float = 2020,
     loess_span: float = 0.3,
@@ -207,6 +208,12 @@ def arc_by_genre(
 
     conn = get_connection()
 
+    # Build corpus filter SQL
+    corpus_sql = ""
+    if corpus:
+        corpus_list = ", ".join(f"'{c}'" for c in corpus)
+        corpus_sql = f" AND s.corpus_name IN ({corpus_list})"
+
     if period_matched:
         # Get all score columns for this source
         score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
@@ -217,7 +224,7 @@ def arc_by_genre(
             FROM scores s
             LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
             WHERE t.year IS NOT NULL
-              AND t.year >= {year_min} AND t.year <= {year_max}
+              AND t.year >= {year_min} AND t.year <= {year_max}{corpus_sql}
         """).fetchdf()
     else:
         df = conn.execute(f"""
@@ -225,7 +232,7 @@ def arc_by_genre(
             FROM scores s
             LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
             WHERE t.year IS NOT NULL AND s."{col}" IS NOT NULL
-              AND t.year >= {year_min} AND t.year <= {year_max}
+              AND t.year >= {year_min} AND t.year <= {year_max}{corpus_sql}
         """).fetchdf()
 
     if period_matched:

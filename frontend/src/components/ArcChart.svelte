@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, yearRange, periodMatched, loessSpan, globalLoading } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, globalLoading, corporaList } from '$lib/stores';
   import { fetchArcByGenre } from '$lib/api';
   import type { GenreArc } from '$lib/types';
 
@@ -50,6 +50,11 @@
       ? $selectedGenres
       : ['Fiction', 'Poetry', 'Periodical'];
     p.genre = genres;
+    // Only pass corpus filter if some are unchecked
+    const allCorpusNames = $corporaList.map(c => c.name);
+    if ($selectedCorpora.length > 0 && $selectedCorpora.length < allCorpusNames.length) {
+      p.corpus = $selectedCorpora;
+    }
     p.year_min = String($yearRange[0]);
     p.year_max = String($yearRange[1]);
     if ($periodMatched) p.period_matched = 'true';
@@ -318,7 +323,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $yearRange; $periodMatched; $loessSpan;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $loessSpan;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();

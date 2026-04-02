@@ -38,7 +38,7 @@ export function fetchArcAggregated(params: {
 }
 
 export function fetchArcByGenre(params: {
-  col?: string; genre?: string[];
+  col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string;
   period_matched?: string; loess_span?: string;
 }) {

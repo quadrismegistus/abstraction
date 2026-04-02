@@ -98,9 +98,11 @@
         </label>
       {/each}
     </div>
-    {#if $selectedCorpora.length > 0}
-      <button class="clear-btn" onclick={() => $selectedCorpora = []}>Clear</button>
-    {/if}
+    <div class="btn-row">
+      <button class="clear-btn" onclick={() => $selectedCorpora = $corporaList.map(c => c.name)}>All</button>
+      <button class="clear-btn" onclick={() => $selectedCorpora = []}>None</button>
+      <span class="count">{$selectedCorpora.length}/{$corporaList.length}</span>
+    </div>
   </section>
 </aside>
 
@@ -125,8 +127,9 @@
   .checkbox-group.scrollable { max-height: 200px; overflow-y: auto; }
   label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .count { color: #999; font-size: 0.75rem; }
+  .btn-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
   .clear-btn {
-    margin-top: 4px; padding: 2px 8px; font-size: 0.75rem;
+    padding: 2px 8px; font-size: 0.75rem;
     background: #eee; border: 1px solid #ccc; border-radius: 3px; cursor: pointer;
   }
   .range-inputs { display: flex; align-items: center; gap: 4px; }
