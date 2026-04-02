@@ -191,6 +191,7 @@ def arc_by_genre(
     loess_span: float = 0.3,
     invert: bool = True,
     period_matched: bool = False,
+    model: str = "quadratic",
 ):
     """Return corpus-adjusted decade bins + LOESS per genre.
 
@@ -253,7 +254,7 @@ def arc_by_genre(
 
         adj = adjust_scores(
             gdf, score_col=score_col, min_year=year_min, max_year=year_max,
-            fixed_effects=fe,
+            fixed_effects=fe, model=model,
         )
         if adj.empty:
             continue

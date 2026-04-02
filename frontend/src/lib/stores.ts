@@ -9,6 +9,7 @@ export const chunkSize = writable(500);
 export const periodMatched = writable(true);
 export const globalLoading = writable(false);
 export const loessSpan = writable(0.2);
+export const adjustModel = writable('quadratic');
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

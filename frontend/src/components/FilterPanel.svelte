@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -58,6 +58,13 @@
              oninput={(e) => $loessSpan = +(e.target as HTMLInputElement).value} />
       <span class="slider-val">{$loessSpan.toFixed(2)}</span>
     </div>
+    <h4>Adjustment model</h4>
+    <select onchange={(e) => $adjustModel = (e.target as HTMLSelectElement).value}>
+      <option value="quadratic" selected={$adjustModel === 'quadratic'}>Quadratic</option>
+      <option value="cubic" selected={$adjustModel === 'cubic'}>Cubic</option>
+      <option value="quartic" selected={$adjustModel === 'quartic'}>Quartic</option>
+      <option value="piecewise" selected={$adjustModel === 'piecewise'}>Piecewise</option>
+    </select>
   </section>
 
   <section>
