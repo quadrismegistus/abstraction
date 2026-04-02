@@ -6,29 +6,14 @@ import sys
 
 def cmd_score_corpora(args):
     from .scoring import score_all_corpora
-    only = "all" if args.all else None
+    if args.all:
+        only = "all"
+    elif args.corpora:
+        only = args.corpora
+    else:
+        only = None  # defaults to ARC_CORPORA
     score_all_corpora(force=args.force, modernize=args.modernize, only=only)
 
-
-def cmd_score_corpus(args):
-    import os
-    from .config import PATH_CORPORA, SCORES_DIR
-    from .scoring import score_corpus_freqs, _version_dir
-
-    corpus_dir = os.path.join(PATH_CORPORA, args.corpus)
-    if not os.path.isdir(corpus_dir):
-        print(f"Corpus directory not found: {corpus_dir}", file=sys.stderr)
-        sys.exit(1)
-    out_dir = _version_dir(SCORES_DIR, "v8", args.modernize)
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"{args.corpus}.csv")
-    if args.force and os.path.exists(out_path):
-        os.remove(out_path)
-    df = score_corpus_freqs(corpus_dir, output_path=out_path, modernize=args.modernize)
-    if len(df):
-        print(f"Scored {len(df)} texts -> {out_path}")
-    else:
-        print(f"No freqs files found in {corpus_dir}/freqs/")
 
 
 def cmd_check_freqs(args):
@@ -307,16 +292,12 @@ def main():
 
     # score-corpora: score all corpora with freqs/ folders
     p = sub.add_parser("score-corpora", help="Score corpora (default: arc corpora only)")
-    p.add_argument("--all", action="store_true", help="Score ALL corpora with freqs/ folders (default: arc corpora only)")
+    p.add_argument("corpora", nargs="*", help="Specific corpora to score (e.g. canon_fiction ecco)")
+    p.add_argument("--all", action="store_true", help="Score ALL LLTK corpora with freqs (default: arc corpora only)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v8/ instead of v8-raw/)")
 
     # score-corpus: score a single corpus
-    p = sub.add_parser("score-corpus", help="Score a single corpus")
-    p.add_argument("corpus", help="Corpus directory name (e.g. canon_fiction)")
-    p.add_argument("--force", action="store_true", help="Re-score even if output exists")
-    p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v8/ instead of v8-raw/)")
-
     # check-freqs: check metadata-to-freqs coverage
     p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
     p.add_argument("corpus", nargs="?", default=None, help="Corpus name (default: all)")
@@ -422,8 +403,6 @@ def main():
         cmd_report_full(args)
     elif args.command == "score-corpora":
         cmd_score_corpora(args)
-    elif args.command == "score-corpus":
-        cmd_score_corpus(args)
     elif args.command == "check-freqs":
         cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":
