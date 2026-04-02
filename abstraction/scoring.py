@@ -236,25 +236,63 @@ def _modernize_word_list(words_lower, norm_index, spelling_d):
     return result
 
 
+_NORMS_DICT_CACHE = None
+
+
+def _get_norms_dict(allnorms):
+    """Convert allnorms DataFrame to a dict-of-dicts for fast lookup.
+
+    Returns {word: {col: z_score, ...}, ...} — only non-NaN entries.
+    """
+    global _NORMS_DICT_CACHE
+    if _NORMS_DICT_CACHE is not None:
+        return _NORMS_DICT_CACHE
+    print("[scoring] Building norms lookup dict...", end=" ", flush=True)
+    cols = allnorms.columns.tolist()
+    vals = allnorms.values  # numpy array
+    idx = allnorms.index.tolist()
+    d = {}
+    for i, word in enumerate(idx):
+        row = vals[i]
+        entry = {}
+        for j, col in enumerate(cols):
+            v = row[j]
+            if v == v:  # fast NaN check
+                entry[col] = v
+        if entry:
+            d[word] = entry
+    _NORMS_DICT_CACHE = d
+    print(f"{len(d):,} words")
+    return d
+
+
 def _score_freqs_dict_allnorms(freqs, allnorms, spelling_d=None):
     """Score a word-frequency dict against all norm columns at once.
 
     Returns a dict of {norm_col: weighted_mean_score} or empty dict.
+    Uses a precomputed dict-of-dicts for O(1) per-word lookup.
     """
     if not freqs:
         return {}
-    words = list(freqs.keys())
-    counts = np.array([freqs[w] for w in words])
-    words_lower = [w.lower() for w in words]
-    if spelling_d:
-        words_lower = _modernize_word_list(words_lower, set(allnorms.index), spelling_d)
-    matched = allnorms.reindex(words_lower)
-    notna = matched.notna()
-    weighted = matched.mul(counts, axis=0)
-    col_counts = notna.mul(counts, axis=0).sum()
-    col_sums = weighted.sum()
-    scores = col_sums / col_counts
-    return scores[col_counts > 0].to_dict()
+    norms_d = _get_norms_dict(allnorms)
+    norm_vocab = set(norms_d)
+    col_sums: dict[str, float] = {}
+    col_counts: dict[str, float] = {}
+
+    for word, count in freqs.items():
+        w = word.lower()
+        if spelling_d:
+            mod = spelling_d.get(w)
+            if mod and mod in norm_vocab:
+                w = mod
+        entry = norms_d.get(w)
+        if entry is None:
+            continue
+        for col, z in entry.items():
+            col_sums[col] = col_sums.get(col, 0.0) + z * count
+            col_counts[col] = col_counts.get(col, 0.0) + count
+
+    return {col: col_sums[col] / col_counts[col] for col in col_sums if col_counts[col] > 0}
 
 
 def _score_freqs_allnorms(path, allnorms, spelling_d=None):
