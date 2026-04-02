@@ -240,10 +240,16 @@ def arc_by_genre(
     if period_matched:
         df = assign_period_score(df, source=source)
         score_col = "period_score"
-        fe = ["norm_period"]
     else:
         score_col = col
-        fe = None
+
+    # Build fixed effects list
+    fe = []
+    if period_matched:
+        fe.append("norm_period")  # always needed to absorb century hinge points
+
+    # corpus_col: only include if corpus adjustment is on
+    use_corpus_col = "corpus_name" if corpus_adjusted else None
 
     results = []
     for g in genre:
@@ -255,7 +261,9 @@ def arc_by_genre(
 
         adj = adjust_scores(
             gdf, score_col=score_col, min_year=year_min, max_year=year_max,
-            fixed_effects=fe, model=model,
+            corpus_col=use_corpus_col,
+            fixed_effects=fe if fe else None,
+            model=model,
         )
         if adj.empty:
             continue
