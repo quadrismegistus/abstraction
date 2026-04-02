@@ -1218,6 +1218,9 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
                 fe_cols.append(fe)
 
     keep_cols = [year_col, score_col] + fe_cols
+    # Always keep corpus_col for output even if not in fe_cols
+    if corpus_col and corpus_col in df.columns and corpus_col not in keep_cols:
+        keep_cols.append(corpus_col)
     sub = df[[c for c in keep_cols if c in df.columns]].copy()
     sub[year_col] = pd.to_numeric(sub[year_col], errors="coerce")
     sub = sub.dropna(subset=[year_col, score_col])
@@ -1229,10 +1232,17 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
     if len(sub) == 0:
         return pd.DataFrame()
 
-    # Aggregate by (decade, fixed_effect_cols...)
+    # Aggregate by (decade, corpus, fixed_effects...)
+    # Always group by corpus for output; fe_cols determines which get dummies
     sub["_bin"] = (sub[year_col] // agg_bin) * agg_bin
-    group_cols = ["_bin"] + fe_cols
-    if fe_cols:
+    group_cols = ["_bin"]
+    if corpus_col and corpus_col in sub.columns:
+        group_cols.append(corpus_col)
+    for fe in (fe_cols or []):
+        if fe not in group_cols and fe in sub.columns:
+            group_cols.append(fe)
+
+    if len(group_cols) > 1:
         agg = sub.groupby(group_cols).agg(
             score=(score_col, "mean"),
             n_texts=(score_col, "count"),
@@ -1342,9 +1352,9 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         "fitted_se": fitted_se,
         "n_texts": agg_masked["n_texts"].values,
     })
-    # Include the first fixed-effect column (typically corpus) for plotting
-    if fe_cols:
-        result["corpus"] = agg_masked[fe_cols[0]].values
+    # Include corpus column for plotting
+    if corpus_col and corpus_col in agg_masked.columns:
+        result["corpus"] = agg_masked[corpus_col].values
 
     return result
 

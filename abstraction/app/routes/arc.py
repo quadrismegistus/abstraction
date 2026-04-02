@@ -247,9 +247,8 @@ def arc_by_genre(
     fe = []
     if period_matched:
         fe.append("norm_period")  # always needed to absorb century hinge points
-
-    # corpus_col: only include if corpus adjustment is on
-    use_corpus_col = "corpus_name" if corpus_adjusted else None
+    if corpus_adjusted:
+        fe.append("corpus_name")  # corpus intercepts as fixed effects
 
     results = []
     for g in genre:
@@ -261,7 +260,7 @@ def arc_by_genre(
 
         adj = adjust_scores(
             gdf, score_col=score_col, min_year=year_min, max_year=year_max,
-            corpus_col=use_corpus_col,
+            corpus_col="corpus_name",
             fixed_effects=fe if fe else None,
             model=model,
         )
