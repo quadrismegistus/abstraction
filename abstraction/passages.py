@@ -56,7 +56,7 @@ def _word_style(z, max_z=3.0):
     return css, cls
 
 
-def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True):
+def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True, preserve_newlines=False):
     """Render passage text to styled HTML fragment (no wrapper).
 
     Paragraph breaks (blank lines) become indented new paragraphs
@@ -66,7 +66,7 @@ def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True):
     spelling_d = get_spelling_modernizer()
 
     # Split into paragraphs on blank lines, render each
-    paragraphs = _split_paragraphs(txt)
+    paragraphs = _split_paragraphs(txt, preserve_newlines=preserve_newlines)
     rendered = []
     for i, para in enumerate(paragraphs):
         body = _render_paragraph(para, scores, spelling_d, inline_styles=inline_styles)
@@ -77,11 +77,14 @@ def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True):
     return "\n".join(rendered)
 
 
-def _split_paragraphs(txt):
+def _split_paragraphs(txt, preserve_newlines=False):
     """Split text into paragraphs on blank lines."""
     import re
     # Split on one or more blank lines (two+ consecutive newlines)
     paras = re.split(r'\n\s*\n', txt.strip())
+    if preserve_newlines:
+        # Keep single newlines as <br> (useful for verse)
+        return [re.sub(r'\n', '<br>\n', p).strip() for p in paras if p.strip()]
     # Collapse remaining single newlines within paragraphs to spaces
     return [re.sub(r'\n', ' ', p).strip() for p in paras if p.strip()]
 
@@ -171,14 +174,15 @@ def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color"):
     Parameters
     ----------
     mode : str
-        "color" — blue↔orange continuous color scale (for web)
+        "color" — blue↔orange continuous color scale (for web), preserves newlines as <br>
         "print" — grayscale outline+shading (for inline print preview)
 
     Returns a <div class="passage"> containing word spans with
     class, data-z, and mode-appropriate inline styles.
     """
     style_mode = "color" if mode == "color" else True
-    body = _render_body(txt, col=col, inline_styles=style_mode)
+    preserve = mode == "color"
+    body = _render_body(txt, col=col, inline_styles=style_mode, preserve_newlines=preserve)
     return f'<div class="passage">\n{body}\n</div>'
 
 
