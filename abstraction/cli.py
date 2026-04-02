@@ -219,6 +219,59 @@ def cmd_train_skipgrams(args):
     print("Done")
 
 
+def cmd_app(args):
+    import os
+    import signal
+    import subprocess
+
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    frontend_dir = os.path.join(project_root, "frontend")
+
+    procs = []
+
+    if not args.frontend_only:
+        print(f"Starting FastAPI backend on :{args.port}...")
+        backend = subprocess.Popen(
+            ["uvicorn", "abstraction.app:app", "--reload", "--port", str(args.port)],
+            cwd=project_root,
+        )
+        procs.append(backend)
+
+    if not args.backend_only:
+        if not os.path.isdir(frontend_dir):
+            print(f"Frontend directory not found: {frontend_dir}")
+            sys.exit(1)
+        print(f"Starting SvelteKit frontend on :{args.frontend_port}...")
+        frontend = subprocess.Popen(
+            ["npm", "run", "dev", "--", "--port", str(args.frontend_port)],
+            cwd=frontend_dir,
+        )
+        procs.append(frontend)
+
+    if not procs:
+        print("Nothing to start (both --backend-only and --frontend-only?)")
+        sys.exit(1)
+
+    print(f"\nBackend:  http://localhost:{args.port}/docs")
+    print(f"Frontend: http://localhost:{args.frontend_port}")
+    print("Press Ctrl+C to stop.\n")
+
+    def _shutdown(sig, frame):
+        for p in procs:
+            p.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    # Wait for any process to exit
+    try:
+        for p in procs:
+            p.wait()
+    except KeyboardInterrupt:
+        _shutdown(None, None)
+
+
 def cmd_gen_vecnorms(args):
     import time
     from .models import gen_vecnorms
@@ -353,8 +406,17 @@ def main():
     p.add_argument("--csv", default=None, help="Save results to CSV")
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized counts (v2 instead of v2-raw)")
 
+    # app: start web app servers
+    p = sub.add_parser("app", help="Start the web app (FastAPI backend + SvelteKit frontend)")
+    p.add_argument("--backend-only", action="store_true", help="Start only the FastAPI backend")
+    p.add_argument("--frontend-only", action="store_true", help="Start only the SvelteKit frontend")
+    p.add_argument("--port", type=int, default=8000, help="Backend port (default: 8000)")
+    p.add_argument("--frontend-port", type=int, default=5173, help="Frontend port (default: 5173)")
+
     args = parser.parse_args()
-    if args.command == "report-full":
+    if args.command == "app":
+        cmd_app(args)
+    elif args.command == "report-full":
         cmd_report_full(args)
     elif args.command == "score-corpora":
         cmd_score_corpora(args)
