@@ -277,7 +277,7 @@ def _load_done_ids(csv_path):
     if not os.path.exists(csv_path):
         return set()
     try:
-        return set(pd.read_csv(csv_path, usecols=["id"])["id"])
+        return set(pd.read_csv(csv_path, usecols=["id"], dtype={"id": str})["id"])
     except Exception:
         return set()
 
