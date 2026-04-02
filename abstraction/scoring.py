@@ -236,63 +236,67 @@ def _modernize_word_list(words_lower, norm_index, spelling_d):
     return result
 
 
-_NORMS_DICT_CACHE = None
+_NORMS_ARRAYS_CACHE = None
 
 
-def _get_norms_dict(allnorms):
-    """Convert allnorms DataFrame to a dict-of-dicts for fast lookup.
+def _get_norms_arrays(allnorms):
+    """Precompute numpy arrays + word→index dict for fast scoring.
 
-    Returns {word: {col: z_score, ...}, ...} — only non-NaN entries.
+    Returns (word2idx, values, columns) where:
+    - word2idx: dict mapping word → row index
+    - values: numpy float64 array (n_words × n_cols)
+    - columns: list of column names
     """
-    global _NORMS_DICT_CACHE
-    if _NORMS_DICT_CACHE is not None:
-        return _NORMS_DICT_CACHE
-    print("[scoring] Building norms lookup dict...", end=" ", flush=True)
-    cols = allnorms.columns.tolist()
-    vals = allnorms.values  # numpy array
-    idx = allnorms.index.tolist()
-    d = {}
-    for i, word in enumerate(idx):
-        row = vals[i]
-        entry = {}
-        for j, col in enumerate(cols):
-            v = row[j]
-            if v == v:  # fast NaN check
-                entry[col] = v
-        if entry:
-            d[word] = entry
-    _NORMS_DICT_CACHE = d
-    print(f"{len(d):,} words")
-    return d
+    global _NORMS_ARRAYS_CACHE
+    if _NORMS_ARRAYS_CACHE is not None:
+        return _NORMS_ARRAYS_CACHE
+    word2idx = {w: i for i, w in enumerate(allnorms.index)}
+    values = allnorms.values.astype(np.float64)
+    columns = allnorms.columns.tolist()
+    _NORMS_ARRAYS_CACHE = (word2idx, values, columns)
+    return _NORMS_ARRAYS_CACHE
 
 
 def _score_freqs_dict_allnorms(freqs, allnorms, spelling_d=None):
     """Score a word-frequency dict against all norm columns at once.
 
     Returns a dict of {norm_col: weighted_mean_score} or empty dict.
-    Uses a precomputed dict-of-dicts for O(1) per-word lookup.
+    Uses precomputed numpy arrays with O(1) word→index lookup.
     """
     if not freqs:
         return {}
-    norms_d = _get_norms_dict(allnorms)
-    norm_vocab = set(norms_d)
-    col_sums: dict[str, float] = {}
-    col_counts: dict[str, float] = {}
+    word2idx, values, columns = _get_norms_arrays(allnorms)
 
+    # Build matched indices and counts
+    indices = []
+    counts = []
     for word, count in freqs.items():
         w = word.lower()
         if spelling_d:
             mod = spelling_d.get(w)
-            if mod and mod in norm_vocab:
+            if mod and mod in word2idx:
                 w = mod
-        entry = norms_d.get(w)
-        if entry is None:
-            continue
-        for col, z in entry.items():
-            col_sums[col] = col_sums.get(col, 0.0) + z * count
-            col_counts[col] = col_counts.get(col, 0.0) + count
+        idx = word2idx.get(w)
+        if idx is not None:
+            indices.append(idx)
+            counts.append(count)
 
-    return {col: col_sums[col] / col_counts[col] for col in col_sums if col_counts[col] > 0}
+    if not indices:
+        return {}
+
+    # Vectorized scoring: extract matched rows, multiply by counts
+    matched = values[indices]  # (n_matched × n_cols)
+    counts_arr = np.array(counts, dtype=np.float64)[:, np.newaxis]  # (n_matched × 1)
+    notna = ~np.isnan(matched)
+    weighted = np.where(notna, matched * counts_arr, 0.0)
+    col_counts = np.where(notna, counts_arr, 0.0).sum(axis=0)
+    col_sums = weighted.sum(axis=0)
+
+    result = {}
+    for i, col in enumerate(columns):
+        if col_counts[i] > 0:
+            result[col] = col_sums[i] / col_counts[i]
+    return result
 
 
 def _score_freqs_allnorms(path, allnorms, spelling_d=None):
