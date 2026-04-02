@@ -31,8 +31,6 @@
       : [...$selectedCorpora, c];
   }
 
-  // Major genres to show prominently
-  const MAJOR_GENRES = ['Fiction', 'Poetry', 'Drama', 'Periodical', 'Essay', 'Treatise', 'Letters', 'Sermon', 'Legal', 'Speech', 'Nonfiction', 'Criticism'];
 </script>
 
 <aside class="filter-panel">
@@ -65,7 +63,7 @@
   <section>
     <h4>Genre</h4>
     <div class="checkbox-group">
-      {#each MAJOR_GENRES.filter(g => $genresList.includes(g)) as g}
+      {#each $genresList as g}
         <label>
           <input type="checkbox" checked={$selectedGenres.includes(g)}
                  onchange={() => toggleGenre(g)} />
