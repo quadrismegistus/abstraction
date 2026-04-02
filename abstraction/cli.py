@@ -412,8 +412,8 @@ def main():
     p.add_argument("--backend-only", action="store_true", help="Start only the FastAPI backend")
     p.add_argument("--frontend-only", action="store_true", help="Start only the SvelteKit frontend")
     p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1, use 0.0.0.0 for network access)")
-    p.add_argument("--port", type=int, default=8000, help="Backend port (default: 8000)")
-    p.add_argument("--frontend-port", type=int, default=5173, help="Frontend port (default: 5173)")
+    p.add_argument("--port", type=int, default=1709, help="Backend port (default: 1709)")
+    p.add_argument("--frontend-port", type=int, default=1784, help="Frontend port (default: 1784)")
 
     args = parser.parse_args()
     if args.command == "app":

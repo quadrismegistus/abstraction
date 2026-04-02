@@ -3,8 +3,8 @@ import type {
   TrajectoryResponse, PassageResponse
 } from './types';
 
-// Use same hostname as the page, port 8000 for the API
-const API_BASE = `http://${window.location.hostname}:8000/api`;
+// Use same hostname as the page, port 1709 for the API (Johnson's DOB)
+const API_BASE = `http://${window.location.hostname}:1709/api`;
 
 async function fetchJson<T>(path: string, params?: Record<string, string | string[]>): Promise<T> {
   const url = new URL(`${API_BASE}${path}`);
