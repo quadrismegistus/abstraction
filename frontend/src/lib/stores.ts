@@ -11,6 +11,7 @@ export const globalLoading = writable(false);
 export const loessSpan = writable(0.2);
 export const adjustModel = writable('quadratic');
 export const corpusAdjusted = writable(false);
+export const binSize = writable(10);
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

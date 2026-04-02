@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, binSize, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -56,6 +56,13 @@
              onchange={() => $corpusAdjusted = !$corpusAdjusted} />
       Corpus adjustment
     </label>
+    <h4>Bin size</h4>
+    <select onchange={(e) => $binSize = +(e.target as HTMLSelectElement).value}>
+      <option value="1" selected={$binSize === 1}>1 year</option>
+      <option value="5" selected={$binSize === 5}>5 years</option>
+      <option value="10" selected={$binSize === 10}>10 years (decade)</option>
+      <option value="25" selected={$binSize === 25}>25 years</option>
+    </select>
     <h4>LOESS span</h4>
     <div class="slider-row">
       <input type="range" min="0.05" max="0.8" step="0.05"

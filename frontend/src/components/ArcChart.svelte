@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, globalLoading, corporaList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, binSize, globalLoading, corporaList } from '$lib/stores';
   import { fetchArcByGenre } from '$lib/api';
   import type { GenreArc } from '$lib/types';
 
@@ -61,6 +61,7 @@
     if ($corpusAdjusted) p.corpus_adjusted = 'true';
     p.loess_span = String($loessSpan);
     p.model = $adjustModel;
+    p.bin_size = String($binSize);
     return p;
   }
 
@@ -325,7 +326,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $loessSpan; $adjustModel;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $loessSpan; $adjustModel; $binSize;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();
