@@ -367,6 +367,7 @@ def score_all_corpora(
     force=False,
     modernize=False,
     only=None,
+    min_words=100,
 ):
     """Score corpora using LLTK text objects for freqs access.
 
@@ -459,6 +460,8 @@ def score_all_corpora(
                 try:
                     freqs = dict(t.freqs())
                 except Exception:
+                    continue
+                if sum(freqs.values()) < min_words:
                     continue
                 scores = _score_freqs_dict_allnorms(freqs, allnorms, spelling_d)
                 if scores:
