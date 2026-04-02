@@ -842,14 +842,14 @@ DEFAULT_MIN_YEAR = 1600
 DEFAULT_MAX_YEAR = 2000
 DEFAULT_AGG_BIN = 10  # aggregate by decade
 
-# Century labels used for period-matched scoring
+# Century labels used for period-matched scoring.
+# C21 texts use C20 norms (C21 has only 1 corpus/1 model, not robust enough).
 CENTURY_BINS = [
     (1500, 1600, "C16"),
     (1600, 1700, "C17"),
     (1700, 1800, "C18"),
     (1800, 1900, "C19"),
-    (1900, 2000, "C20"),
-    (2000, 2100, "C21"),
+    (1900, 2100, "C20"),  # C20 norms cover 1900-2100
 ]
 
 
