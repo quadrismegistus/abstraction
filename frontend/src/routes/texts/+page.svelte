@@ -6,7 +6,8 @@
   import type { ArcText } from '$lib/types';
 
   let corpus = $derived(page.url.searchParams.get('corpus') || '');
-  let decade = $derived(Number(page.url.searchParams.get('decade') || '0'));
+  let yearBin = $derived(Number(page.url.searchParams.get('year') || '0'));
+  let binSz = $derived(Number(page.url.searchParams.get('bin_size') || '10'));
   let genre = $derived(page.url.searchParams.get('genre') || '');
 
   let texts: ArcText[] = $state([]);
@@ -19,8 +20,8 @@
     loading = true;
     const params: Record<string, string | string[]> = {
       col: $norm,
-      year_min: String(decade),
-      year_max: String(decade + 9),
+      year_min: String(yearBin),
+      year_max: String(yearBin + binSz - 1),
       page_size: '10000',
     };
     if (corpus) params.corpus = [corpus];
@@ -48,7 +49,7 @@
   }
 
   $effect(() => {
-    corpus; decade; genre; $norm;
+    corpus; yearBin; binSz; genre; $norm;
     loadData();
   });
 </script>
@@ -56,7 +57,7 @@
 <div class="texts-page">
   <div class="header">
     <a href="/arc">&larr; Back to arc</a>
-    <h2>{genre} in {corpus} ({decade}s)</h2>
+    <h2>{genre} in {corpus} ({yearBin}{binSz > 1 ? `\u2013${yearBin + binSz - 1}` : ''})</h2>
     <span class="count">{total.toLocaleString()} texts</span>
   </div>
 

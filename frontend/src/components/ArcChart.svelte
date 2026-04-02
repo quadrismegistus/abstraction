@@ -312,8 +312,8 @@
     plotDiv.on('plotly_click', (data: any) => {
       const point = data.points[0];
       if (point?.customdata) {
-        const [corpus, nTexts, genre, decade] = point.customdata;
-        goto(`/texts?corpus=${corpus}&decade=${decade}&genre=${encodeURIComponent(genre)}`);
+        const [corpus, nTexts, genre, yr] = point.customdata;
+        goto(`/texts?corpus=${corpus}&year=${yr}&bin_size=${$binSize}&genre=${encodeURIComponent(genre)}`);
       }
     });
   }
