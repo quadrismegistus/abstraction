@@ -12,7 +12,8 @@ def cmd_score_corpora(args):
         only = args.corpora
     else:
         only = None  # defaults to ARC_CORPORA
-    score_all_corpora(force=args.force, modernize=args.modernize, only=only)
+    score_all_corpora(force=args.force, modernize=args.modernize, only=only,
+                      num_proc=args.workers)
 
 
 
@@ -295,6 +296,7 @@ def main():
     p.add_argument("corpora", nargs="*", help="Specific corpora to score (e.g. canon_fiction ecco)")
     p.add_argument("--all", action="store_true", help="Score ALL LLTK corpora with freqs (default: arc corpora only)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
+    p.add_argument("--workers", "-j", type=int, default=1, help="Parallel worker processes (default: 1)")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v8/ instead of v8-raw/)")
 
     # score-corpus: score a single corpus

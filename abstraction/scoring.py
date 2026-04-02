@@ -404,12 +404,50 @@ def _version_dir(base, version, modernize):
     return os.path.join(base, f"{version}{suffix}")
 
 
+# ---------------------------------------------------------------------------
+# Multiprocessing worker for scoring
+# ---------------------------------------------------------------------------
+
+# Module-level references inherited by forked workers
+_worker_allnorms = None
+_worker_spelling_d = None
+_worker_min_words = 100
+
+
+def _init_worker(allnorms, spelling_d, min_words):
+    """Initialize worker process with shared data."""
+    global _worker_allnorms, _worker_spelling_d, _worker_min_words
+    _worker_allnorms = allnorms
+    _worker_spelling_d = spelling_d
+    _worker_min_words = min_words
+    # Pre-build the norms arrays cache in this worker
+    _get_norms_arrays(allnorms)
+
+
+def _score_one_text(args):
+    """Score a single text from its freqs path. Runs in worker process."""
+    text_id, freqs_path = args
+    try:
+        with open(freqs_path) as f:
+            freqs = json.load(f)
+    except Exception:
+        return None
+    if sum(freqs.values()) < _worker_min_words:
+        return None
+    scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
+    if scores:
+        scores["id"] = text_id
+        return scores
+    return None
+
+
 def score_all_corpora(
     output_dir=SCORES_DIR,
     force=False,
     modernize=False,
     only=None,
     min_words=100,
+    num_proc=1,
 ):
     """Score corpora using LLTK text objects for freqs access.
 
@@ -428,6 +466,9 @@ def score_all_corpora(
     only : list of str, optional
         If provided, score only these corpora. If None, defaults to
         ARC_CORPORA. Pass only="all" to score every LLTK corpus with freqs.
+    num_proc : int
+        Number of parallel worker processes. Default 1 (no parallelism).
+        Workers inherit allnorms via fork for zero-copy sharing.
 
     Returns
     -------
@@ -446,6 +487,9 @@ def score_all_corpora(
     columns = _get_csv_columns(allnorms)
     spelling_d = get_spelling_modernizer() if modernize else None
 
+    # Pre-build norms arrays in main process (inherited by workers via fork)
+    _get_norms_arrays(allnorms)
+
     # Resolve which corpora to include
     if only == "all":
         include = None
@@ -455,7 +499,7 @@ def score_all_corpora(
         include = set(ARC_CORPORA)
 
     # Discover LLTK corpora
-    skip = {"estc", "hathi", "test_fixture", "tmp", "BigHist"}  # no freqs, catalog-only, or not real
+    skip = {"estc", "hathi", "test_fixture", "tmp", "BigHist"}
     corpus_list = []
     for corpus_name, corpus in lltk.corpora():
         cid = corpus.id
@@ -465,7 +509,19 @@ def score_all_corpora(
             continue
         corpus_list.append((cid, corpus))
 
-    print(f"Scoring {len(corpus_list)} corpora")
+    print(f"Scoring {len(corpus_list)} corpora (num_proc={num_proc})")
+
+    # Set up multiprocessing pool if requested
+    pool = None
+    if num_proc > 1:
+        import multiprocessing as mp
+        # Use fork to inherit allnorms arrays (copy-on-write)
+        ctx = mp.get_context("fork")
+        pool = ctx.Pool(
+            num_proc,
+            initializer=_init_worker,
+            initargs=(allnorms, spelling_d, min_words),
+        )
 
     results = {}
     for cid, corpus in corpus_list:
@@ -474,22 +530,22 @@ def score_all_corpora(
             os.remove(out_path)
         done_ids = _load_done_ids(out_path)
 
-        # Count texts with freqs
-        texts_to_score = []
+        # Collect (text_id, freqs_path) tuples from LLTK
+        work_items = []
         for t in corpus.texts():
             if t.id in done_ids:
                 continue
             pf = t.path_freqs
             if pf and os.path.exists(pf):
-                texts_to_score.append(t)
+                work_items.append((t.id, pf))
 
-        if not texts_to_score and done_ids:
+        if not work_items and done_ids:
             print(f"  {cid}: {len(done_ids)} already done, 0 remaining")
             continue
-        if not texts_to_score:
+        if not work_items:
             continue
 
-        print(f"  {cid}: {len(done_ids)} done, {len(texts_to_score)} to score")
+        print(f"  {cid}: {len(done_ids)} done, {len(work_items)} to score")
 
         file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
         fh = open(out_path, "a", newline="")
@@ -498,25 +554,28 @@ def score_all_corpora(
             writer.writeheader()
 
         try:
-            for t in tqdm(texts_to_score, desc=f"  {cid}", unit="text"):
-                try:
-                    freqs = dict(t.freqs())
-                except Exception:
-                    continue
-                if sum(freqs.values()) < min_words:
-                    continue
-                scores = _score_freqs_dict_allnorms(freqs, allnorms, spelling_d)
-                if scores:
-                    scores["id"] = t.id
-                    writer.writerow(scores)
+            if pool is not None:
+                # Parallel scoring
+                iterator = pool.imap_unordered(_score_one_text, work_items, chunksize=100)
+            else:
+                # Sequential scoring (same worker function for consistency)
+                _init_worker(allnorms, spelling_d, min_words)
+                iterator = map(_score_one_text, work_items)
+
+            for result in tqdm(iterator, total=len(work_items), desc=f"  {cid}", unit="text"):
+                if result is not None:
+                    writer.writerow(result)
         finally:
             fh.close()
 
-        # Load result
         try:
             results[cid] = pd.read_csv(out_path)
         except Exception:
             results[cid] = pd.DataFrame()
+
+    if pool is not None:
+        pool.close()
+        pool.join()
 
     return results
 
