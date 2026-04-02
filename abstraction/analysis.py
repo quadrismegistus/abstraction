@@ -907,6 +907,10 @@ EXCLUDE_CORPORA = {
     "oldbailey0",   # duplicate of oldbailey
     "chadwyck",     # subset of canon_fiction
     "markmark",     # subset of canon_fiction
+    "hathi_novels",    # overlaps with hathi_englit Fiction (23%)
+    "hathi_stories",   # overlaps with hathi_englit Fiction (12%)
+    "hathi_tales",     # overlaps with hathi_englit Fiction (27%)
+    "hathi_romances",  # overlaps with hathi_englit Fiction (28%)
     "txtlab",
     "fanfic",
     "coca",
