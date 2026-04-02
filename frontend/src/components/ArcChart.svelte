@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, globalLoading, corporaList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, globalLoading, corporaList } from '$lib/stores';
   import { fetchArcByGenre } from '$lib/api';
   import type { GenreArc } from '$lib/types';
 
@@ -58,6 +58,7 @@
     p.year_min = String($yearRange[0]);
     p.year_max = String($yearRange[1]);
     if ($periodMatched) p.period_matched = 'true';
+    if ($corpusAdjusted) p.corpus_adjusted = 'true';
     p.loess_span = String($loessSpan);
     p.model = $adjustModel;
     return p;
@@ -324,7 +325,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $loessSpan; $adjustModel;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $loessSpan; $adjustModel;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();
@@ -342,7 +343,9 @@
   <div class="mode-toggle">
     <button class:active={mode === 'explore'} onclick={() => mode = 'explore'}>Explore</button>
     <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
-    <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>Raw trend</button>
+    <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>
+      {$corpusAdjusted ? 'Show raw' : 'Show adjusted'}
+    </button>
   </div>
   <div bind:this={plotDiv} class="plot"></div>
 

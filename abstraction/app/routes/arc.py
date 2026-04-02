@@ -191,6 +191,7 @@ def arc_by_genre(
     loess_span: float = 0.3,
     invert: bool = True,
     period_matched: bool = False,
+    corpus_adjusted: bool = False,
     model: str = "quadratic",
 ):
     """Return corpus-adjusted decade bins + LOESS per genre.
@@ -261,6 +262,9 @@ def arc_by_genre(
 
         sign = -1.0 if invert else 1.0
 
+        # Choose which values to use for the main LOESS
+        main_col = "adjusted" if corpus_adjusted else "score"
+
         points = []
         for _, row in adj.iterrows():
             points.append(AdjustedPoint(
@@ -271,15 +275,17 @@ def arc_by_genre(
                 corpus=row.get("corpus"),
             ))
 
-        adj_vals = adj["adjusted"].values * sign
+        # Main LOESS (raw by default, adjusted if toggled)
+        main_vals = adj[main_col].values * sign
         loess_points = _compute_loess(
-            adj["year"].values, adj_vals, span=loess_span,
+            adj["year"].values, main_vals, span=loess_span,
         )
 
-        # LOESS on raw (unadjusted) scores
-        raw_vals = adj["score"].values * sign
+        # Secondary LOESS (the other one, for comparison)
+        other_col = "score" if corpus_adjusted else "adjusted"
+        other_vals = adj[other_col].values * sign
         loess_raw_points = _compute_loess(
-            adj["year"].values, raw_vals, span=loess_span,
+            adj["year"].values, other_vals, span=loess_span,
         )
 
         stats = _compute_arc_stats(adj, sign, loess_points)
