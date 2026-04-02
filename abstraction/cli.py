@@ -230,9 +230,10 @@ def cmd_app(args):
     procs = []
 
     if not args.frontend_only:
-        print(f"Starting FastAPI backend on :{args.port}...")
+        print(f"Starting FastAPI backend on {args.host}:{args.port}...")
         backend = subprocess.Popen(
-            ["uvicorn", "abstraction.app:app", "--reload", "--port", str(args.port)],
+            ["uvicorn", "abstraction.app:app", "--reload",
+             "--host", args.host, "--port", str(args.port)],
             cwd=project_root,
         )
         procs.append(backend)
@@ -241,9 +242,9 @@ def cmd_app(args):
         if not os.path.isdir(frontend_dir):
             print(f"Frontend directory not found: {frontend_dir}")
             sys.exit(1)
-        print(f"Starting SvelteKit frontend on :{args.frontend_port}...")
+        print(f"Starting SvelteKit frontend on {args.host}:{args.frontend_port}...")
         frontend = subprocess.Popen(
-            ["npm", "run", "dev", "--", "--port", str(args.frontend_port)],
+            ["npm", "run", "dev", "--", "--host", args.host, "--port", str(args.frontend_port)],
             cwd=frontend_dir,
         )
         procs.append(frontend)
@@ -410,6 +411,7 @@ def main():
     p = sub.add_parser("app", help="Start the web app (FastAPI backend + SvelteKit frontend)")
     p.add_argument("--backend-only", action="store_true", help="Start only the FastAPI backend")
     p.add_argument("--frontend-only", action="store_true", help="Start only the SvelteKit frontend")
+    p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1, use 0.0.0.0 for network access)")
     p.add_argument("--port", type=int, default=8000, help="Backend port (default: 8000)")
     p.add_argument("--frontend-port", type=int, default=5173, help="Frontend port (default: 5173)")
 
