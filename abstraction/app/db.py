@@ -1,122 +1,179 @@
 """
-SQLite database for pre-joined scores + metadata.
+DuckDB database for the web app.
 
-On first run (or when score CSVs are newer than the DB), loads all scored
-corpora via load_all_scored(), writes to a single SQLite table with indexes.
-Subsequent boots skip the build step.
+Reads metadata from LLTK's DuckDB (~/lltk_data/data/metadb.duckdb) and
+scores from CSV files (data/scores/v8-raw/), joining them into a single
+'texts' view.
+
+On first run (or when score CSVs are newer than the scores DB), loads
+score CSVs into a local DuckDB file. LLTK metadata is read directly
+via ATTACH — no copying.
 """
 
 import os
-import sqlite3
+
+import duckdb
 
 from ..config import PATH_DATA, SCORES_DIR
 
 
-DB_FILENAME = "app.db"
+SCORES_DB_FILENAME = "scores.duckdb"
 SCORES_VERSION = "v8-raw"
+LLTK_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb.duckdb")
+
+# Connection pool (one per thread via DuckDB's cursor model)
+_conn = None
 
 
-def get_db_path():
-    return os.path.join(PATH_DATA, DB_FILENAME)
-
-
-def get_connection(db_path=None):
-    if db_path is None:
-        db_path = get_db_path()
-    return sqlite3.connect(db_path)
+def _scores_db_path():
+    return os.path.join(PATH_DATA, SCORES_DB_FILENAME)
 
 
 def _scores_dir():
     return os.path.join(SCORES_DIR, SCORES_VERSION)
 
 
+def get_connection():
+    """Get a DuckDB connection with both scores and LLTK metadata available.
+
+    Returns a connection where:
+    - 'scores' table: text scores from CSVs (local DB)
+    - 'meta' table: LLTK metadata (attached read-only)
+    - 'texts' view: JOIN of scores + meta on normalized IDs
+    """
+    global _conn
+    if _conn is None:
+        _conn = _build_connection()
+    return _conn
+
+
+def _build_connection():
+    """Create the DuckDB connection with scores + metadata."""
+    db_path = _scores_db_path()
+    conn = duckdb.connect(db_path)
+
+    # Attach LLTK's metadata DB read-only
+    if os.path.exists(LLTK_DB_PATH):
+        conn.execute(f"ATTACH '{LLTK_DB_PATH}' AS lltk (READ_ONLY)")
+    else:
+        print(f"[app] WARNING: LLTK DB not found at {LLTK_DB_PATH}")
+
+    # Create the joined view if both tables exist
+    try:
+        conn.execute("""
+            CREATE OR REPLACE VIEW texts AS
+            SELECT
+                s.id,
+                s.corpus_name,
+                m.title,
+                m.author,
+                m.year,
+                m.genre,
+                m.genre_raw,
+                s.* EXCLUDE (id, corpus_name)
+            FROM scores s
+            LEFT JOIN lltk.texts m
+                ON s.corpus_name = m.corpus
+                AND s.id_normalized = m.id
+        """)
+    except Exception as e:
+        print(f"[app] Could not create texts view: {e}")
+
+    return conn
+
+
 def _is_stale(db_path):
-    """Check if DB is missing, empty, or older than score CSVs or analysis.py."""
+    """Check if scores DB needs rebuilding."""
     if not os.path.exists(db_path):
         return True
     if os.path.getsize(db_path) == 0:
         return True
-    # Verify the texts table exists
     try:
-        conn = sqlite3.connect(db_path)
-        conn.execute("SELECT 1 FROM texts LIMIT 1")
+        conn = duckdb.connect(db_path, read_only=True)
+        conn.execute("SELECT 1 FROM scores LIMIT 1")
         conn.close()
     except Exception:
         return True
     db_mtime = os.path.getmtime(db_path)
-
-    # Check if analysis.py changed (genre constants, exclusions, etc.)
-    analysis_py = os.path.join(os.path.dirname(os.path.dirname(__file__)), "analysis.py")
-    if os.path.exists(analysis_py) and os.path.getmtime(analysis_py) > db_mtime:
-        return True
-
     scores_dir = _scores_dir()
     if not os.path.isdir(scores_dir):
         return False
     for fn in os.listdir(scores_dir):
         if fn.endswith(".csv"):
-            csv_mtime = os.path.getmtime(os.path.join(scores_dir, fn))
-            if csv_mtime > db_mtime:
+            if os.path.getmtime(os.path.join(scores_dir, fn)) > db_mtime:
                 return True
     return False
 
 
 def init_db(db_path=None):
-    """Build the SQLite database if it's stale or missing."""
+    """Build the scores DuckDB if stale or missing."""
     if db_path is None:
-        db_path = get_db_path()
+        db_path = _scores_db_path()
 
     if not _is_stale(db_path):
-        print(f"[app] SQLite database is fresh: {db_path}")
+        print(f"[app] Scores database is fresh: {db_path}")
         return
 
-    print(f"[app] Building SQLite database from {SCORES_VERSION} scores...")
+    print(f"[app] Building scores database from {SCORES_VERSION} CSVs...")
 
-    # Import here to avoid circular imports and slow startup when DB is fresh
-    from ..analysis import load_all_scored
+    import pandas as pd
+    from ..analysis import EXCLUDE_CORPORA
 
-    df = load_all_scored(version=SCORES_VERSION)
-    if df.empty:
-        print("[app] WARNING: No scored data found.")
+    scores_dir = _scores_dir()
+    if not os.path.isdir(scores_dir):
+        print(f"[app] No scores directory: {scores_dir}")
         return
 
-    # Ensure year is numeric
-    if "year" in df.columns:
-        import pandas as pd
-        df["year"] = pd.to_numeric(df["year"], errors="coerce")
+    # Normalize hathi IDs to match LLTK's canonical form
+    try:
+        import sys
+        sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+        from lltk.corpus.hathi.hathi import hathi_id_normalize
+    except ImportError:
+        hathi_id_normalize = None
 
-    # Keep only the columns we need: id, metadata, corpus_name, and norm scores
-    keep_cols = ["id", "corpus_name", "year", "author", "title", "genre_harmonized"]
-    norm_cols = [c for c in df.columns if c.startswith("Abs-Conc.")]
-    keep_cols = [c for c in keep_cols if c in df.columns] + norm_cols
-    # Deduplicate column names (some corpora have overlapping metadata fields)
-    seen = set()
-    unique_cols = []
-    for c in keep_cols:
-        if c not in seen:
-            seen.add(c)
-            unique_cols.append(c)
-    df = df[unique_cols]
-
-    # Write to SQLite
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-
-    # Remove old DB before writing
     if os.path.exists(db_path):
         os.remove(db_path)
 
-    conn = sqlite3.connect(db_path)
-    df.to_sql("texts", conn, index=False, if_exists="replace")
+    conn = duckdb.connect(db_path)
 
-    # Create indexes for fast filtering
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_year ON texts (year)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_corpus ON texts (corpus_name)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_genre ON texts (genre_harmonized)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_corpus_year ON texts (corpus_name, year)")
-    conn.commit()
+    all_dfs = []
+    from tqdm import tqdm
+    csv_files = sorted(fn for fn in os.listdir(scores_dir) if fn.endswith(".csv"))
+    for fn in tqdm(csv_files, desc="Loading scores"):
+        corpus_name = fn.removesuffix(".csv")
+        if corpus_name in EXCLUDE_CORPORA:
+            continue
+        path = os.path.join(scores_dir, fn)
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            print(f"  Skipping {corpus_name}: {e}")
+            continue
+        df["corpus_name"] = corpus_name
+        df["id"] = df["id"].astype(str)
 
-    n_rows = conn.execute("SELECT COUNT(*) FROM texts").fetchone()[0]
-    n_corpora = conn.execute("SELECT COUNT(DISTINCT corpus_name) FROM texts").fetchone()[0]
+        # Normalize IDs for hathi corpora
+        if hathi_id_normalize and corpus_name.startswith("hathi"):
+            df["id_normalized"] = df["id"].apply(hathi_id_normalize)
+        else:
+            df["id_normalized"] = df["id"]
+
+        all_dfs.append(df)
+
+    if not all_dfs:
+        print("[app] No score data found.")
+        conn.close()
+        return
+
+    combined = pd.concat(all_dfs, ignore_index=True)
+    conn.execute("CREATE TABLE scores AS SELECT * FROM combined")
+    conn.execute("CREATE INDEX idx_scores_corpus ON scores (corpus_name)")
+    conn.execute("CREATE INDEX idx_scores_id ON scores (id_normalized)")
+
+    n_rows = conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
+    n_corpora = conn.execute("SELECT COUNT(DISTINCT corpus_name) FROM scores").fetchone()[0]
     conn.close()
 
-    print(f"[app] SQLite database ready: {n_rows:,} texts from {n_corpora} corpora")
+    print(f"[app] Scores database ready: {n_rows:,} texts from {n_corpora} corpora")

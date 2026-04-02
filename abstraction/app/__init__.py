@@ -15,15 +15,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import init_db, get_db_path
+from .db import init_db
 from .routes import arc, meta, trajectory, passage
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Build/check SQLite database on startup."""
-    db_path = get_db_path()
-    init_db(db_path)
+    """Build/check scores database on startup."""
+    init_db()
     yield
 
 

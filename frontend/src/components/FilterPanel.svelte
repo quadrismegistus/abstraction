@@ -32,7 +32,7 @@
   }
 
   // Major genres to show prominently
-  const MAJOR_GENRES = ['Fiction', 'Poetry', 'Drama', 'Periodical', 'Essay/Treatise', 'Letters', 'Legal', 'Political', 'Sermon'];
+  const MAJOR_GENRES = ['Fiction', 'Poetry', 'Drama', 'Periodical', 'Essay', 'Treatise', 'Letters', 'Sermon', 'Legal', 'Speech', 'Nonfiction', 'Criticism'];
 </script>
 
 <aside class="filter-panel">

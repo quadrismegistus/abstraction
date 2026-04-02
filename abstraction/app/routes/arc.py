@@ -17,24 +17,22 @@ DEFAULT_COL = "Abs-Conc.Median.median"
 def _build_where(genre: list[str], corpus: list[str],
                  year_min: float | None, year_max: float | None,
                  col: str):
-    """Build WHERE clause and params for filtering."""
+    """Build WHERE clause and params for filtering (DuckDB positional params)."""
     clauses = [f'"{col}" IS NOT NULL', "year IS NOT NULL"]
     params: list = []
 
     if genre:
         placeholders = ",".join("?" for _ in genre)
-        clauses.append(f"genre_harmonized IN ({placeholders})")
+        clauses.append(f"genre IN ({placeholders})")
         params.extend(genre)
     if corpus:
         placeholders = ",".join("?" for _ in corpus)
         clauses.append(f"corpus_name IN ({placeholders})")
         params.extend(corpus)
     if year_min is not None:
-        clauses.append("year >= ?")
-        params.append(year_min)
+        clauses.append(f"year >= {year_min}")
     if year_max is not None:
-        clauses.append("year <= ?")
-        params.append(year_max)
+        clauses.append(f"year <= {year_max}")
 
     return " AND ".join(clauses), params
 
@@ -52,18 +50,14 @@ def arc_aggregated(
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
 
-    # SQLite doesn't have percentile functions, so we fetch raw values
-    # and compute in Python. For ~2M rows this is still fast (<1s).
     rows = conn.execute(f"""
-        SELECT CAST(year / ? AS INT) * ? AS decade,
+        SELECT CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
                "{col}", year
         FROM texts
         WHERE {where}
         ORDER BY decade
-    """, [bin_size, bin_size] + params).fetchall()
-    conn.close()
+    """, params).fetchall()
 
-    # Group by decade and compute stats
     from collections import defaultdict
     buckets: dict[int, list[float]] = defaultdict(list)
     for decade, score, _year in rows:
@@ -102,19 +96,17 @@ def arc_by_corpus(
     conn = get_connection()
 
     rows = conn.execute(f"""
-        SELECT corpus_name, genre_harmonized,
-               CAST(year / ? AS INT) * ? AS decade,
+        SELECT corpus_name, genre,
+               CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
                "{col}"
         FROM texts
         WHERE {where}
         ORDER BY corpus_name, decade
-    """, [bin_size, bin_size] + params).fetchall()
-    conn.close()
+    """, params).fetchall()
 
     from collections import defaultdict
     import numpy as np
 
-    # Group by corpus → decade → scores, track genre counts
     corpus_data: dict[str, dict] = {}
     for corpus_name, genre_val, decade, score in rows:
         if score is None or decade is None:
@@ -141,7 +133,6 @@ def arc_by_corpus(
                 n=len(vals),
             ))
             total += len(vals)
-        # Use the most common genre for this corpus
         top_genre = max(cd["genre_counts"], key=cd["genre_counts"].get) if cd["genre_counts"] else None
         results.append(CorpusArc(
             corpus=cname,
@@ -167,20 +158,17 @@ def arc_texts(
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
 
-    # Total count
     total = conn.execute(
         f"SELECT COUNT(*) FROM texts WHERE {where}", params
     ).fetchone()[0]
 
-    # Paginated rows
     rows = conn.execute(f"""
-        SELECT id, corpus_name, year, author, title, genre_harmonized, "{col}"
+        SELECT id, corpus_name, year, author, title, genre, "{col}"
         FROM texts
         WHERE {where}
         ORDER BY year
-        LIMIT ? OFFSET ?
-    """, params + [page_size, page * page_size]).fetchall()
-    conn.close()
+        LIMIT {page_size} OFFSET {page * page_size}
+    """, params).fetchall()
 
     texts = [
         ArcText(
@@ -197,7 +185,7 @@ def arc_texts(
 def arc_by_genre(
     col: str = DEFAULT_COL,
     genre: list[str] = Query(default=["Fiction", "Poetry", "Periodical"]),
-    year_min: float = 1600,
+    year_min: float = 1580,
     year_max: float = 2020,
     loess_span: float = 0.3,
     invert: bool = True,
@@ -206,49 +194,39 @@ def arc_by_genre(
     """Return corpus-adjusted decade bins + LOESS per genre.
 
     Calls analysis.adjust_scores() per genre to remove corpus fixed effects,
-    then fits LOESS on the adjusted points. Matches the book figure approach.
+    then fits LOESS on the adjusted points.
 
     When period_matched=True, each text is scored with its century-matched
-    vecnorms (e.g. C17 texts use Abs-Conc.Median.C17) and norm_period is
-    added as a second fixed effect to absorb hinge points at century boundaries.
+    vecnorms and norm_period is added as a second fixed effect.
     """
     import pandas as pd
     from ...analysis import adjust_scores, assign_period_score
 
-    # Parse source from col (e.g. "Abs-Conc.Median.median" → "Median")
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
-    from ...analysis import EXCLUDE_CORPORA
     conn = get_connection()
-    exclude_sql = " AND ".join(f"corpus_name != '{c}'" for c in EXCLUDE_CORPORA)
-    if exclude_sql:
-        exclude_sql = " AND " + exclude_sql
 
     if period_matched:
-        # Load all per-century columns for this source + the median fallback
-        all_cols = [r[1] for r in conn.execute("PRAGMA table_info(texts)").fetchall()]
-        source_cols = [c for c in all_cols if c.startswith(f"Abs-Conc.{source}.")]
-        col_sql = ", ".join(f'"{c}"' for c in source_cols)
-        rows = conn.execute(f"""
-            SELECT id, corpus_name, year, genre_harmonized, {col_sql}
-            FROM texts
-            WHERE year IS NOT NULL AND year >= ? AND year <= ?{exclude_sql}
-        """, [year_min, year_max]).fetchall()
-        columns = ["id", "corpus_name", "year", "genre_harmonized"] + source_cols
+        # Get all score columns for this source
+        score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+                      if r[0].startswith(f"Abs-Conc.{source}.")]
+        col_sql = ", ".join(f's."{c}"' for c in score_cols)
+        df = conn.execute(f"""
+            SELECT s.id, s.corpus_name, t.year, t.genre, {col_sql}
+            FROM scores s
+            LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
+            WHERE t.year IS NOT NULL
+              AND t.year >= {year_min} AND t.year <= {year_max}
+        """).fetchdf()
     else:
-        rows = conn.execute(f"""
-            SELECT id, corpus_name, year, genre_harmonized, "{col}"
-            FROM texts
-            WHERE year IS NOT NULL AND "{col}" IS NOT NULL
-                  AND year >= ? AND year <= ?{exclude_sql}
-        """, [year_min, year_max]).fetchall()
-        columns = ["id", "corpus_name", "year", "genre_harmonized", col]
-
-    conn.close()
-
-    df = pd.DataFrame(rows, columns=columns)
-    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+        df = conn.execute(f"""
+            SELECT s.id, s.corpus_name, t.year, t.genre, s."{col}"
+            FROM scores s
+            LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
+            WHERE t.year IS NOT NULL AND s."{col}" IS NOT NULL
+              AND t.year >= {year_min} AND t.year <= {year_max}
+        """).fetchdf()
 
     if period_matched:
         df = assign_period_score(df, source=source)
@@ -260,7 +238,7 @@ def arc_by_genre(
 
     results = []
     for g in genre:
-        gdf = df[df["genre_harmonized"] == g]
+        gdf = df[df["genre"] == g]
         if period_matched:
             gdf = gdf.dropna(subset=[score_col])
         if len(gdf) < 30:
@@ -275,7 +253,6 @@ def arc_by_genre(
 
         sign = -1.0 if invert else 1.0
 
-        # Build points
         points = []
         for _, row in adj.iterrows():
             points.append(AdjustedPoint(
@@ -286,13 +263,11 @@ def arc_by_genre(
                 corpus=row.get("corpus"),
             ))
 
-        # LOESS on adjusted scores
         adj_vals = adj["adjusted"].values * sign
         loess_points = _compute_loess(
             adj["year"].values, adj_vals, span=loess_span,
         )
 
-        # Piecewise stats on adjusted scores (inverted)
         stats = _compute_arc_stats(adj, sign, loess_points)
 
         n_corpora = adj["corpus"].nunique() if "corpus" in adj.columns else 1
@@ -319,20 +294,16 @@ def _compute_arc_stats(adj, sign, loess_points):
     n_texts = int(adj["n_texts"].sum())
     n_corpora = int(adj["corpus"].nunique()) if "corpus" in adj.columns else 1
 
-    # Piecewise fit on the inverted adjusted scores
     pw = fit_piecewise(years, scores, groups=groups)
 
-    # Slopes: fit was on inverted scores, so signs are already correct
-    # (positive slope = becoming more abstract = moving up on inverted axis)
     breakpoint = pw.get("pw_break_year")
-    rise_slope = pw.get("pw_slope_before")  # per year
-    fall_slope = pw.get("pw_slope_after")   # per year
+    rise_slope = pw.get("pw_slope_before")
+    fall_slope = pw.get("pw_slope_after")
     if rise_slope is not None and np.isfinite(rise_slope):
-        rise_slope *= 10  # convert to per decade
+        rise_slope *= 10
     if fall_slope is not None and np.isfinite(fall_slope):
         fall_slope *= 10
 
-    # Peak, start, end from LOESS
     peak_year = peak_score = start_score = end_score = None
     if loess_points:
         peak_pt = max(loess_points, key=lambda p: p.fitted)
@@ -341,7 +312,6 @@ def _compute_arc_stats(adj, sign, loess_points):
         start_score = loess_points[0].fitted
         end_score = loess_points[-1].fitted
 
-    # Change in SD units (peak to end)
     change_sd = None
     if peak_score is not None and end_score is not None:
         sd = np.std(scores)
@@ -349,7 +319,6 @@ def _compute_arc_stats(adj, sign, loess_points):
             change_sd = round((peak_score - end_score) / sd, 2)
 
     def _clean(v):
-        """Convert numpy types and NaN to None for JSON."""
         if v is None:
             return None
         try:
@@ -385,18 +354,14 @@ def _compute_loess(years, values, span=0.3, n_points=200):
     from statsmodels.nonparametric.smoothers_lowess import lowess
     import numpy as np
 
-    # Sort
     order = np.argsort(years)
     x = years[order].astype(float)
     y = values[order].astype(float)
 
-    # Fit LOESS
     result = lowess(y, x, frac=span, return_sorted=True)
     lx, ly = result[:, 0], result[:, 1]
 
-    # Estimate SE via residuals (simple approach: local residual SD)
     residuals = y - np.interp(x, lx, ly)
-    # Rolling window SE approximation
     window = max(3, int(len(x) * span))
     se_vals = np.full_like(ly, np.std(residuals))
     for i in range(len(ly)):

@@ -28,6 +28,7 @@ PERIOD_LABELS = {
     "C18": "18th century",
     "C19": "19th century",
     "C20": "20th century",
+    "C21": "21st century",
     "median": "Median (all centuries)",
     "orig": "Original (empirical)",
 }
@@ -50,8 +51,8 @@ def list_corpora():
     results = []
     for name, n, ymin, ymax in rows:
         genres = [r[0] for r in conn.execute(
-            "SELECT DISTINCT genre_harmonized FROM texts WHERE corpus_name = ? AND genre_harmonized IS NOT NULL",
-            (name,)
+            "SELECT DISTINCT genre FROM texts WHERE corpus_name = ? AND genre IS NOT NULL AND genre != ''",
+            [name]
         ).fetchall()]
         results.append(CorpusInfo(
             name=name, n_texts=n,
@@ -59,17 +60,14 @@ def list_corpora():
             genres=sorted(genres),
         ))
 
-    conn.close()
     return results
 
 
 @router.get("/norms", response_model=list[NormInfo])
 def list_norms():
     conn = get_connection()
-    # Get column names from the table
-    cursor = conn.execute("PRAGMA table_info(texts)")
-    columns = [row[1] for row in cursor.fetchall()]
-    conn.close()
+    # DuckDB: get column names from the scores table
+    columns = [row[0] for row in conn.execute("DESCRIBE scores").fetchall()]
 
     norms = []
     for col in columns:
@@ -92,7 +90,6 @@ def list_norms():
 def list_genres():
     conn = get_connection()
     rows = conn.execute(
-        "SELECT DISTINCT genre_harmonized FROM texts WHERE genre_harmonized IS NOT NULL ORDER BY genre_harmonized"
+        "SELECT DISTINCT genre FROM texts WHERE genre IS NOT NULL AND genre != '' ORDER BY genre"
     ).fetchall()
-    conn.close()
     return [r[0] for r in rows]

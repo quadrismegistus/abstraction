@@ -11,3 +11,4 @@ requests
 ftfy
 fastapi>=0.100
 uvicorn[standard]>=0.22
+duckdb>=1.0
