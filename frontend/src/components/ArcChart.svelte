@@ -115,11 +115,11 @@
         traces.push({
           x: cPts.map(p => p.year),
           y: cPts.map(p => p.score),
-          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre]),
+          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre, p.year]),
           type: 'scatter', mode: 'markers',
           marker: {
             color, symbol,
-            size: cPts.map(p => 2 + Math.sqrt(p.n_texts / maxN) * 8),
+            size: cPts.map(p => 4 + Math.sqrt(p.n_texts / maxN) * 8),
             opacity: 0.15,
             line: { width: 0 },
           },
@@ -136,11 +136,11 @@
         traces.push({
           x: cPts.map(p => p.year),
           y: cPts.map(p => p.adjusted),
-          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre]),
+          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre, p.year]),
           type: 'scatter', mode: 'markers',
           marker: {
             color, symbol,
-            size: cPts.map(p => 3 + Math.sqrt(p.n_texts / maxN) * 12),
+            size: cPts.map(p => 6 + Math.sqrt(p.n_texts / maxN) * 12),
             opacity: 0.6,
             line: { width: 0.5, color: 'white' },
           },
@@ -202,12 +202,12 @@
         traces.push({
           x: cPts.map(p => p.year),
           y: cPts.map(p => p.adjusted),
-          customdata: cPts.map(p => [corpus, p.n_texts]),
+          customdata: cPts.map(p => [corpus, p.n_texts, arc.genre, p.year]),
           type: 'scatter', mode: 'markers',
           marker: {
             color: style.color,
             symbol: corpusShapes[Number(ci) % corpusShapes.length],
-            size: cPts.map(p => 3 + Math.sqrt(p.n_texts / maxN) * 12),
+            size: cPts.map(p => 6 + Math.sqrt(p.n_texts / maxN) * 12),
             opacity: 0.35,
             line: { width: 0.5, color: style.color },
           },
@@ -271,8 +271,9 @@
     plotDiv.removeAllListeners?.('plotly_click');
     plotDiv.on('plotly_click', (data: any) => {
       const point = data.points[0];
-      if (point?.customdata?.[0]) {
-        goto(`/corpus/${point.customdata[0]}`);
+      if (point?.customdata) {
+        const [corpus, nTexts, genre, decade] = point.customdata;
+        goto(`/texts?corpus=${corpus}&decade=${decade}&genre=${encodeURIComponent(genre)}`);
       }
     });
   }
