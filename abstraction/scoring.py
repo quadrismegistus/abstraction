@@ -236,16 +236,11 @@ def _modernize_word_list(words_lower, norm_index, spelling_d):
     return result
 
 
-def _score_freqs_allnorms(path, allnorms, spelling_d=None):
-    """Score a single freqs JSON file against all norm columns at once.
+def _score_freqs_dict_allnorms(freqs, allnorms, spelling_d=None):
+    """Score a word-frequency dict against all norm columns at once.
 
-    Returns a dict of {norm_col: weighted_mean_score} or empty dict on error.
+    Returns a dict of {norm_col: weighted_mean_score} or empty dict.
     """
-    try:
-        with open(path) as f:
-            freqs = json.load(f)
-    except Exception:
-        return {}
     if not freqs:
         return {}
     words = list(freqs.keys())
@@ -260,6 +255,16 @@ def _score_freqs_allnorms(path, allnorms, spelling_d=None):
     col_sums = weighted.sum()
     scores = col_sums / col_counts
     return scores[col_counts > 0].to_dict()
+
+
+def _score_freqs_allnorms(path, allnorms, spelling_d=None):
+    """Score a single freqs JSON file against all norm columns at once."""
+    try:
+        with open(path) as f:
+            freqs = json.load(f)
+    except Exception:
+        return {}
+    return _score_freqs_dict_allnorms(freqs, allnorms, spelling_d)
 
 
 def _get_csv_columns(allnorms):
@@ -358,131 +363,116 @@ def _version_dir(base, version, modernize):
 
 
 def score_all_corpora(
-    corpora_dir=PATH_CORPORA,
     output_dir=SCORES_DIR,
     force=False,
     modernize=False,
     only=None,
 ):
-    """Score corpora that have freqs/ folders.
+    """Score corpora using LLTK text objects for freqs access.
 
-    Saves one CSV per corpus to output_dir/v8/, appending incrementally.
-    Resumable: skips already-scored text IDs within each corpus.
-    Deduplicates corpora whose freqs/ directories resolve to the same
-    real path (e.g. hathi subcorpora sharing a symlinked freqs/ tree).
+    Iterates LLTK corpora and their texts, scoring each text's freqs()
+    against all norms. Saves one CSV per corpus, resumable.
 
     Parameters
     ----------
-    corpora_dir : str
-        Parent directory containing corpus subdirectories.
     output_dir : str
         Where to save per-corpus score files.
     force : bool
         If True, delete existing CSVs and re-score from scratch.
     modernize : bool
-        If True (default), prefer modernized spelling for norm lookups.
+        If True, prefer modernized spelling for norm lookups.
         Outputs go to v8/ (modernized) or v8-raw/ (unmodernized).
     only : list of str, optional
         If provided, score only these corpora. If None, defaults to
-        ARC_CORPORA (the corpora that contribute to Fiction/Poetry/Periodical).
-        Pass only="all" to score every corpus with a freqs/ folder.
+        ARC_CORPORA. Pass only="all" to score every LLTK corpus with freqs.
 
     Returns
     -------
     dict of {corpus_name: DataFrame}
     """
-    from .analysis import ARC_CORPORA
+    import csv
+    import sys
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    import lltk
+    from .analysis import ARC_CORPORA, EXCLUDE_CORPORA
 
     output_dir = _version_dir(output_dir, "v8", modernize)
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+    columns = _get_csv_columns(allnorms)
+    spelling_d = get_spelling_modernizer() if modernize else None
 
     # Resolve which corpora to include
     if only == "all":
-        include = None  # no filter
+        include = None
     elif only is not None:
         include = set(only)
     else:
         include = set(ARC_CORPORA)
 
-    # discover corpora with freqs/ dirs, dedup by realpath
-    seen_realpaths = {}
-    corpora = []
-    for name in sorted(os.listdir(corpora_dir)):
-        if include is not None and name not in include:
+    # Discover LLTK corpora
+    skip = {"estc", "test_fixture", "tmp", "BigHist"}  # no freqs or not real
+    corpus_list = []
+    for corpus_name, corpus in lltk.corpora():
+        cid = corpus.id
+        if cid in skip or cid in EXCLUDE_CORPORA:
             continue
-        corpus_dir = os.path.join(corpora_dir, name)
-        freqs_dir = os.path.join(corpus_dir, "freqs")
-        if not os.path.isdir(freqs_dir):
+        if include is not None and cid not in include:
             continue
-        real = os.path.realpath(freqs_dir)
-        if real in seen_realpaths:
-            print(f"  Skipping {name}/freqs/ (same as {seen_realpaths[real]})")
-            continue
-        seen_realpaths[real] = name
-        corpora.append((name, corpus_dir))
+        corpus_list.append((cid, corpus))
 
-    # collect all (corpus_name, text_id, path) triples, skipping done IDs
-    all_files = []
-    done_counts = {}
-    for name, corpus_dir in corpora:
-        out_path = os.path.join(output_dir, f"{name}.csv")
+    print(f"Scoring {len(corpus_list)} corpora")
+
+    results = {}
+    for cid, corpus in corpus_list:
+        out_path = os.path.join(output_dir, f"{cid}.csv")
         if force and os.path.exists(out_path):
             os.remove(out_path)
         done_ids = _load_done_ids(out_path)
-        done_counts[name] = len(done_ids)
-        freqs_dir = os.path.join(corpus_dir, "freqs")
-        for text_id, path in _walk_freqs(freqs_dir):
-            if text_id not in done_ids:
-                all_files.append((name, text_id, path))
-        if done_ids:
-            print(f"  {name}: {len(done_ids)} already done, {sum(1 for n, _, _ in all_files if n == name)} remaining")
 
-    # open one CSV writer per corpus
-    import csv
-    columns = _get_csv_columns(allnorms)
-    spelling_d = get_spelling_modernizer() if modernize else None
-    writers = {}
-    file_handles = {}
+        # Count texts with freqs
+        texts_to_score = []
+        for t in corpus.texts():
+            if t.id in done_ids:
+                continue
+            pf = t.path_freqs
+            if pf and os.path.exists(pf):
+                texts_to_score.append(t)
 
-    def get_writer(name):
-        if name not in writers:
-            out_path = os.path.join(output_dir, f"{name}.csv")
-            file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
-            fh = open(out_path, "a", newline="")
-            w = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
-            if not file_exists:
-                w.writeheader()
-            writers[name] = w
-            file_handles[name] = fh
-        return writers[name]
+        if not texts_to_score and done_ids:
+            print(f"  {cid}: {len(done_ids)} already done, 0 remaining")
+            continue
+        if not texts_to_score:
+            continue
 
-    # score with a single progress bar
-    pbar = tqdm(all_files, desc="Scoring", unit="file")
-    try:
-        for name, text_id, path in pbar:
-            pbar.set_postfix_str(name, refresh=False)
-            scores = _score_freqs_allnorms(path, allnorms, spelling_d)
-            if scores:
-                scores["id"] = text_id
-                get_writer(name).writerow(scores)
-    finally:
-        for fh in file_handles.values():
+        print(f"  {cid}: {len(done_ids)} done, {len(texts_to_score)} to score")
+
+        file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        fh = open(out_path, "a", newline="")
+        writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
+        if not file_exists:
+            writer.writeheader()
+
+        try:
+            for t in tqdm(texts_to_score, desc=f"  {cid}", unit="text"):
+                try:
+                    freqs = dict(t.freqs())
+                except Exception:
+                    continue
+                scores = _score_freqs_dict_allnorms(freqs, allnorms, spelling_d)
+                if scores:
+                    scores["id"] = t.id
+                    writer.writerow(scores)
+        finally:
             fh.close()
 
-    # load and return results
-    results = {}
-    for name, _ in corpora:
-        out_path = os.path.join(output_dir, f"{name}.csv")
-        if os.path.exists(out_path):
-            try:
-                results[name] = pd.read_csv(out_path)
-            except Exception as e:
-                print(f"  Warning: could not read {name}.csv: {e}")
-                results[name] = pd.DataFrame()
-        else:
-            results[name] = pd.DataFrame()
+        # Load result
+        try:
+            results[cid] = pd.read_csv(out_path)
+        except Exception:
+            results[cid] = pd.DataFrame()
+
     return results
 
 
