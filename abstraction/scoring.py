@@ -412,7 +412,7 @@ def score_all_corpora(
         include = set(ARC_CORPORA)
 
     # Discover LLTK corpora
-    skip = {"estc", "test_fixture", "tmp", "BigHist"}  # no freqs or not real
+    skip = {"estc", "hathi", "test_fixture", "tmp", "BigHist"}  # no freqs, catalog-only, or not real
     corpus_list = []
     for corpus_name, corpus in lltk.corpora():
         cid = corpus.id
