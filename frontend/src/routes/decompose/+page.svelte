@@ -81,9 +81,9 @@
   {:else}
     <div class="results-scroll">
       {#each results as result}
+        {@const absChange = Math.abs(result.overall_change) || 1}
         <div class="decomp-section">
           <h3>{decompLabels[result.decompose_by] || result.decompose_by}</h3>
-          {@const absChange = Math.abs(result.overall_change) || 1}
           <div class="summary">
             <div class="summary-row">
               <span>Early ({result.period_early}): <strong>{result.overall_mean_early.toFixed(3)}</strong></span>
