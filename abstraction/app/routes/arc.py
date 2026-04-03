@@ -264,7 +264,7 @@ def arc_by_genre(
 
     # Build source corpus filter
     corpus_sql = ""
-    if corpus:
+    if corpus and len(corpus) > 0:
         corpus_list = ", ".join(f"'{c}'" for c in corpus)
         corpus_sql = f" AND corpus_name IN ({corpus_list})"
 
