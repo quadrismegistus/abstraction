@@ -11,7 +11,7 @@ DEFAULT_COL = "Abs-Conc.Median.median"
 
 
 class DecompRow(BaseModel):
-    genre: str
+    category: str
     share_early: float
     share_late: float
     mean_early: float
@@ -25,6 +25,7 @@ class DecompRow(BaseModel):
 
 
 class DecompResult(BaseModel):
+    decompose_by: str
     period_early: str
     period_late: str
     overall_mean_early: float
@@ -34,6 +35,10 @@ class DecompResult(BaseModel):
     total_within: float
     total_interaction: float
     rows: list[DecompRow]
+
+
+class MultiDecompResult(BaseModel):
+    results: list[DecompResult]
 
 
 def _parse_genre_raw(genre_raw: str | None) -> str:
@@ -47,7 +52,76 @@ def _parse_genre_raw(genre_raw: str | None) -> str:
     return parts[0] if parts else "(unknown)"
 
 
-@router.get("/shift-share", response_model=DecompResult)
+def _decompose(df_early, df_late, cat_col, min_texts=5):
+    """Run shift-share decomposition on two DataFrames with _score and cat_col."""
+    import numpy as np
+
+    if len(df_early) == 0 or len(df_late) == 0:
+        return None
+
+    overall_early = df_early["_score"].mean()
+    overall_late = df_late["_score"].mean()
+    overall_change = overall_late - overall_early
+
+    n_early_total = len(df_early)
+    n_late_total = len(df_late)
+
+    def genre_stats(sub, total):
+        g = sub.groupby(cat_col).agg(
+            mean=("_score", "mean"),
+            n=("_score", "count"),
+        ).reset_index()
+        g["share"] = g["n"] / total
+        return g
+
+    ge = genre_stats(df_early, n_early_total).rename(
+        columns={"mean": "mean_early", "n": "n_early", "share": "share_early"})
+    gl = genre_stats(df_late, n_late_total).rename(
+        columns={"mean": "mean_late", "n": "n_late", "share": "share_late"})
+
+    merged = ge.merge(gl, on=cat_col, how="outer").fillna(0)
+    merged = merged[(merged["n_early"] >= min_texts) | (merged["n_late"] >= min_texts)]
+
+    rows = []
+    for _, r in merged.iterrows():
+        d_share = r["share_late"] - r["share_early"]
+        d_mean = r["mean_late"] - r["mean_early"]
+
+        comp = d_share * r["mean_early"]
+        within = r["share_early"] * d_mean
+        interaction = d_share * d_mean
+
+        rows.append(DecompRow(
+            category=str(r[cat_col]),
+            share_early=round(r["share_early"], 4),
+            share_late=round(r["share_late"], 4),
+            mean_early=round(r["mean_early"], 4),
+            mean_late=round(r["mean_late"], 4),
+            n_early=int(r["n_early"]),
+            n_late=int(r["n_late"]),
+            composition_effect=round(comp, 6),
+            within_effect=round(within, 6),
+            interaction=round(interaction, 6),
+            total_effect=round(comp + within + interaction, 6),
+        ))
+
+    rows.sort(key=lambda r: abs(r.total_effect), reverse=True)
+
+    return DecompResult(
+        decompose_by=cat_col,
+        period_early="",  # filled by caller
+        period_late="",
+        overall_mean_early=round(overall_early, 4),
+        overall_mean_late=round(overall_late, 4),
+        overall_change=round(overall_change, 4),
+        total_composition=round(sum(r.composition_effect for r in rows), 4),
+        total_within=round(sum(r.within_effect for r in rows), 4),
+        total_interaction=round(sum(r.interaction for r in rows), 4),
+        rows=rows,
+    )
+
+
+@router.get("/shift-share", response_model=MultiDecompResult)
 def shift_share(
     col: str = DEFAULT_COL,
     genre: str = "arc_fiction",
@@ -58,15 +132,15 @@ def shift_share(
     corpus: list[str] = Query(default=[]),
     invert: bool = True,
     period_matched: bool = True,
-    min_texts: int = 10,
+    min_texts: int = 5,
     is_translated: str | None = None,
 ):
-    """Shift-share decomposition of abstractness change between two periods.
+    """Shift-share decomposition by genre_raw, corpus, and is_translated.
 
-    Decomposes the change in mean score into:
-    - Composition effect: genre mix changed (more novels, fewer romances)
-    - Within-genre effect: scores within each genre changed
-    - Interaction: both changed simultaneously
+    Returns three decompositions simultaneously:
+    - By genre_raw: which specific genres drove the change?
+    - By corpus: which corpora drove the change?
+    - By is_translated: how much is translation vs original?
     """
     import pandas as pd
     import numpy as np
@@ -88,7 +162,6 @@ def shift_share(
     elif is_translated == "false":
         translated_filter = " AND (is_translated IS NULL OR is_translated = false)"
 
-    # Load both periods
     if period_matched:
         col_parts = col.split(".")
         source = col_parts[1] if len(col_parts) >= 2 else "Median"
@@ -97,7 +170,7 @@ def shift_share(
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
         df = conn.execute(f"""
-            SELECT year, genre_raw, {col_sql}
+            SELECT year, genre_raw, corpus_name, is_translated, {col_sql}
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -114,7 +187,7 @@ def shift_share(
         df = df.dropna(subset=["_score"])
     else:
         df = conn.execute(f"""
-            SELECT year, genre_raw, "{col}" as _score
+            SELECT year, genre_raw, corpus_name, is_translated, "{col}" as _score
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL AND "{col}" IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -130,7 +203,12 @@ def shift_share(
     df["_score"] = df["_score"] * sign
 
     # Parse genre_raw
-    df["_genre"] = df["genre_raw"].apply(_parse_genre_raw)
+    df["_genre_raw"] = df["genre_raw"].apply(_parse_genre_raw)
+
+    # Parse is_translated to readable labels
+    df["_translated"] = df["is_translated"].apply(
+        lambda x: "Translated" if x is True or x == "True" else
+                  "Original" if x is False or x == "False" else "(unknown)")
 
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
@@ -140,64 +218,33 @@ def shift_share(
         from fastapi import HTTPException
         raise HTTPException(404, "No data in one of the periods")
 
-    # Compute per-genre stats
-    def genre_stats(sub):
-        total = len(sub)
-        g = sub.groupby("_genre").agg(
-            mean=("_score", "mean"),
-            n=("_score", "count"),
-        ).reset_index()
-        g["share"] = g["n"] / total
-        return g
+    period_early = f"{year_early_min}-{year_early_max}"
+    period_late = f"{year_late_min}-{year_late_max}"
 
-    ge = genre_stats(early).rename(columns={"mean": "mean_early", "n": "n_early", "share": "share_early"})
-    gl = genre_stats(late).rename(columns={"mean": "mean_late", "n": "n_late", "share": "share_late"})
+    results = []
 
-    # Merge (outer join so we see genres that exist in only one period)
-    merged = ge.merge(gl, on="_genre", how="outer").fillna(0)
+    # Decompose by genre_raw
+    r = _decompose(early, late, "_genre_raw", min_texts)
+    if r:
+        r.decompose_by = "genre_raw"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
 
-    # Filter to genres with enough texts in at least one period
-    merged = merged[(merged["n_early"] >= min_texts) | (merged["n_late"] >= min_texts)]
+    # Decompose by corpus
+    r = _decompose(early, late, "corpus_name", min_texts)
+    if r:
+        r.decompose_by = "corpus"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
 
-    # Compute decomposition
-    overall_early = early["_score"].mean()
-    overall_late = late["_score"].mean()
-    overall_change = overall_late - overall_early
+    # Decompose by is_translated
+    r = _decompose(early, late, "_translated", min_texts)
+    if r:
+        r.decompose_by = "is_translated"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
 
-    rows = []
-    for _, r in merged.iterrows():
-        d_share = r["share_late"] - r["share_early"]
-        d_mean = r["mean_late"] - r["mean_early"]
-
-        comp = d_share * r["mean_early"]        # composition effect
-        within = r["share_early"] * d_mean       # within-genre effect
-        interaction = d_share * d_mean           # interaction
-
-        rows.append(DecompRow(
-            genre=r["_genre"],
-            share_early=round(r["share_early"], 4),
-            share_late=round(r["share_late"], 4),
-            mean_early=round(r["mean_early"], 4),
-            mean_late=round(r["mean_late"], 4),
-            n_early=int(r["n_early"]),
-            n_late=int(r["n_late"]),
-            composition_effect=round(comp, 6),
-            within_effect=round(within, 6),
-            interaction=round(interaction, 6),
-            total_effect=round(comp + within + interaction, 6),
-        ))
-
-    # Sort by absolute total effect
-    rows.sort(key=lambda r: abs(r.total_effect), reverse=True)
-
-    return DecompResult(
-        period_early=f"{year_early_min}-{year_early_max}",
-        period_late=f"{year_late_min}-{year_late_max}",
-        overall_mean_early=round(overall_early, 4),
-        overall_mean_late=round(overall_late, 4),
-        overall_change=round(overall_change, 4),
-        total_composition=round(sum(r.composition_effect for r in rows), 4),
-        total_within=round(sum(r.within_effect for r in rows), 4),
-        total_interaction=round(sum(r.interaction for r in rows), 4),
-        rows=rows,
-    )
+    return MultiDecompResult(results=results)

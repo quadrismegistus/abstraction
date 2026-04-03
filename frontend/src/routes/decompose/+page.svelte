@@ -7,9 +7,8 @@
   let earlyMax = $state(1780);
   let lateMin = $state(1850);
   let lateMax = $state(1950);
-  let splitTarget = $state('genre_raw');  // for future: corpus, is_translated
   let loading = $state(false);
-  let result: any = $state(null);
+  let results: any[] = $state([]);
   let error = $state('');
 
   async function loadDecomp() {
@@ -29,12 +28,19 @@
       const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const res = await fetch(`http://${host}:1709/api/decompose/shift-share?${params.toString()}`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      result = await res.json();
+      const data = await res.json();
+      results = data.results || [];
     } catch (e: any) {
       error = e.message;
     }
     loading = false;
   }
+
+  const decompLabels: Record<string, string> = {
+    'genre_raw': 'By Genre (raw)',
+    'corpus': 'By Corpus',
+    'is_translated': 'By Translation Status',
+  };
 
   onMount(loadDecomp);
 </script>
@@ -48,7 +54,7 @@
   <div class="controls">
     <label>
       Genre:
-      <select bind:value={genre} onchange={loadDecomp}>
+      <select bind:value={genre}>
         <option value="arc_fiction">Fiction</option>
         <option value="arc_poetry">Poetry</option>
         <option value="arc_periodical">Periodical</option>
@@ -56,77 +62,83 @@
       </select>
     </label>
     <label>
-      Early period:
-      <input type="number" bind:value={earlyMin} style="width:60px" /> –
-      <input type="number" bind:value={earlyMax} style="width:60px" />
+      Early:
+      <input type="number" bind:value={earlyMin} style="width:55px" /> –
+      <input type="number" bind:value={earlyMax} style="width:55px" />
     </label>
     <label>
-      Late period:
-      <input type="number" bind:value={lateMin} style="width:60px" /> –
-      <input type="number" bind:value={lateMax} style="width:60px" />
+      Late:
+      <input type="number" bind:value={lateMin} style="width:55px" /> –
+      <input type="number" bind:value={lateMax} style="width:55px" />
     </label>
     <button onclick={loadDecomp}>Compute</button>
   </div>
 
   {#if loading}
-    <div class="loading">Computing decomposition...</div>
+    <div class="loading">Computing decompositions...</div>
   {:else if error}
     <div class="error">Error: {error}</div>
-  {:else if result}
-    <div class="summary">
-      <div class="summary-row">
-        <span>Early ({result.period_early}): <strong>{result.overall_mean_early.toFixed(3)}</strong></span>
-        <span>Late ({result.period_late}): <strong>{result.overall_mean_late.toFixed(3)}</strong></span>
-        <span>Change: <strong>{result.overall_change.toFixed(3)}</strong></span>
-      </div>
-      <div class="summary-row decomp-totals">
-        <span>Composition: <strong>{(result.total_composition / Math.abs(result.overall_change) * 100).toFixed(1)}%</strong> ({result.total_composition.toFixed(4)})</span>
-        <span>Within-genre: <strong>{(result.total_within / Math.abs(result.overall_change) * 100).toFixed(1)}%</strong> ({result.total_within.toFixed(4)})</span>
-        <span>Interaction: <strong>{(result.total_interaction / Math.abs(result.overall_change) * 100).toFixed(1)}%</strong> ({result.total_interaction.toFixed(4)})</span>
-      </div>
-    </div>
+  {:else}
+    <div class="results-scroll">
+      {#each results as result}
+        <div class="decomp-section">
+          <h3>{decompLabels[result.decompose_by] || result.decompose_by}</h3>
+          <div class="summary">
+            <div class="summary-row">
+              <span>Early ({result.period_early}): <strong>{result.overall_mean_early.toFixed(3)}</strong></span>
+              <span>Late ({result.period_late}): <strong>{result.overall_mean_late.toFixed(3)}</strong></span>
+              <span>Change: <strong>{result.overall_change.toFixed(3)}</strong></span>
+            </div>
+            <div class="summary-row decomp-totals">
+              {@const absChange = Math.abs(result.overall_change) || 1}
+              <span>Composition: <strong>{(result.total_composition / absChange * 100).toFixed(1)}%</strong> ({result.total_composition.toFixed(4)})</span>
+              <span>Within: <strong>{(result.total_within / absChange * 100).toFixed(1)}%</strong> ({result.total_within.toFixed(4)})</span>
+              <span>Interaction: <strong>{(result.total_interaction / absChange * 100).toFixed(1)}%</strong> ({result.total_interaction.toFixed(4)})</span>
+            </div>
+          </div>
 
-    <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>Genre (raw)</th>
-            <th>N early</th>
-            <th>N late</th>
-            <th>Share early</th>
-            <th>Share late</th>
-            <th>Mean early</th>
-            <th>Mean late</th>
-            <th>Composition</th>
-            <th>Within</th>
-            <th>Interaction</th>
-            <th>Total</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each result.rows as r}
-            <tr>
-              <td class="genre">{r.genre}</td>
-              <td>{r.n_early.toLocaleString()}</td>
-              <td>{r.n_late.toLocaleString()}</td>
-              <td class="num">{(r.share_early * 100).toFixed(1)}%</td>
-              <td class="num">{(r.share_late * 100).toFixed(1)}%</td>
-              <td class="num">{r.mean_early.toFixed(3)}</td>
-              <td class="num">{r.mean_late.toFixed(3)}</td>
-              <td class="num" style="color: {r.composition_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.composition_effect.toFixed(4)}</td>
-              <td class="num" style="color: {r.within_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.within_effect.toFixed(4)}</td>
-              <td class="num">{r.interaction.toFixed(4)}</td>
-              <td class="num" style="font-weight:600; color: {r.total_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.total_effect.toFixed(4)}</td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+          <table>
+            <thead>
+              <tr>
+                <th>{result.decompose_by === 'genre_raw' ? 'Genre' : result.decompose_by === 'corpus' ? 'Corpus' : 'Status'}</th>
+                <th>N early</th>
+                <th>N late</th>
+                <th>Share early</th>
+                <th>Share late</th>
+                <th>Mean early</th>
+                <th>Mean late</th>
+                <th>Composition</th>
+                <th>Within</th>
+                <th>Interaction</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each result.rows as r}
+                <tr>
+                  <td class="cat">{r.category}</td>
+                  <td>{r.n_early.toLocaleString()}</td>
+                  <td>{r.n_late.toLocaleString()}</td>
+                  <td class="num">{(r.share_early * 100).toFixed(1)}%</td>
+                  <td class="num">{(r.share_late * 100).toFixed(1)}%</td>
+                  <td class="num">{r.mean_early.toFixed(3)}</td>
+                  <td class="num">{r.mean_late.toFixed(3)}</td>
+                  <td class="num" style="color: {r.composition_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.composition_effect.toFixed(4)}</td>
+                  <td class="num" style="color: {r.within_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.within_effect.toFixed(4)}</td>
+                  <td class="num">{r.interaction.toFixed(4)}</td>
+                  <td class="num" style="font-weight:600; color: {r.total_effect < 0 ? 'hsl(25,70%,40%)' : 'hsl(220,60%,40%)'}">{r.total_effect.toFixed(4)}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/each}
     </div>
   {/if}
 </div>
 
 <style>
-  .decompose-page { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+  .decompose-page { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
   .header {
     padding: 0.5rem 1rem; border-bottom: 1px solid #eee;
     display: flex; align-items: center; gap: 1rem; flex-shrink: 0;
@@ -143,20 +155,19 @@
     padding: 4px 12px; font-size: 0.85rem; background: #333; color: white;
     border: none; border-radius: 3px; cursor: pointer;
   }
-  .summary {
-    padding: 0.75rem 1rem; background: #f8f8f8; border-bottom: 1px solid #eee;
-    font-size: 0.9rem; flex-shrink: 0;
-  }
-  .summary-row { display: flex; gap: 2rem; margin-bottom: 0.25rem; }
-  .decomp-totals { font-size: 0.85rem; color: #555; }
-  .table-wrapper { flex: 1; overflow: auto; padding: 0 1rem; }
-  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+  .results-scroll { flex: 1; overflow-y: auto; padding: 0 1rem 1rem; }
+  .decomp-section { margin-bottom: 1.5rem; }
+  .decomp-section h3 { font-size: 0.95rem; margin: 1rem 0 0.5rem; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  .summary { margin-bottom: 0.5rem; font-size: 0.85rem; }
+  .summary-row { display: flex; gap: 2rem; margin-bottom: 0.2rem; }
+  .decomp-totals { font-size: 0.8rem; color: #555; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.8rem; margin-bottom: 0.5rem; }
   th {
-    text-align: left; padding: 6px 8px; border-bottom: 2px solid #ddd;
+    text-align: left; padding: 5px 8px; border-bottom: 2px solid #ddd;
     color: #555; font-weight: 600; position: sticky; top: 0; background: white;
   }
-  td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; }
-  .genre { font-weight: 500; }
+  td { padding: 4px 8px; border-bottom: 1px solid #f0f0f0; }
+  .cat { font-weight: 500; }
   .num { font-family: monospace; font-size: 0.75rem; }
   .loading, .error { padding: 2rem; text-align: center; }
   .loading { color: #666; font-style: italic; }
