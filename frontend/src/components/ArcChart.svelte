@@ -8,7 +8,7 @@
   let plotDiv: HTMLDivElement;
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
-  let mode: 'explore' | 'print' = $state('explore');
+  let mode: 'explore' | 'print' | 'aggregate' = $state('explore');
   let showRawTrend = $state(false);
 
   function pStars(p: number | null): string {
@@ -82,8 +82,80 @@
 
   function renderPlot() {
     if (!Plotly || !plotDiv || genreArcs.length === 0) return;
-    if (mode === 'explore') renderExplore();
+    if (mode === 'aggregate') renderAggregate();
+    else if (mode === 'explore') renderExplore();
     else renderPrint();
+  }
+
+  function renderAggregate() {
+    const traces: any[] = [];
+
+    for (const arc of genreArcs) {
+      const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
+      const scoreKey = $corpusAdjusted ? 'adjusted' : 'score';
+
+      // Aggregate all corpus points into one point per year bin
+      const bins: Record<number, { sum: number; count: number }> = {};
+      for (const p of arc.points) {
+        const val = scoreKey === 'adjusted' ? p.adjusted : p.score;
+        const yr = p.year;
+        if (!bins[yr]) bins[yr] = { sum: 0, count: 0 };
+        bins[yr].sum += val * p.n_texts;
+        bins[yr].count += p.n_texts;
+      }
+
+      const years = Object.keys(bins).map(Number).sort((a, b) => a - b);
+      const means = years.map(y => bins[y].sum / bins[y].count);
+      const counts = years.map(y => bins[y].count);
+      const maxN = Math.max(...counts, 1);
+
+      // SE ribbon from LOESS
+      if (arc.loess.length > 0) {
+        const lx = arc.loess.map(p => p.year);
+        traces.push({
+          x: [...lx, ...lx.slice().reverse()],
+          y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
+          type: 'scatter', mode: 'lines', fill: 'toself',
+          fillcolor: 'rgba(0,0,0,0.06)', line: { color: 'transparent' },
+          showlegend: false, hoverinfo: 'skip',
+        });
+      }
+
+      // Aggregated points — one per bin, sized by n_texts
+      traces.push({
+        x: years,
+        y: means,
+        customdata: years.map((y, i) => [counts[i], arc.genre, y]),
+        type: 'scatter',
+        mode: 'markers',
+        marker: {
+          color: gs.color,
+          size: counts.map(n => 4 + Math.sqrt(n / maxN) * 16),
+          opacity: 0.5,
+          line: { width: 0.5, color: 'white' },
+        },
+        name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts)`,
+        hovertemplate:
+          `<b>${arc.genre}</b><br>` +
+          'Year: %{x}<br>Mean: %{y:.3f}<br>' +
+          'Texts: %{customdata[0]:,}<extra></extra>',
+      });
+
+      // Use the server LOESS (close enough — fitted on same data, just grouped differently)
+      if (arc.loess.length > 0) {
+        traces.push({
+          x: arc.loess.map(p => p.year),
+          y: arc.loess.map(p => p.fitted),
+          type: 'scatter', mode: 'lines',
+          line: { color: gs.color, dash: gs.dash, width: gs.width },
+          name: `${arc.genre} LOESS`,
+          showlegend: false,
+          hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
+        });
+      }
+    }
+
+    _renderLayout(traces);
   }
 
   function renderExplore() {
@@ -346,6 +418,7 @@
 
 <div class="chart-container">
   <div class="mode-toggle">
+    <button class:active={mode === 'aggregate'} onclick={() => mode = 'aggregate'}>Aggregate</button>
     <button class:active={mode === 'explore'} onclick={() => mode = 'explore'}>Explore</button>
     <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
     <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>
