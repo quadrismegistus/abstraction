@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, binSize, globalLoading, corporaList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, globalLoading, corporaList } from '$lib/stores';
   import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
   import type { GenreArc, AggGenreArc } from '$lib/types';
 
@@ -89,8 +89,31 @@
   async function loadData() {
     $globalLoading = true;
     try {
-      if (mode === 'aggregate') {
+      if (mode === 'aggregate' && !$corpusSmoothed) {
+        // Raw aggregate: simple text-level mean per bin
         aggArcs = await fetchArcAggregate(getParams());
+      } else if (mode === 'aggregate' && $corpusSmoothed) {
+        // Corpus-smoothed aggregate: use by-genre data, extract aggregate LOESS
+        genreArcs = await fetchArcByGenre(getParams());
+        // Convert genreArcs to aggArcs format using loess_aggregate
+        aggArcs = genreArcs.map(arc => {
+          const scoreKey = $corpusAdjusted ? 'adjusted' : 'score';
+          const bins: Record<number, { sum: number; count: number }> = {};
+          for (const p of arc.points) {
+            const val = scoreKey === 'adjusted' ? p.adjusted : p.score;
+            if (!bins[p.year]) bins[p.year] = { sum: 0, count: 0 };
+            bins[p.year].sum += val * p.n_texts;
+            bins[p.year].count += p.n_texts;
+          }
+          return {
+            genre: arc.genre,
+            points: Object.entries(bins)
+              .sort(([a], [b]) => Number(a) - Number(b))
+              .map(([yr, b]) => ({ year: Number(yr), mean: b.sum / b.count, n_texts: b.count })),
+            loess: arc.loess_aggregate,
+            n_texts_total: arc.n_texts_total,
+          };
+        });
       } else {
         genreArcs = await fetchArcByGenre(getParams());
       }
@@ -419,7 +442,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $loessSpan; $adjustModel; $binSize;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $loessSpan; $adjustModel; $binSize;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();
@@ -427,22 +450,9 @@
   });
 
   // Re-render or reload when mode/display toggles change
-  let prevMode = mode;
   $effect(() => {
-    const newMode = mode;
-    showRawTrend;
-    if (Plotly) {
-      // If switching between aggregate and explore/print, need to reload data
-      const wasAgg = prevMode === 'aggregate';
-      const isAgg = newMode === 'aggregate';
-      if (wasAgg !== isAgg) {
-        prevMode = newMode;
-        loadData();
-      } else {
-        prevMode = newMode;
-        renderPlot();
-      }
-    }
+    mode; showRawTrend;
+    if (Plotly) loadData();
   });
 </script>
 
