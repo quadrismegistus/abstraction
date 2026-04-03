@@ -184,7 +184,7 @@ def arc_texts(
 @router.get("/by-genre", response_model=list[GenreArc])
 def arc_by_genre(
     col: str = DEFAULT_COL,
-    genre: list[str] = Query(default=["Fiction", "Poetry", "Periodical"]),
+    genre: list[str] = Query(default=["arc_fiction"]),
     corpus: list[str] = Query(default=[]),
     year_min: float = 1580,
     year_max: float = 2020,
@@ -195,13 +195,10 @@ def arc_by_genre(
     model: str = "quadratic",
     bin_size: int = 10,
 ):
-    """Return corpus-adjusted decade bins + LOESS per genre.
+    """Return corpus-adjusted decade bins + LOESS per arc corpus.
 
-    Calls analysis.adjust_scores() per genre to remove corpus fixed effects,
-    then fits LOESS on the adjusted points.
-
-    When period_matched=True, each text is scored with its century-matched
-    vecnorms and norm_period is added as a second fixed effect.
+    The 'genre' parameter accepts arc corpus IDs (arc_fiction, arc_poetry, etc.)
+    or regular genre names for backward compatibility.
     """
     import pandas as pd
     from ...analysis import adjust_scores, assign_period_score
@@ -211,32 +208,64 @@ def arc_by_genre(
 
     conn = get_connection()
 
-    # Build corpus filter SQL
+    # Build source corpus filter
     corpus_sql = ""
     if corpus:
         corpus_list = ", ".join(f"'{c}'" for c in corpus)
-        corpus_sql = f" AND s.corpus_name IN ({corpus_list})"
+        corpus_sql = f" AND corpus_name IN ({corpus_list})"
 
-    if period_matched:
-        # Get all score columns for this source
-        score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
-                      if r[0].startswith(f"Abs-Conc.{source}.")]
-        col_sql = ", ".join(f's."{c}"' for c in score_cols)
-        df = conn.execute(f"""
-            SELECT s.id, s.corpus_name, t.year, t.genre, {col_sql}
-            FROM scores s
-            LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
-            WHERE t.year IS NOT NULL
-              AND t.year >= {year_min} AND t.year <= {year_max}{corpus_sql}
-        """).fetchdf()
-    else:
-        df = conn.execute(f"""
-            SELECT s.id, s.corpus_name, t.year, t.genre, s."{col}"
-            FROM scores s
-            LEFT JOIN lltk.texts t ON s.corpus_name = t.corpus AND s.id_normalized = t.id
-            WHERE t.year IS NOT NULL AND s."{col}" IS NOT NULL
-              AND t.year >= {year_min} AND t.year <= {year_max}{corpus_sql}
-        """).fetchdf()
+    # Load data for all requested genres/arc_corpora
+    all_dfs = []
+    for g in genre:
+        # Check if g is an arc_corpus name or a genre name
+        is_arc = g.startswith("arc_")
+
+        if period_matched:
+            score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+                          if r[0].startswith(f"Abs-Conc.{source}.")]
+            col_sql = ", ".join(f'"{c}"' for c in score_cols)
+            if is_arc:
+                gdf = conn.execute(f"""
+                    SELECT _id, corpus_name, year, arc_corpus, {col_sql}
+                    FROM texts
+                    WHERE arc_corpus = '{g}'
+                      AND year IS NOT NULL
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                """).fetchdf()
+            else:
+                gdf = conn.execute(f"""
+                    SELECT _id, corpus_name, year, genre, {col_sql}
+                    FROM texts
+                    WHERE genre = '{g}'
+                      AND year IS NOT NULL
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                """).fetchdf()
+        else:
+            if is_arc:
+                gdf = conn.execute(f"""
+                    SELECT _id, corpus_name, year, arc_corpus, "{col}"
+                    FROM texts
+                    WHERE arc_corpus = '{g}'
+                      AND year IS NOT NULL AND "{col}" IS NOT NULL
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                """).fetchdf()
+            else:
+                gdf = conn.execute(f"""
+                    SELECT _id, corpus_name, year, genre, "{col}"
+                    FROM texts
+                    WHERE genre = '{g}'
+                      AND year IS NOT NULL AND "{col}" IS NOT NULL
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                """).fetchdf()
+
+        if len(gdf) > 0:
+            gdf["_genre_label"] = g
+            all_dfs.append(gdf)
+
+    if not all_dfs:
+        return []
+
+    df = pd.concat(all_dfs, ignore_index=True)
 
     if period_matched:
         df = assign_period_score(df, source=source)
@@ -244,16 +273,15 @@ def arc_by_genre(
     else:
         score_col = col
 
-    # Build fixed effects list
     fe = []
     if period_matched:
-        fe.append("norm_period")  # always needed to absorb century hinge points
+        fe.append("norm_period")
     if corpus_adjusted:
-        fe.append("corpus_name")  # corpus intercepts as fixed effects
+        fe.append("corpus_name")
 
     results = []
     for g in genre:
-        gdf = df[df["genre"] == g]
+        gdf = df[df["_genre_label"] == g]
         if period_matched:
             gdf = gdf.dropna(subset=[score_col])
         if len(gdf) < 30:

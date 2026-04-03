@@ -19,8 +19,12 @@
     return 'n.s.';
   }
 
-  // Print mode: grayscale, genre-distinguished lines (book figure style)
+  // Line styles per genre/arc corpus
   const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
+    'arc_fiction':    { color: '#222',    dash: 'solid',    width: 3 },
+    'arc_poetry':     { color: '#666',    dash: 'dashdot',  width: 2.5 },
+    'arc_periodical': { color: '#aaa',    dash: 'dash',     width: 2.5 },
+    'arc_essays':     { color: '#336699', dash: 'longdash',  width: 2 },
     'Fiction':    { color: '#222',    dash: 'solid',    width: 3 },
     'Poetry':     { color: '#666',    dash: 'dashdot',  width: 2.5 },
     'Periodical': { color: '#aaa',    dash: 'dash',     width: 2.5 },
@@ -48,7 +52,7 @@
     p.col = $norm;
     const genres = $selectedGenres.length
       ? $selectedGenres
-      : ['Fiction', 'Poetry', 'Periodical'];
+      : ['arc_fiction'];
     p.genre = genres;
     // Only pass corpus filter if some are unchecked
     const allCorpusNames = $corporaList.map(c => c.name);

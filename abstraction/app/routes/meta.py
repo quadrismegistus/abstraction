@@ -89,7 +89,13 @@ def list_norms():
 @router.get("/genres", response_model=list[str])
 def list_genres():
     conn = get_connection()
-    rows = conn.execute(
+    # Arc corpora first, then regular genres
+    arcs = conn.execute(
+        "SELECT DISTINCT arc_corpus FROM scores WHERE arc_corpus IS NOT NULL ORDER BY arc_corpus"
+    ).fetchall()
+    genres = conn.execute(
         "SELECT DISTINCT genre FROM texts WHERE genre IS NOT NULL AND genre != '' ORDER BY genre"
     ).fetchall()
-    return [r[0] for r in rows]
+    arc_list = [r[0] for r in arcs]
+    genre_list = [r[0] for r in genres]
+    return arc_list + [g for g in genre_list if g not in arc_list]
