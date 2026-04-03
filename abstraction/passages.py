@@ -69,7 +69,7 @@ def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True, preserve
     paragraphs = _split_paragraphs(txt, preserve_newlines=preserve_newlines)
     rendered = []
     for i, para in enumerate(paragraphs):
-        body = _render_paragraph(para, scores, spelling_d, inline_styles=inline_styles)
+        body = _render_paragraph(para, scores, spelling_d, inline_styles=inline_styles, preserve_newlines=preserve_newlines)
         if i == 0:
             rendered.append(f'<p class="psg-para psg-first">{body}</p>')
         else:
@@ -83,13 +83,13 @@ def _split_paragraphs(txt, preserve_newlines=False):
     # Split on one or more blank lines (two+ consecutive newlines)
     paras = re.split(r'\n\s*\n', txt.strip())
     if preserve_newlines:
-        # Keep single newlines as <br> (useful for verse)
-        return [re.sub(r'\n', '<br>\n', p).strip() for p in paras if p.strip()]
+        # Don't collapse newlines — they'll be handled in _render_paragraph
+        return [p.strip() for p in paras if p.strip()]
     # Collapse remaining single newlines within paragraphs to spaces
     return [re.sub(r'\n', ' ', p).strip() for p in paras if p.strip()]
 
 
-def _render_paragraph(txt, scores, spelling_d, inline_styles=True):
+def _render_paragraph(txt, scores, spelling_d, inline_styles=True, preserve_newlines=False):
     """Render a single paragraph to styled HTML.
 
     Each scored word gets:
@@ -103,7 +103,15 @@ def _render_paragraph(txt, scores, spelling_d, inline_styles=True):
         True  = grayscale inline CSS (for print/export)
         False = no inline styles (classes + data-z only)
         "color" = blue↔orange continuous color scale (for web)
+    preserve_newlines : bool
+        If True, render each line separately and join with <br>.
     """
+    if preserve_newlines and '\n' in txt:
+        lines = txt.split('\n')
+        rendered = [_render_paragraph(line, scores, spelling_d, inline_styles=inline_styles, preserve_newlines=False)
+                    for line in lines if line.strip()]
+        return '<br>\n'.join(rendered)
+
     tokens = tokenize_agnostic(txt)
 
     parts = []
