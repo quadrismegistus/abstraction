@@ -711,13 +711,16 @@ def _compute_loess(years, values, span=0.3, n_points=200):
     lx, ly = result[:, 0], result[:, 1]
 
     residuals = y - np.interp(x, lx, ly)
-    window = max(3, int(len(x) * span))
-    se_vals = np.full_like(ly, np.std(residuals))
+    global_se = np.std(residuals)
+    window = max(5, int(len(x) * span))
+    se_vals = np.full_like(ly, global_se)
     for i in range(len(ly)):
         lo = max(0, i - window // 2)
         hi = min(len(residuals), i + window // 2 + 1)
-        if hi - lo >= 3:
+        if hi - lo >= 5:
             se_vals[i] = np.std(residuals[lo:hi])
+    # Cap local SE at 2x global SE to prevent edge explosion
+    se_vals = np.minimum(se_vals, global_se * 2.0)
 
     points = []
     for i in range(len(lx)):
