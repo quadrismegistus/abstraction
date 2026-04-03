@@ -42,6 +42,11 @@
     'is_translated': 'By Translation Status',
   };
 
+  function decompLabel(key: string): string {
+    if (key.startsWith('genre_raw (corpus-controlled')) return key;
+    return decompLabels[key] || key;
+  }
+
   onMount(loadDecomp);
 </script>
 
@@ -83,7 +88,7 @@
       {#each results as result}
         {@const absChange = Math.abs(result.overall_change) || 1}
         <div class="decomp-section">
-          <h3>{decompLabels[result.decompose_by] || result.decompose_by}</h3>
+          <h3>{decompLabel(result.decompose_by)}</h3>
           <div class="summary">
             <div class="summary-row">
               <span>Early ({result.period_early}): <strong>{result.overall_mean_early.toFixed(3)}</strong></span>
