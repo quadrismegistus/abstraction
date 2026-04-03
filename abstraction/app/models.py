@@ -52,6 +52,7 @@ class ArcText(BaseModel):
     author: str | None
     title: str | None
     genre: str | None
+    genre_raw: str | None = None
     score: float | None
 
 

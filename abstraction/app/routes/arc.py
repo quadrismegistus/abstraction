@@ -203,7 +203,7 @@ def arc_texts(
                 ArcText(
                     id=row["_id"], corpus=row["corpus_name"], year=row.get("year"),
                     author=row.get("author"), title=row.get("title"), genre=row.get("genre"),
-                    score=row.get("period_score"),
+                    genre_raw=row.get("genre_raw"), score=row.get("period_score"),
                 )
                 for _, row in df.iterrows()
             ]
@@ -217,7 +217,7 @@ def arc_texts(
         ).fetchone()[0]
 
         rows = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, "{col}"
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, "{col}"
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -227,7 +227,7 @@ def arc_texts(
         texts = [
             ArcText(
                 id=r[0], corpus=r[1], year=r[2],
-                author=r[3], title=r[4], genre=r[5], score=r[6],
+                author=r[3], title=r[4], genre=r[5], genre_raw=r[6], score=r[7],
             )
             for r in rows
         ]

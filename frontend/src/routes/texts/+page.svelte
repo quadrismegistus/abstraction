@@ -69,11 +69,13 @@
       <table>
         <thead>
           <tr>
+            <th class="sortable" onclick={() => toggleSort('corpus')}>Corpus {sortCol === 'corpus' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('year')}>Year {sortCol === 'year' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('author')}>Author {sortCol === 'author' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('title')}>Title {sortCol === 'title' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('score')}>Score {sortCol === 'score' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th>Genre</th>
+            <th>Genre (raw)</th>
           </tr>
         </thead>
         <tbody>
@@ -84,6 +86,7 @@
               if (m) goto(`/text/${m[1]}/${m[2]}`);
               else goto(`/text/${t.corpus}/${t.id}`);
             }}>
+              <td class="corpus">{t.corpus}</td>
               <td class="year">{t.year ?? '—'}</td>
               <td class="author">{t.author ?? '—'}</td>
               <td class="title">{t.title ?? t.id}</td>
@@ -91,6 +94,7 @@
                 {t.score !== null ? t.score.toFixed(3) : '—'}
               </td>
               <td class="genre">{t.genre ?? '—'}</td>
+              <td class="genre">{t.genre_raw ?? '—'}</td>
             </tr>
           {/each}
         </tbody>

@@ -105,6 +105,15 @@
     <div class="error">Error: {error}</div>
   {/if}
 
+  {#if data?.metadata}
+    <div class="meta-bar">
+      {#each Object.entries(data.metadata) as [key, val]}
+        {#if val}<span class="meta-item"><strong>{key}:</strong> {val}</span>{/if}
+      {/each}
+      <span class="meta-item"><strong>corpus:</strong> {corpus}</span>
+    </div>
+  {/if}
+
   <div class="controls">
     <label>
       Chunk size:
@@ -121,6 +130,11 @@
 
 <style>
   .trajectory-container { flex: 1; display: flex; flex-direction: column; }
+  .meta-bar {
+    padding: 0.5rem 1rem; background: #f8f8f8; border-bottom: 1px solid #eee;
+    display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; font-size: 0.85rem;
+  }
+  .meta-item strong { color: #666; font-weight: 500; }
   .plot { flex: 1; min-height: 400px; }
   .controls { padding: 0.5rem 1rem; display: flex; gap: 1rem; align-items: center; }
   .controls label { font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; }

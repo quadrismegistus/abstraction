@@ -540,7 +540,7 @@
     background: white; border-radius: 3px; cursor: pointer;
   }
   .mode-toggle button.active { background: #333; color: white; border-color: #333; }
-  .plot { flex: 1; min-height: 300px; }
+  .plot { flex: 1 1 0; min-height: 300px; max-height: calc(100vh - 200px); }
   .stats-table {
     padding: 0.5rem 1rem; border-top: 1px solid #eee;
     overflow-x: auto; flex-shrink: 0; flex-grow: 0;

@@ -47,6 +47,7 @@ export interface ArcText {
   author: string | null;
   title: string | null;
   genre: string | null;
+  genre_raw: string | null;
   score: number | null;
 }
 
