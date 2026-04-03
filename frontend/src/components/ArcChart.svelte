@@ -486,6 +486,7 @@
         mode = 'print';
       }
     }}>Plotnine</button>
+    <a href="/decompose" class="btn-link">Decompose</a>
   </div>
   {#if mode === 'print' && printPngUrl}
     <div class="print-container">
@@ -560,6 +561,11 @@
     background: white; border-radius: 3px; cursor: pointer;
   }
   .mode-toggle button.active { background: #333; color: white; border-color: #333; }
+  .btn-link {
+    padding: 3px 12px; font-size: 0.8rem; border: 1px solid #ccc;
+    background: white; border-radius: 3px; text-decoration: none; color: #333;
+  }
+  .btn-link:hover { background: #f0f0f0; }
   .plot { flex: 1 1 0; min-height: 300px; max-height: calc(100vh - 200px); }
   .stats-table {
     padding: 0.5rem 1rem; border-top: 1px solid #eee;

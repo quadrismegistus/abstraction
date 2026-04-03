@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .db import init_db
-from .routes import arc, meta, trajectory, passage
+from .routes import arc, meta, trajectory, passage, decompose
 
 
 @asynccontextmanager
@@ -39,3 +39,4 @@ app.include_router(meta.router, prefix="/api/meta", tags=["meta"])
 app.include_router(arc.router, prefix="/api/arc", tags=["arc"])
 app.include_router(trajectory.router, prefix="/api/trajectory", tags=["trajectory"])
 app.include_router(passage.router, prefix="/api/passage", tags=["passage"])
+app.include_router(decompose.router, prefix="/api/decompose", tags=["decompose"])
