@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { norm, periodMatched } from '$lib/stores';
+  import { norm, periodMatched, corporaList } from '$lib/stores';
 
   let genre = $state('arc_fiction');
   let earlyMin = $state(1700);
   let earlyMax = $state(1780);
   let lateMin = $state(1850);
   let lateMax = $state(1950);
+  let corpusFilter = $state('');
   let loading = $state(false);
   let results: any[] = $state([]);
   let error = $state('');
@@ -25,6 +26,7 @@
         invert: 'true',
       });
       if ($periodMatched) params.set('period_matched', 'true');
+      if (corpusFilter) params.append('corpus', corpusFilter);
       const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
       const res = await fetch(`http://${host}:1709/api/decompose/shift-share?${params.toString()}`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -64,6 +66,15 @@
         <option value="arc_poetry">Poetry</option>
         <option value="arc_periodical">Periodical</option>
         <option value="arc_essays">Essays</option>
+      </select>
+    </label>
+    <label>
+      Corpus:
+      <select bind:value={corpusFilter}>
+        <option value="">All corpora</option>
+        {#each $corporaList as c}
+          <option value={c.name}>{c.name}</option>
+        {/each}
       </select>
     </label>
     <label>
