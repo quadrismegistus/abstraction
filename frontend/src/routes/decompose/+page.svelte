@@ -83,6 +83,7 @@
       {#each results as result}
         <div class="decomp-section">
           <h3>{decompLabels[result.decompose_by] || result.decompose_by}</h3>
+          {@const absChange = Math.abs(result.overall_change) || 1}
           <div class="summary">
             <div class="summary-row">
               <span>Early ({result.period_early}): <strong>{result.overall_mean_early.toFixed(3)}</strong></span>
@@ -90,7 +91,6 @@
               <span>Change: <strong>{result.overall_change.toFixed(3)}</strong></span>
             </div>
             <div class="summary-row decomp-totals">
-              {@const absChange = Math.abs(result.overall_change) || 1}
               <span>Composition: <strong>{(result.total_composition / absChange * 100).toFixed(1)}%</strong> ({result.total_composition.toFixed(4)})</span>
               <span>Within: <strong>{(result.total_within / absChange * 100).toFixed(1)}%</strong> ({result.total_within.toFixed(4)})</span>
               <span>Interaction: <strong>{(result.total_interaction / absChange * 100).toFixed(1)}%</strong> ({result.total_interaction.toFixed(4)})</span>
