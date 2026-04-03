@@ -22,9 +22,20 @@ def _build_where(genre: list[str], corpus: list[str],
     params: list = []
 
     if genre:
-        placeholders = ",".join("?" for _ in genre)
-        clauses.append(f"genre IN ({placeholders})")
-        params.extend(genre)
+        # Support both arc_corpus IDs and regular genre names
+        arc_genres = [g for g in genre if g.startswith("arc_")]
+        reg_genres = [g for g in genre if not g.startswith("arc_")]
+        genre_clauses = []
+        if arc_genres:
+            placeholders = ",".join("?" for _ in arc_genres)
+            genre_clauses.append(f"arc_corpus IN ({placeholders})")
+            params.extend(arc_genres)
+        if reg_genres:
+            placeholders = ",".join("?" for _ in reg_genres)
+            genre_clauses.append(f"genre IN ({placeholders})")
+            params.extend(reg_genres)
+        if genre_clauses:
+            clauses.append(f"({' OR '.join(genre_clauses)})")
     if corpus:
         placeholders = ",".join("?" for _ in corpus)
         clauses.append(f"corpus_name IN ({placeholders})")
@@ -163,7 +174,7 @@ def arc_texts(
     ).fetchone()[0]
 
     rows = conn.execute(f"""
-        SELECT id, corpus_name, year, author, title, genre, "{col}"
+        SELECT _id, corpus_name, year, author, title, genre, "{col}"
         FROM texts
         WHERE {where}
         ORDER BY year
