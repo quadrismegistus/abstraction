@@ -1,7 +1,7 @@
 <script lang="ts">
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
-  import { norm } from '$lib/stores';
+  import { norm, periodMatched } from '$lib/stores';
   import { fetchArcTexts } from '$lib/api';
   import type { ArcText } from '$lib/types';
 
@@ -26,6 +26,7 @@
     };
     if (corpus) params.corpus = [corpus];
     if (genre) params.genre = [genre];
+    if ($periodMatched) params.period_matched = 'true';
     const result = await fetchArcTexts(params);
     texts = result.texts;
     total = result.total;

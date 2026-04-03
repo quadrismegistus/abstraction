@@ -164,30 +164,73 @@ def arc_texts(
     year_max: float | None = None,
     page: int = 0,
     page_size: int = 5000,
+    period_matched: bool = False,
 ):
     """Return paginated scored texts for scatter plot overlay."""
-    where, params = _build_where(genre, corpus, year_min, year_max, col)
+    import pandas as pd
+    from ...analysis import assign_period_score, CENTURY_BINS
+
+    col_parts = col.split(".")
+    source = col_parts[1] if len(col_parts) >= 2 else "Median"
+
     conn = get_connection()
 
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM texts WHERE {where}", params
-    ).fetchone()[0]
+    if period_matched:
+        # Load all per-century columns for this source
+        score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+                      if r[0].startswith(f"Abs-Conc.{source}.")]
+        col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
-    rows = conn.execute(f"""
-        SELECT _id, corpus_name, year, author, title, genre, "{col}"
-        FROM texts
-        WHERE {where}
-        ORDER BY year
-        LIMIT {page_size} OFFSET {page * page_size}
-    """, params).fetchall()
+        where, params = _build_where(genre, corpus, year_min, year_max, score_cols[0] if score_cols else col)
+        # Override the NOT NULL check to require any period column
+        where = where.replace(f'"{score_cols[0]}" IS NOT NULL', "1=1") if score_cols else where
 
-    texts = [
-        ArcText(
-            id=r[0], corpus=r[1], year=r[2],
-            author=r[3], title=r[4], genre=r[5], score=r[6],
-        )
-        for r in rows
-    ]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM texts WHERE {where}", params
+        ).fetchone()[0]
+
+        df = conn.execute(f"""
+            SELECT _id, corpus_name, year, author, title, genre, {col_sql}
+            FROM texts
+            WHERE {where}
+            ORDER BY year
+            LIMIT {page_size} OFFSET {page * page_size}
+        """, params).fetchdf()
+
+        if len(df) > 0:
+            df = assign_period_score(df, source=source)
+            texts = [
+                ArcText(
+                    id=row["_id"], corpus=row["corpus_name"], year=row.get("year"),
+                    author=row.get("author"), title=row.get("title"), genre=row.get("genre"),
+                    score=row.get("period_score"),
+                )
+                for _, row in df.iterrows()
+            ]
+        else:
+            texts = []
+    else:
+        where, params = _build_where(genre, corpus, year_min, year_max, col)
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM texts WHERE {where}", params
+        ).fetchone()[0]
+
+        rows = conn.execute(f"""
+            SELECT _id, corpus_name, year, author, title, genre, "{col}"
+            FROM texts
+            WHERE {where}
+            ORDER BY year
+            LIMIT {page_size} OFFSET {page * page_size}
+        """, params).fetchall()
+
+        texts = [
+            ArcText(
+                id=r[0], corpus=r[1], year=r[2],
+                author=r[3], title=r[4], genre=r[5], score=r[6],
+            )
+            for r in rows
+        ]
 
     return ArcTexts(texts=texts, total=total, page=page, page_size=page_size)
 
