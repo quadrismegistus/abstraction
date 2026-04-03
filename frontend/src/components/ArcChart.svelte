@@ -10,6 +10,7 @@
   let genreArcs: GenreArc[] = $state([]);
   let mode: 'explore' | 'print' | 'aggregate' = $state('aggregate');
   let showRawTrend = $state(false);
+  let printPngUrl = $state('');
 
   function pStars(p: number | null): string {
     if (p === null) return '';
@@ -452,10 +453,18 @@
         if (Array.isArray(v)) v.forEach(x => qs.append(k, x));
         else qs.set(k, v);
       }
-      window.open(`http://${window.location.hostname}:1709/api/arc/print?${qs.toString()}`, '_blank');
+      printPngUrl = `http://${window.location.hostname}:1709/api/arc/print?${qs.toString()}`;
+      mode = 'print';
     }}>Export PNG</button>
   </div>
-  <div bind:this={plotDiv} class="plot"></div>
+  {#if mode === 'print' && printPngUrl}
+    <div class="print-container">
+      <img src={printPngUrl} alt="Arc plot (print quality)" class="print-img" />
+      <p class="print-hint">Right-click to save image</p>
+    </div>
+  {:else}
+    <div bind:this={plotDiv} class="plot"></div>
+  {/if}
 
   {#if genreArcs.length > 0}
     <div class="stats-table">
@@ -510,6 +519,9 @@
 
 <style>
   .chart-container { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .print-container { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1rem; overflow: auto; }
+  .print-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .print-hint { color: #999; font-size: 0.8rem; margin-top: 0.5rem; }
   .mode-toggle {
     display: flex; gap: 4px; padding: 4px 1rem; flex-shrink: 0;
   }

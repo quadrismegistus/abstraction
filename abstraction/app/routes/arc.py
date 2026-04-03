@@ -440,6 +440,8 @@ def arc_print(
         raise HTTPException(404, "No data for selected genres")
 
     import pandas as pd
+    import matplotlib
+    matplotlib.use("Agg")
     import plotnine as p9
     import numpy as np
 
