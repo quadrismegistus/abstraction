@@ -191,7 +191,7 @@ def arc_texts(
         ).fetchone()[0]
 
         df = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, {col_sql}
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, {col_sql}
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -204,7 +204,8 @@ def arc_texts(
                 ArcText(
                     id=row["_id"], corpus=row["corpus_name"], year=row.get("year"),
                     author=row.get("author"), title=row.get("title"), genre=row.get("genre"),
-                    genre_raw=row.get("genre_raw"), score=row.get("period_score"),
+                    genre_raw=row.get("genre_raw"), is_translated=row.get("is_translated"),
+                    score=row.get("period_score"),
                 )
                 for _, row in df.iterrows()
             ]
@@ -218,7 +219,7 @@ def arc_texts(
         ).fetchone()[0]
 
         rows = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, genre_raw, "{col}"
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, "{col}"
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -228,7 +229,7 @@ def arc_texts(
         texts = [
             ArcText(
                 id=r[0], corpus=r[1], year=r[2],
-                author=r[3], title=r[4], genre=r[5], genre_raw=r[6], score=r[7],
+                author=r[3], title=r[4], genre=r[5], genre_raw=r[6], is_translated=r[7], score=r[8],
             )
             for r in rows
         ]
@@ -743,13 +744,15 @@ def _compute_loess(years, values, span=0.3, n_points=200):
     lx, ly = result[:, 0], result[:, 1]
 
     residuals = y - np.interp(x, lx, ly)
-    window = max(3, int(len(x) * span))
-    se_vals = np.full_like(ly, np.std(residuals))
+    global_se = np.std(residuals)
+    window = max(5, int(len(x) * span))
+    se_vals = np.full_like(ly, global_se)
     for i in range(len(ly)):
         lo = max(0, i - window // 2)
         hi = min(len(residuals), i + window // 2 + 1)
-        if hi - lo >= 3:
-            se_vals[i] = np.std(residuals[lo:hi])
+        if hi - lo >= 5:
+            local_se = np.std(residuals[lo:hi])
+            se_vals[i] = min(local_se, global_se)  # clamp to global
 
     points = []
     for i in range(len(lx)):

@@ -56,11 +56,13 @@
              onchange={() => $corpusSmoothed = !$corpusSmoothed} />
       Corpus-smoothed
     </label>
-    <label class="toggle">
-      <input type="checkbox" checked={$corpusAdjusted}
-             onchange={() => $corpusAdjusted = !$corpusAdjusted} />
-      Corpus adjustment
-    </label>
+    {#if $corpusSmoothed}
+      <label class="toggle">
+        <input type="checkbox" checked={$corpusAdjusted}
+               onchange={() => $corpusAdjusted = !$corpusAdjusted} />
+        Corpus adjustment
+      </label>
+    {/if}
     <h4>Bin size</h4>
     <select onchange={(e) => $binSize = +(e.target as HTMLSelectElement).value}>
       <option value="1" selected={$binSize === 1}>1 year</option>

@@ -76,6 +76,7 @@
             <th class="sortable" onclick={() => toggleSort('score')}>Score {sortCol === 'score' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th>Genre</th>
             <th>Genre (raw)</th>
+            <th>Translated?</th>
           </tr>
         </thead>
         <tbody>
@@ -95,6 +96,7 @@
               </td>
               <td class="genre">{t.genre ?? '—'}</td>
               <td class="genre">{t.genre_raw ?? '—'}</td>
+              <td class="genre">{t.is_translated === true ? 'Yes' : t.is_translated === false ? 'No' : '—'}</td>
             </tr>
           {/each}
         </tbody>
