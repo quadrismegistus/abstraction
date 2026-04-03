@@ -380,12 +380,26 @@ def arc_by_genre(
 
         stats = _compute_arc_stats(adj, sign, loess_points)
 
+        # Aggregate LOESS: weighted mean per year bin across all corpora
+        import numpy as np
+        agg_years = adj["year"].values
+        agg_scores = (adj[main_col].values * sign * adj["n_texts"].values)
+        agg_weights = adj["n_texts"].values
+        # Group by year
+        unique_years = np.unique(agg_years)
+        agg_means = np.array([
+            agg_scores[agg_years == y].sum() / agg_weights[agg_years == y].sum()
+            for y in unique_years
+        ])
+        loess_agg_points = _compute_loess(unique_years, agg_means, span=loess_span)
+
         n_corpora = adj["corpus"].nunique() if "corpus" in adj.columns else 1
         results.append(GenreArc(
             genre=g,
             points=points,
             loess=loess_points,
             loess_raw=loess_raw_points,
+            loess_aggregate=loess_agg_points,
             stats=stats,
             n_texts_total=int(adj["n_texts"].sum()),
             n_corpora=n_corpora,

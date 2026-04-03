@@ -120,7 +120,8 @@ class GenreArc(BaseModel):
     genre: str
     points: list[AdjustedPoint]
     loess: list[LoessPoint]
-    loess_raw: list[LoessPoint]   # LOESS on unadjusted scores (shows pre-correction trend)
+    loess_raw: list[LoessPoint]       # LOESS on unadjusted scores
+    loess_aggregate: list[LoessPoint]  # LOESS on text-weighted aggregate bins
     stats: ArcStats
     n_texts_total: int
     n_corpora: int

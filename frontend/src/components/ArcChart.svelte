@@ -109,12 +109,12 @@
       const counts = years.map(y => bins[y].count);
       const maxN = Math.max(...counts, 1);
 
-      // SE ribbon from LOESS
-      if (arc.loess.length > 0) {
-        const lx = arc.loess.map(p => p.year);
+      // SE ribbon from aggregate LOESS
+      if (arc.loess_aggregate.length > 0) {
+        const lx = arc.loess_aggregate.map(p => p.year);
         traces.push({
           x: [...lx, ...lx.slice().reverse()],
-          y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
+          y: [...arc.loess_aggregate.map(p => p.se_hi), ...arc.loess_aggregate.map(p => p.se_lo).reverse()],
           type: 'scatter', mode: 'lines', fill: 'toself',
           fillcolor: 'rgba(0,0,0,0.06)', line: { color: 'transparent' },
           showlegend: false, hoverinfo: 'skip',
@@ -141,11 +141,11 @@
           'Texts: %{customdata[0]:,}<extra></extra>',
       });
 
-      // Use the server LOESS (close enough — fitted on same data, just grouped differently)
-      if (arc.loess.length > 0) {
+      // Aggregate LOESS (fitted on text-weighted year bins)
+      if (arc.loess_aggregate.length > 0) {
         traces.push({
-          x: arc.loess.map(p => p.year),
-          y: arc.loess.map(p => p.fitted),
+          x: arc.loess_aggregate.map(p => p.year),
+          y: arc.loess_aggregate.map(p => p.fitted),
           type: 'scatter', mode: 'lines',
           line: { color: gs.color, dash: gs.dash, width: gs.width },
           name: `${arc.genre} LOESS`,
