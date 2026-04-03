@@ -422,85 +422,116 @@ def arc_print(
     model: str = "quadratic",
     bin_size: int = 5,
 ):
-    """Render a print-quality PNG of the arc using plotnine."""
-    from fastapi.responses import FileResponse
-    import tempfile
-
-    # Get the data using the same logic as by-genre
-    arcs = arc_by_genre(
-        col=col, genre=genre, corpus=corpus,
-        year_min=year_min, year_max=year_max,
-        loess_span=loess_span, invert=invert,
-        period_matched=period_matched, corpus_adjusted=corpus_adjusted,
-        model=model, bin_size=bin_size,
-    )
-
-    if not arcs:
-        from fastapi import HTTPException
-        raise HTTPException(404, "No data for selected genres")
-
-    import pandas as pd
+    """Render a print-quality PNG of the arc using plotnine. Saves to data/figures/."""
+    import os
     import matplotlib
     matplotlib.use("Agg")
     import plotnine as p9
+    import pandas as pd
     import numpy as np
+    from fastapi.responses import FileResponse
+    from ...config import PATH_DATA
+    from ...analysis import adjust_scores, assign_period_score
 
-    # Build DataFrames for plotnine
-    point_rows = []
-    loess_rows = []
-    for arc in arcs:
-        score_key = "adjusted" if corpus_adjusted else "score"
-        for p in arc.points:
-            point_rows.append({
-                "year": p.year,
-                "score": p.adjusted if corpus_adjusted else p.score,
-                "n_texts": p.n_texts,
-                "genre": arc.genre,
-                "corpus": p.corpus or "",
-            })
-        for lp in arc.loess_aggregate:
-            loess_rows.append({
-                "year": lp.year,
-                "fitted": lp.fitted,
-                "se_lo": lp.se_lo,
-                "se_hi": lp.se_hi,
-                "genre": arc.genre,
-            })
+    conn = get_connection()
 
-    pdf = pd.DataFrame(point_rows)
-    ldf = pd.DataFrame(loess_rows)
-
-    # Aggregate points by year bin for cleaner plot
-    agg = pdf.groupby(["year", "genre"]).agg(
-        score=("score", lambda x: np.average(x, weights=pdf.loc[x.index, "n_texts"])),
-        n_texts=("n_texts", "sum"),
-    ).reset_index()
-
-    # Genre display names
     genre_labels = {
-        "arc_fiction": "Fiction",
-        "arc_poetry": "Poetry",
-        "arc_periodical": "Periodical",
-        "arc_essays": "Essays",
+        "arc_fiction": "Fiction", "arc_poetry": "Poetry",
+        "arc_periodical": "Periodical", "arc_essays": "Essays",
     }
-    agg["genre_label"] = agg["genre"].map(lambda g: genre_labels.get(g, g))
-    ldf["genre_label"] = ldf["genre"].map(lambda g: genre_labels.get(g, g))
 
-    # Build plot
-    p9.options.figure_size = (10, 6)
+    all_points = []
+    all_loess = []
+
+    for g in genre:
+        is_arc = g.startswith("arc_")
+        corpus_filter = ""
+        if corpus and len(corpus) > 0:
+            cl = ", ".join(f"'{c}'" for c in corpus)
+            corpus_filter = f" AND corpus_name IN ({cl})"
+
+        if is_arc:
+            df = conn.execute(f"""
+                SELECT _id, corpus_name, year, arc_corpus, "{col}"
+                FROM texts
+                WHERE arc_corpus = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+            """).fetchdf()
+        else:
+            df = conn.execute(f"""
+                SELECT _id, corpus_name, year, genre, "{col}"
+                FROM texts
+                WHERE genre = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+            """).fetchdf()
+
+        if len(df) < 30:
+            continue
+
+        if period_matched:
+            source = col.split(".")[1] if len(col.split(".")) >= 2 else "Median"
+            df = assign_period_score(df, source=source)
+            score_col = "period_score"
+        else:
+            score_col = col
+
+        fe = []
+        if period_matched:
+            fe.append("norm_period")
+        if corpus_adjusted:
+            fe.append("corpus_name")
+
+        adj = adjust_scores(
+            df, score_col=score_col, min_year=year_min, max_year=year_max,
+            corpus_col="corpus_name",
+            fixed_effects=fe if fe else None,
+            model=model, agg_bin=bin_size,
+        )
+        if adj.empty:
+            continue
+
+        sign = -1.0 if invert else 1.0
+        main_col_name = "adjusted" if corpus_adjusted else "score"
+        main_vals = adj[main_col_name].values * sign
+
+        # Aggregate to one point per year
+        years = adj["year"].values
+        n_texts = adj["n_texts"].values
+        unique_years = np.unique(years)
+        for yr in unique_years:
+            mask = years == yr
+            wt_mean = np.average(main_vals[mask], weights=n_texts[mask])
+            total_n = n_texts[mask].sum()
+            all_points.append({"year": yr, "score": wt_mean, "n_texts": int(total_n), "genre": genre_labels.get(g, g)})
+
+        # LOESS
+        agg_means = np.array([
+            np.average(main_vals[years == yr], weights=n_texts[years == yr])
+            for yr in unique_years
+        ])
+        loess_pts = _compute_loess(unique_years, agg_means, span=loess_span)
+        for lp in loess_pts:
+            all_loess.append({"year": lp.year, "fitted": lp.fitted, "se_lo": lp.se_lo, "se_hi": lp.se_hi, "genre": genre_labels.get(g, g)})
+
+    if not all_points:
+        from fastapi import HTTPException
+        raise HTTPException(404, "No data")
+
+    agg_df = pd.DataFrame(all_points)
+    ldf = pd.DataFrame(all_loess)
 
     fig = (
-        p9.ggplot(agg, p9.aes(x="year", y="score"))
+        p9.ggplot(agg_df, p9.aes(x="year", y="score"))
         + p9.geom_ribbon(
-            p9.aes(x="year", ymin="se_lo", ymax="se_hi", fill="genre_label"),
+            p9.aes(x="year", ymin="se_lo", ymax="se_hi", fill="genre"),
             data=ldf, alpha=0.15, inherit_aes=False,
         )
         + p9.geom_point(
-            p9.aes(size="n_texts", shape="genre_label"),
+            p9.aes(size="n_texts", shape="genre"),
             alpha=0.4, color="#333",
         )
         + p9.geom_line(
-            p9.aes(x="year", y="fitted", linetype="genre_label"),
+            p9.aes(x="year", y="fitted", linetype="genre"),
             data=ldf, color="black", size=1.2, inherit_aes=False,
         )
         + p9.scale_size_continuous(range=(1, 5), name="Texts")
@@ -508,21 +539,18 @@ def arc_print(
         + p9.labs(
             x="Year",
             y="<< More concrete | More abstract >>",
-            shape="Genre",
-            linetype="Genre",
+            shape="Genre", linetype="Genre",
         )
         + p9.theme_classic()
-        + p9.theme(
-            legend_position="right",
-            figure_size=(10, 6),
-        )
+        + p9.theme(legend_position="right", figure_size=(10, 6))
     )
 
-    # Save to temp file
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-    fig.save(tmp.name, dpi=300)
+    fig_dir = os.path.join(PATH_DATA, "figures")
+    os.makedirs(fig_dir, exist_ok=True)
+    out_path = os.path.join(fig_dir, "arc_print.png")
+    fig.save(out_path, dpi=300)
 
-    return FileResponse(tmp.name, media_type="image/png", filename="arc.png")
+    return FileResponse(out_path, media_type="image/png")
 
 
 def _compute_arc_stats(adj, sign, loess_points):
