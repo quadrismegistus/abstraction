@@ -585,6 +585,145 @@ def score_all_corpora(
 
 
 # ---------------------------------------------------------------------------
+# Scoring synthetic (arc) corpora
+# ---------------------------------------------------------------------------
+
+ARC_CORPUS_IDS = ["arc_fiction", "arc_poetry", "arc_periodical", "arc_essays"]
+
+
+def _score_one_text_with_id(args):
+    """Score a single text, returning _id and source_corpus."""
+    _id, source_corpus, freqs_path = args
+    try:
+        with open(freqs_path) as f:
+            freqs = json.load(f)
+    except Exception:
+        return None
+    if sum(freqs.values()) < _worker_min_words:
+        return None
+    scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
+    if scores:
+        scores["_id"] = _id
+        scores["source_corpus"] = source_corpus
+        return scores
+    return None
+
+
+def score_arc_corpora(
+    output_dir=SCORES_DIR,
+    force=False,
+    modernize=False,
+    only=None,
+    min_words=100,
+    num_proc=1,
+):
+    """Score synthetic arc corpora (arc_fiction, arc_poetry, etc.).
+
+    Each synthetic corpus produces one CSV with _id and source_corpus columns.
+    Texts are deduplicated by the SyntheticCorpus definition.
+
+    Parameters
+    ----------
+    only : list of str, optional
+        Which arc corpora to score. Default: all in ARC_CORPUS_IDS.
+    """
+    import csv
+    import sys
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    import lltk
+
+    output_dir = _version_dir(output_dir, "v8", modernize)
+    os.makedirs(output_dir, exist_ok=True)
+    allnorms = get_allnorms()
+    allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+    columns = ["_id", "source_corpus"] + sorted(allnorms.columns.tolist())
+    spelling_d = get_spelling_modernizer() if modernize else None
+
+    _get_norms_arrays(allnorms)
+
+    include = set(only) if only else set(ARC_CORPUS_IDS)
+
+    # Set up multiprocessing
+    pool = None
+    if num_proc > 1:
+        import multiprocessing as mp
+        ctx = mp.get_context("fork")
+        pool = ctx.Pool(
+            num_proc,
+            initializer=_init_worker,
+            initargs=(allnorms, spelling_d, min_words),
+        )
+    else:
+        _init_worker(allnorms, spelling_d, min_words)
+
+    results = {}
+    for arc_id in sorted(include):
+        corpus = lltk.load(arc_id)
+        if corpus is None:
+            print(f"  {arc_id}: not found in LLTK")
+            continue
+
+        out_path = os.path.join(output_dir, f"{arc_id}.csv")
+        if force and os.path.exists(out_path):
+            os.remove(out_path)
+        done_ids = set()
+        if os.path.exists(out_path):
+            try:
+                done_ids = set(pd.read_csv(out_path, usecols=["_id"], dtype={"_id": str})["_id"])
+            except Exception:
+                pass
+
+        # Collect work items: (_id, source_corpus, freqs_path)
+        work_items = []
+        for t in corpus.texts():
+            _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
+            if _id in done_ids:
+                continue
+            pf = t.path_freqs
+            if pf and os.path.exists(pf):
+                source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
+                work_items.append((_id, source, pf))
+
+        if not work_items and done_ids:
+            print(f"  {arc_id}: {len(done_ids)} already done, 0 remaining")
+            continue
+        if not work_items:
+            print(f"  {arc_id}: no texts with freqs")
+            continue
+
+        print(f"  {arc_id}: {len(done_ids)} done, {len(work_items)} to score")
+
+        file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        fh = open(out_path, "a", newline="")
+        writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
+        if not file_exists:
+            writer.writeheader()
+
+        try:
+            if pool is not None:
+                iterator = pool.imap_unordered(_score_one_text_with_id, work_items, chunksize=100)
+            else:
+                iterator = map(_score_one_text_with_id, work_items)
+
+            for result in tqdm(iterator, total=len(work_items), desc=f"  {arc_id}", unit="text"):
+                if result is not None:
+                    writer.writerow(result)
+        finally:
+            fh.close()
+
+        try:
+            results[arc_id] = pd.read_csv(out_path)
+        except Exception:
+            results[arc_id] = pd.DataFrame()
+
+    if pool is not None:
+        pool.close()
+        pool.join()
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Z-score distribution counting (CDF bins per text per norm)
 # ---------------------------------------------------------------------------
 

@@ -16,6 +16,13 @@ def cmd_score_corpora(args):
                       num_proc=args.workers)
 
 
+def cmd_score_arcs(args):
+    from .scoring import score_arc_corpora
+    only = args.arcs if args.arcs else None
+    score_arc_corpora(force=args.force, modernize=args.modernize, only=only,
+                      num_proc=args.workers)
+
+
 
 def cmd_check_freqs(args):
     from .corpus import check_freqs_coverage
@@ -299,6 +306,13 @@ def main():
     p.add_argument("--workers", "-j", type=int, default=1, help="Parallel worker processes (default: 1)")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization (output to v8/ instead of v8-raw/)")
 
+    # score-arcs: score synthetic arc corpora (arc_fiction, arc_poetry, etc.)
+    p = sub.add_parser("score-arcs", help="Score synthetic arc corpora (deduplicated by genre)")
+    p.add_argument("arcs", nargs="*", help="Specific arc corpora (e.g. arc_fiction arc_poetry)")
+    p.add_argument("--force", action="store_true", help="Re-score even if output exists")
+    p.add_argument("--workers", "-j", type=int, default=1, help="Parallel worker processes (default: 1)")
+    p.add_argument("--modernize", action="store_true", help="Enable spelling modernization")
+
     # score-corpus: score a single corpus
     # check-freqs: check metadata-to-freqs coverage
     p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
@@ -405,6 +419,8 @@ def main():
         cmd_report_full(args)
     elif args.command == "score-corpora":
         cmd_score_corpora(args)
+    elif args.command == "score-arcs":
+        cmd_score_arcs(args)
     elif args.command == "check-freqs":
         cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":
