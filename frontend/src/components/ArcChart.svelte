@@ -447,6 +447,14 @@
       {$corpusAdjusted ? 'Show raw' : 'Show adjusted'}
     </button>
     <button onclick={() => {
+      if (Plotly && plotDiv) {
+        Plotly.downloadImage(plotDiv, {
+          format: 'png', width: 3000, height: 1800,
+          filename: 'arc_plot', scale: 1,
+        });
+      }
+    }}>Export PNG</button>
+    <button onclick={() => {
       const p = getParams();
       const qs = new URLSearchParams();
       for (const [k, v] of Object.entries(p)) {
@@ -455,7 +463,7 @@
       }
       printPngUrl = `http://${window.location.hostname}:1709/api/arc/print?${qs.toString()}`;
       mode = 'print';
-    }}>Export PNG</button>
+    }}>Plotnine</button>
   </div>
   {#if mode === 'print' && printPngUrl}
     <div class="print-container">
