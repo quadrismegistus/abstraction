@@ -270,20 +270,18 @@ def arc_aggregate(
         cl = ", ".join(f"'{c}'" for c in corpus)
         corpus_filter = f" AND corpus_name IN ({cl})"
 
-    # is_translated filter (needs meta JSON field from LLTK)
+    # is_translated filter (top-level column in LLTK DuckDB)
     translated_filter = ""
     if is_translated == "true":
-        translated_filter = " AND meta->>'is_translated' = 'True'"
+        translated_filter = " AND is_translated = true"
     elif is_translated == "false":
-        translated_filter = " AND (meta->>'is_translated' IS NULL OR meta->>'is_translated' != 'True')"
+        translated_filter = " AND (is_translated IS NULL OR is_translated = false)"
 
     # Extra columns to select for split_by
     extra_cols = ""
-    valid_splits = {"genre_raw", "corpus_name"}
+    valid_splits = {"genre_raw", "corpus_name", "is_translated"}
     if split_by and split_by in valid_splits:
         extra_cols = f", {split_by}"
-    elif split_by == "is_translated":
-        extra_cols = ", meta->>'is_translated' as is_translated"
 
     sign = -1.0 if invert else 1.0
     results = []
