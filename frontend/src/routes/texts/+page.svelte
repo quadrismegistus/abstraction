@@ -77,7 +77,12 @@
         </thead>
         <tbody>
           {#each sortedTexts as t}
-            <tr class="text-row" onclick={() => goto(`/text/${t.corpus}/${t.id}`)}>
+            <tr class="text-row" onclick={() => {
+              // t.id is _id format: _corpus/text_id — extract corpus and text_id
+              const m = t.id.match(/^_([^/]+)\/(.+)$/);
+              if (m) goto(`/text/${m[1]}/${m[2]}`);
+              else goto(`/text/${t.corpus}/${t.id}`);
+            }}>
               <td class="year">{t.year ?? '—'}</td>
               <td class="author">{t.author ?? '—'}</td>
               <td class="title">{t.title ?? t.id}</td>
