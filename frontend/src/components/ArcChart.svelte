@@ -2,12 +2,13 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, binSize, globalLoading, corporaList } from '$lib/stores';
-  import { fetchArcByGenre } from '$lib/api';
-  import type { GenreArc } from '$lib/types';
+  import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
+  import type { GenreArc, AggGenreArc } from '$lib/types';
 
   let plotDiv: HTMLDivElement;
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
+  let aggArcs: AggGenreArc[] = $state([]);
   let mode: 'explore' | 'print' | 'aggregate' = $state('aggregate');
   let showRawTrend = $state(false);
   let printPngUrl = $state('');
@@ -88,7 +89,11 @@
   async function loadData() {
     $globalLoading = true;
     try {
-      genreArcs = await fetchArcByGenre(getParams());
+      if (mode === 'aggregate') {
+        aggArcs = await fetchArcAggregate(getParams());
+      } else {
+        genreArcs = await fetchArcByGenre(getParams());
+      }
       renderPlot();
     } catch (e) {
       console.error('Failed to load arc data:', e);
@@ -97,7 +102,9 @@
   }
 
   function renderPlot() {
-    if (!Plotly || !plotDiv || genreArcs.length === 0) return;
+    if (!Plotly || !plotDiv) return;
+    if (mode === 'aggregate' && aggArcs.length === 0) return;
+    if (mode !== 'aggregate' && genreArcs.length === 0) return;
     if (mode === 'aggregate') renderAggregate();
     else if (mode === 'explore') renderExplore();
     else renderPrint();
@@ -106,48 +113,35 @@
   function renderAggregate() {
     const traces: any[] = [];
 
-    for (const arc of genreArcs) {
+    const allCounts = aggArcs.flatMap(a => a.points.map(p => p.n_texts));
+    const maxN = Math.max(...allCounts, 1);
+
+    for (const arc of aggArcs) {
       const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
-      const scoreKey = $corpusAdjusted ? 'adjusted' : 'score';
 
-      // Aggregate all corpus points into one point per year bin
-      const bins: Record<number, { sum: number; count: number }> = {};
-      for (const p of arc.points) {
-        const val = scoreKey === 'adjusted' ? p.adjusted : p.score;
-        const yr = p.year;
-        if (!bins[yr]) bins[yr] = { sum: 0, count: 0 };
-        bins[yr].sum += val * p.n_texts;
-        bins[yr].count += p.n_texts;
-      }
-
-      const years = Object.keys(bins).map(Number).sort((a, b) => a - b);
-      const means = years.map(y => bins[y].sum / bins[y].count);
-      const counts = years.map(y => bins[y].count);
-      const maxN = Math.max(...counts, 1);
-
-      // SE ribbon from aggregate LOESS
-      if (arc.loess_aggregate.length > 0) {
-        const lx = arc.loess_aggregate.map(p => p.year);
+      // SE ribbon
+      if (arc.loess.length > 0) {
+        const lx = arc.loess.map(p => p.year);
         traces.push({
           x: [...lx, ...lx.slice().reverse()],
-          y: [...arc.loess_aggregate.map(p => p.se_hi), ...arc.loess_aggregate.map(p => p.se_lo).reverse()],
+          y: [...arc.loess.map(p => p.se_hi), ...arc.loess.map(p => p.se_lo).reverse()],
           type: 'scatter', mode: 'lines', fill: 'toself',
           fillcolor: 'rgba(0,0,0,0.06)', line: { color: 'transparent' },
           showlegend: false, hoverinfo: 'skip',
         });
       }
 
-      // Aggregated points — one per bin, sized by n_texts, shaped by genre
+      // Points — one per bin, sized by n_texts, shaped by genre
       traces.push({
-        x: years,
-        y: means,
-        customdata: years.map((y, i) => ['', counts[i], arc.genre, y]),
+        x: arc.points.map(p => p.year),
+        y: arc.points.map(p => p.mean),
+        customdata: arc.points.map(p => ['', p.n_texts, arc.genre, p.year]),
         type: 'scatter',
         mode: 'markers',
         marker: {
           color: gs.color,
           symbol: genreShapes[arc.genre] || 'circle',
-          size: counts.map(n => 4 + Math.sqrt(n / maxN) * 16),
+          size: arc.points.map(p => 4 + Math.sqrt(p.n_texts / maxN) * 16),
           opacity: 0.5,
           line: { width: 0.5, color: gs.color },
         },
@@ -155,14 +149,14 @@
         hovertemplate:
           `<b>${arc.genre}</b><br>` +
           'Year: %{x}<br>Mean: %{y:.3f}<br>' +
-          'Texts: %{customdata[0]:,}<extra></extra>',
+          'Texts: %{customdata[1]:,}<extra></extra>',
       });
 
-      // Aggregate LOESS (fitted on text-weighted year bins)
-      if (arc.loess_aggregate.length > 0) {
+      // LOESS line
+      if (arc.loess.length > 0) {
         traces.push({
-          x: arc.loess_aggregate.map(p => p.year),
-          y: arc.loess_aggregate.map(p => p.fitted),
+          x: arc.loess.map(p => p.year),
+          y: arc.loess.map(p => p.fitted),
           type: 'scatter', mode: 'lines',
           line: { color: gs.color, dash: gs.dash, width: gs.width },
           name: `${arc.genre} LOESS`,
@@ -372,7 +366,8 @@
   }
 
   function _renderLayout(traces: any[]) {
-    const totalTexts = genreArcs.reduce((s, g) => s + g.n_texts_total, 0);
+    const arcsForCount = mode === 'aggregate' ? aggArcs : genreArcs;
+    const totalTexts = arcsForCount.reduce((s: number, g: any) => s + g.n_texts_total, 0);
 
     Plotly.react(plotDiv, traces, {
       title: {
@@ -431,10 +426,23 @@
     }, 400);
   });
 
-  // Re-render (no reload) when display toggles change
+  // Re-render or reload when mode/display toggles change
+  let prevMode = mode;
   $effect(() => {
-    mode; showRawTrend;
-    if (Plotly && genreArcs.length > 0) renderPlot();
+    const newMode = mode;
+    showRawTrend;
+    if (Plotly) {
+      // If switching between aggregate and explore/print, need to reload data
+      const wasAgg = prevMode === 'aggregate';
+      const isAgg = newMode === 'aggregate';
+      if (wasAgg !== isAgg) {
+        prevMode = newMode;
+        loadData();
+      } else {
+        prevMode = newMode;
+        renderPlot();
+      }
+    }
   });
 </script>
 
@@ -476,7 +484,7 @@
     <div bind:this={plotDiv} class="plot"></div>
   {/if}
 
-  {#if genreArcs.length > 0}
+  {#if mode !== 'aggregate' && genreArcs.length > 0}
     <div class="stats-table">
       <table>
         <thead>

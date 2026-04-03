@@ -7,6 +7,7 @@ from ..models import (
     ArcAggregated, ArcBin, ArcText, ArcTexts,
     CorpusArc, CorpusArcBin,
     GenreArc, AdjustedPoint, LoessPoint, ArcStats,
+    AggGenreArc, AggBinPoint,
 )
 
 router = APIRouter()
@@ -235,6 +236,106 @@ def arc_texts(
     return ArcTexts(texts=texts, total=total, page=page, page_size=page_size)
 
 
+@router.get("/aggregate", response_model=list[AggGenreArc])
+def arc_aggregate(
+    col: str = DEFAULT_COL,
+    genre: list[str] = Query(default=["arc_fiction"]),
+    corpus: list[str] = Query(default=[]),
+    year_min: float = 1565,
+    year_max: float = 2020,
+    loess_span: float = 0.2,
+    invert: bool = True,
+    period_matched: bool = False,
+    bin_size: int = 5,
+):
+    """Aggregate arc: simple mean per year bin across ALL texts (no corpus weighting).
+
+    Each text contributes equally regardless of which corpus it comes from.
+    No corpus fixed effects. Just bin by year, mean, LOESS.
+    """
+    import pandas as pd
+    import numpy as np
+    from ...analysis import assign_period_score, CENTURY_BINS
+    from ..models import AggGenreArc, AggBinPoint
+
+    col_parts = col.split(".")
+    source = col_parts[1] if len(col_parts) >= 2 else "Median"
+
+    conn = get_connection()
+
+    corpus_filter = ""
+    if corpus and len(corpus) > 0:
+        cl = ", ".join(f"'{c}'" for c in corpus)
+        corpus_filter = f" AND corpus_name IN ({cl})"
+
+    sign = -1.0 if invert else 1.0
+    results = []
+
+    for g in genre:
+        is_arc = g.startswith("arc_")
+
+        if period_matched:
+            score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+                          if r[0].startswith(f"Abs-Conc.{source}.")]
+            col_sql = ", ".join(f'"{c}"' for c in score_cols)
+            filter_col = "arc_corpus" if is_arc else "genre"
+            df = conn.execute(f"""
+                SELECT year, {col_sql}
+                FROM texts
+                WHERE {filter_col} = '{g}' AND year IS NOT NULL
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+            """).fetchdf()
+
+            if len(df) < 30:
+                continue
+
+            # Assign period score per text
+            df = assign_period_score(df, source=source)
+            df["_score"] = df["period_score"] * sign
+            df = df.dropna(subset=["_score"])
+        else:
+            filter_col = "arc_corpus" if is_arc else "genre"
+            df = conn.execute(f"""
+                SELECT year, "{col}" as _score
+                FROM texts
+                WHERE {filter_col} = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+            """).fetchdf()
+
+            if len(df) < 30:
+                continue
+
+            df["_score"] = df["_score"] * sign
+
+        # Bin by year
+        df["_bin"] = (df["year"] // bin_size).astype(int) * bin_size
+        agg = df.groupby("_bin").agg(
+            mean=("_score", "mean"),
+            n_texts=("_score", "count"),
+        ).reset_index()
+
+        points = [
+            AggBinPoint(year=float(row["_bin"]), mean=float(row["mean"]), n_texts=int(row["n_texts"]))
+            for _, row in agg.iterrows()
+        ]
+
+        # LOESS on the bin means
+        loess_pts = _compute_loess(
+            agg["_bin"].values.astype(float),
+            agg["mean"].values.astype(float),
+            span=loess_span,
+        )
+
+        results.append(AggGenreArc(
+            genre=g,
+            points=points,
+            loess=loess_pts,
+            n_texts_total=int(agg["n_texts"].sum()),
+        ))
+
+    return results
+
+
 @router.get("/by-genre", response_model=list[GenreArc])
 def arc_by_genre(
     col: str = DEFAULT_COL,
@@ -421,8 +522,12 @@ def arc_print(arcs: list[GenreArc]):
     from ...config import PATH_DATA
 
     genre_labels = {
-        "arc_fiction": "Fiction", "arc_poetry": "Poetry",
-        "arc_periodical": "Periodical", "arc_essays": "Essays",
+        "arc_fiction": "Fiction", 
+        "arc_poetry": "Poetry",
+        "arc_periodical": "Periodical", 
+        "arc_essays": "Essays",
+        "arc_biography": "Biography",
+        "arc_sermons": "Sermons",
     }
 
     all_points = []
@@ -463,8 +568,36 @@ def arc_print(arcs: list[GenreArc]):
     agg_df = pd.DataFrame(all_points)
     ldf = pd.DataFrame(all_loess)
 
+    # Define specific colors for genres: 
+    # - Fiction (arc_fiction): black
+    # - Poetry (arc_poetry): mid-gray
+    # - All others: very light gray
+
+    genre_colors = {
+        "Fiction": "#000000",         # black
+        "Poetry": "#888888",          # mid-gray
+        "Periodical": "#bdbdbd",      # slightly less light gray
+        "Essays": "#bdbdbd",          # slightly less light gray
+        "Biography": "#bdbdbd",       # slightly less light gray
+        "Sermons": "#bdbdbd",         # slightly less light gray
+    }
+
+    # Add or update "color" column for agg_df/ldf if needed (optional, but not required for scale)
+    color_scale = p9.scale_color_manual(
+        values=genre_colors,
+        name="Genre",
+    )
+    fill_scale = p9.scale_fill_manual(
+        values=genre_colors,
+        name="Genre",
+    )
+
+    agg_df["genre"] = pd.Categorical(agg_df["genre"], categories=[g for g in genre_colors.keys() if g in agg_df["genre"].unique()])
+    ldf["genre"] = pd.Categorical(ldf["genre"], categories=[g for g in genre_colors.keys() if g in ldf["genre"].unique()])
+    
     fig = (
         p9.ggplot(agg_df, p9.aes(x="year", y="score"))
+        + p9.geom_hline(yintercept=0, color="black", size=0.5, alpha=0.5, linetype="dashed")
         + p9.geom_ribbon(
             p9.aes(x="year", ymin="se_lo", ymax="se_hi", fill="genre"),
             data=ldf, alpha=0.1, inherit_aes=False,
@@ -475,18 +608,20 @@ def arc_print(arcs: list[GenreArc]):
         )
         + p9.geom_line(
             p9.aes(x="year", y="fitted", linetype="genre", color="genre"),
-            data=ldf, size=1.0, inherit_aes=False,
+            data=ldf, size=0.8, inherit_aes=False,
         )
         + p9.scale_size_continuous(range=(1, 5), name="Texts")
-        + p9.scale_fill_grey(start=0.5, end=0.8)
-        + p9.scale_color_grey(start=0.0, end=0.4)
+        # + p9.scale_fill_grey(start=0.5, end=0.8)
+        # + p9.scale_color_grey(start=0.0, end=0.4)
         + p9.labs(
             x="Year",
-            y="<< More concrete | More abstract >>",
-            shape="Genre", linetype="Genre",
+            y="<< More concrete | More abstract >>                             ",
+            shape="Genre", linetype="Genre", color="Genre", fill="Genre", size="# Texts"
         )
         + p9.theme_minimal()
-        + p9.theme(legend_position="right", figure_size=(10, 6))
+        + p9.theme(legend_position="right", figure_size=(10, 7))
+        + color_scale
+        + fill_scale
     )
 
     fig_dir = os.path.join(PATH_DATA, "figures")

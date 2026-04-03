@@ -71,6 +71,19 @@ export interface TrajectoryResponse {
   overall_score: number | null;
 }
 
+export interface AggBinPoint {
+  year: number;
+  mean: number;
+  n_texts: number;
+}
+
+export interface AggGenreArc {
+  genre: string;
+  points: AggBinPoint[];
+  loess: LoessPoint[];
+  n_texts_total: number;
+}
+
 export interface AdjustedPoint {
   year: number;
   score: number;
