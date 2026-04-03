@@ -86,19 +86,6 @@ class PassageResponse(BaseModel):
     n_neutral: int = 0
 
 
-class AggBinPoint(BaseModel):
-    year: float
-    mean: float
-    n_texts: int
-
-
-class AggGenreArc(BaseModel):
-    genre: str
-    points: list[AggBinPoint]
-    loess: list[LoessPoint]
-    n_texts_total: int
-
-
 class AdjustedPoint(BaseModel):
     year: float
     score: float
@@ -112,6 +99,19 @@ class LoessPoint(BaseModel):
     fitted: float
     se_lo: float
     se_hi: float
+
+
+class AggBinPoint(BaseModel):
+    year: float
+    mean: float
+    n_texts: int
+
+
+class AggGenreArc(BaseModel):
+    genre: str
+    points: list[AggBinPoint]
+    loess: list[LoessPoint]
+    n_texts_total: int
 
 
 class ArcStats(BaseModel):
