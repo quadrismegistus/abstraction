@@ -13,6 +13,8 @@ export const adjustModel = writable('quadratic');
 export const corpusAdjusted = writable(true);
 export const binSize = writable(10);
 export const corpusSmoothed = writable(true);
+export const splitBy = writable('');
+export const translatedFilter = writable('');  // '' = all, 'true' = only translated, 'false' = only originals
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

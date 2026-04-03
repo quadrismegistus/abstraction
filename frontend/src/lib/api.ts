@@ -41,6 +41,7 @@ export function fetchArcAggregate(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string;
   period_matched?: string; loess_span?: string; bin_size?: string;
+  split_by?: string; is_translated?: string;
 }) {
   return fetchJson<AggGenreArc[]>('/arc/aggregate', params);
 }

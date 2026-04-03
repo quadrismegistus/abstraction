@@ -247,6 +247,8 @@ def arc_aggregate(
     invert: bool = True,
     period_matched: bool = False,
     bin_size: int = 5,
+    split_by: str | None = None,
+    is_translated: str | None = None,
 ):
     """Aggregate arc: simple mean per year bin across ALL texts (no corpus weighting).
 
@@ -268,38 +270,51 @@ def arc_aggregate(
         cl = ", ".join(f"'{c}'" for c in corpus)
         corpus_filter = f" AND corpus_name IN ({cl})"
 
+    # is_translated filter (needs meta JSON field from LLTK)
+    translated_filter = ""
+    if is_translated == "true":
+        translated_filter = " AND meta->>'is_translated' = 'True'"
+    elif is_translated == "false":
+        translated_filter = " AND (meta->>'is_translated' IS NULL OR meta->>'is_translated' != 'True')"
+
+    # Extra columns to select for split_by
+    extra_cols = ""
+    valid_splits = {"genre_raw", "corpus_name"}
+    if split_by and split_by in valid_splits:
+        extra_cols = f", {split_by}"
+    elif split_by == "is_translated":
+        extra_cols = ", meta->>'is_translated' as is_translated"
+
     sign = -1.0 if invert else 1.0
     results = []
 
     for g in genre:
         is_arc = g.startswith("arc_")
+        filter_col = "arc_corpus" if is_arc else "genre"
 
         if period_matched:
             score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
                           if r[0].startswith(f"Abs-Conc.{source}.")]
             col_sql = ", ".join(f'"{c}"' for c in score_cols)
-            filter_col = "arc_corpus" if is_arc else "genre"
             df = conn.execute(f"""
-                SELECT year, {col_sql}
+                SELECT year{extra_cols}, {col_sql}
                 FROM texts
                 WHERE {filter_col} = '{g}' AND year IS NOT NULL
-                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
             """).fetchdf()
 
             if len(df) < 30:
                 continue
 
-            # Assign period score per text
             df = assign_period_score(df, source=source)
             df["_score"] = df["period_score"] * sign
             df = df.dropna(subset=["_score"])
         else:
-            filter_col = "arc_corpus" if is_arc else "genre"
             df = conn.execute(f"""
-                SELECT year, "{col}" as _score
+                SELECT year{extra_cols}, "{col}" as _score
                 FROM texts
                 WHERE {filter_col} = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
-                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
+                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
             """).fetchdf()
 
             if len(df) < 30:
@@ -307,33 +322,52 @@ def arc_aggregate(
 
             df["_score"] = df["_score"] * sign
 
-        # Bin by year
-        df["_bin"] = (df["year"] // bin_size).astype(int) * bin_size
-        agg = df.groupby("_bin").agg(
-            mean=("_score", "mean"),
-            n_texts=("_score", "count"),
-        ).reset_index()
+        # Determine split column
+        split_col = None
+        if split_by and split_by in df.columns:
+            split_col = split_by
+        elif split_by == "is_translated" and "is_translated" in df.columns:
+            split_col = "is_translated"
 
-        points = [
-            AggBinPoint(year=float(row["_bin"]), mean=float(row["mean"]), n_texts=int(row["n_texts"]))
-            for _, row in agg.iterrows()
-        ]
-
-        # LOESS on the bin means
-        loess_pts = _compute_loess(
-            agg["_bin"].values.astype(float),
-            agg["mean"].values.astype(float),
-            span=loess_span,
-        )
-
-        results.append(AggGenreArc(
-            genre=g,
-            points=points,
-            loess=loess_pts,
-            n_texts_total=int(agg["n_texts"].sum()),
-        ))
+        if split_col:
+            # One arc per split value
+            for val, sdf in df.groupby(split_col):
+                if len(sdf) < 10:
+                    continue
+                label = f"{g}: {val}" if val else f"{g}: (unknown)"
+                _add_agg_arc(results, sdf, label, bin_size, loess_span)
+        else:
+            _add_agg_arc(results, df, g, bin_size, loess_span)
 
     return results
+
+
+def _add_agg_arc(results, df, label, bin_size, loess_span):
+    """Helper: bin a DataFrame and add an AggGenreArc to results."""
+    df = df.copy()
+    df["_bin"] = (df["year"] // bin_size).astype(int) * bin_size
+    agg = df.groupby("_bin").agg(
+        mean=("_score", "mean"),
+        n_texts=("_score", "count"),
+    ).reset_index()
+
+    points = [
+        AggBinPoint(year=float(row["_bin"]), mean=float(row["mean"]), n_texts=int(row["n_texts"]))
+        for _, row in agg.iterrows()
+    ]
+
+    loess_pts = _compute_loess(
+        agg["_bin"].values.astype(float),
+        agg["mean"].values.astype(float),
+        span=loess_span,
+    )
+
+    results.append(AggGenreArc(
+        genre=label,
+        points=points,
+        loess=loess_pts,
+        n_texts_total=int(agg["n_texts"].sum()),
+    ))
 
 
 @router.get("/by-genre", response_model=list[GenreArc])

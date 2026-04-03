@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, splitBy, translatedFilter, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -75,6 +75,19 @@
              oninput={(e) => $loessSpan = +(e.target as HTMLInputElement).value} />
       <span class="slider-val">{$loessSpan.toFixed(2)}</span>
     </div>
+    <h4>Split by</h4>
+    <select onchange={(e) => $splitBy = (e.target as HTMLSelectElement).value}>
+      <option value="" selected={$splitBy === ''}>None</option>
+      <option value="genre_raw" selected={$splitBy === 'genre_raw'}>Genre (raw)</option>
+      <option value="corpus_name" selected={$splitBy === 'corpus_name'}>Corpus</option>
+      <option value="is_translated" selected={$splitBy === 'is_translated'}>Translated?</option>
+    </select>
+    <h4>Translations</h4>
+    <select onchange={(e) => $translatedFilter = (e.target as HTMLSelectElement).value}>
+      <option value="" selected={$translatedFilter === ''}>All texts</option>
+      <option value="false" selected={$translatedFilter === 'false'}>Originals only</option>
+      <option value="true" selected={$translatedFilter === 'true'}>Translations only</option>
+    </select>
     <h4>Adjustment model</h4>
     <select onchange={(e) => $adjustModel = (e.target as HTMLSelectElement).value}>
       <option value="quadratic" selected={$adjustModel === 'quadratic'}>Quadratic</option>

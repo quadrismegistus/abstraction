@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, globalLoading, corporaList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, splitBy, translatedFilter, globalLoading, corporaList } from '$lib/stores';
   import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
   import type { GenreArc, AggGenreArc } from '$lib/types';
 
@@ -83,6 +83,8 @@
     p.loess_span = String($loessSpan);
     p.model = $adjustModel;
     p.bin_size = String($binSize);
+    if ($splitBy) p.split_by = $splitBy;
+    if ($translatedFilter) p.is_translated = $translatedFilter;
     return p;
   }
 
@@ -442,7 +444,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $loessSpan; $adjustModel; $binSize;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $loessSpan; $adjustModel; $binSize; $splitBy; $translatedFilter;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();
