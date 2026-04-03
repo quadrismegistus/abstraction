@@ -454,15 +454,17 @@
         });
       }
     }}>Export PNG</button>
-    <button onclick={() => {
-      const p = getParams();
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(p)) {
-        if (Array.isArray(v)) v.forEach(x => qs.append(k, x));
-        else qs.set(k, v);
+    <button onclick={async () => {
+      const res = await fetch(`http://${window.location.hostname}:1709/api/arc/print`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(genreArcs),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        printPngUrl = URL.createObjectURL(blob);
+        mode = 'print';
       }
-      printPngUrl = `http://${window.location.hostname}:1709/api/arc/print?${qs.toString()}`;
-      mode = 'print';
     }}>Plotnine</button>
   </div>
   {#if mode === 'print' && printPngUrl}

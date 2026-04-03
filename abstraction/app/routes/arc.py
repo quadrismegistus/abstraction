@@ -408,21 +408,9 @@ def arc_by_genre(
     return results
 
 
-@router.get("/print")
-def arc_print(
-    col: str = DEFAULT_COL,
-    genre: list[str] = Query(default=["arc_fiction"]),
-    corpus: list[str] = Query(default=[]),
-    year_min: float = 1565,
-    year_max: float = 2020,
-    loess_span: float = 0.2,
-    invert: bool = True,
-    period_matched: bool = True,
-    corpus_adjusted: bool = True,
-    model: str = "quadratic",
-    bin_size: int = 5,
-):
-    """Render a print-quality PNG of the arc using plotnine. Saves to data/figures/."""
+@router.post("/print")
+def arc_print(arcs: list[GenreArc]):
+    """Render a print-quality PNG from the same data the frontend displays."""
     import os
     import matplotlib
     matplotlib.use("Agg")
@@ -431,9 +419,6 @@ def arc_print(
     import numpy as np
     from fastapi.responses import FileResponse
     from ...config import PATH_DATA
-    from ...analysis import adjust_scores, assign_period_score
-
-    conn = get_connection()
 
     genre_labels = {
         "arc_fiction": "Fiction", "arc_poetry": "Poetry",
@@ -443,75 +428,33 @@ def arc_print(
     all_points = []
     all_loess = []
 
-    for g in genre:
-        is_arc = g.startswith("arc_")
-        corpus_filter = ""
-        if corpus and len(corpus) > 0:
-            cl = ", ".join(f"'{c}'" for c in corpus)
-            corpus_filter = f" AND corpus_name IN ({cl})"
+    for arc in arcs:
+        label = genre_labels.get(arc.genre, arc.genre)
 
-        if is_arc:
-            df = conn.execute(f"""
-                SELECT _id, corpus_name, year, arc_corpus, "{col}"
-                FROM texts
-                WHERE arc_corpus = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
-                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
-            """).fetchdf()
-        else:
-            df = conn.execute(f"""
-                SELECT _id, corpus_name, year, genre, "{col}"
-                FROM texts
-                WHERE genre = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
-                  AND year >= {year_min} AND year <= {year_max}{corpus_filter}
-            """).fetchdf()
+        # Aggregate points by year (weighted by n_texts)
+        bins: dict[float, dict] = {}
+        for p in arc.points:
+            yr = p.year
+            if yr not in bins:
+                bins[yr] = {"sum_score": 0, "sum_adj": 0, "n": 0}
+            bins[yr]["sum_score"] += p.score * p.n_texts
+            bins[yr]["sum_adj"] += p.adjusted * p.n_texts
+            bins[yr]["n"] += p.n_texts
 
-        if len(df) < 30:
-            continue
+        for yr, b in sorted(bins.items()):
+            all_points.append({
+                "year": yr,
+                "score": b["sum_adj"] / b["n"],  # use adjusted (matches aggregate view)
+                "n_texts": b["n"],
+                "genre": label,
+            })
 
-        if period_matched:
-            source = col.split(".")[1] if len(col.split(".")) >= 2 else "Median"
-            df = assign_period_score(df, source=source)
-            score_col = "period_score"
-        else:
-            score_col = col
-
-        fe = []
-        if period_matched:
-            fe.append("norm_period")
-        if corpus_adjusted:
-            fe.append("corpus_name")
-
-        adj = adjust_scores(
-            df, score_col=score_col, min_year=year_min, max_year=year_max,
-            corpus_col="corpus_name",
-            fixed_effects=fe if fe else None,
-            model=model, agg_bin=bin_size,
-        )
-        if adj.empty:
-            continue
-
-        sign = -1.0 if invert else 1.0
-        main_col_name = "adjusted" if corpus_adjusted else "score"
-        main_vals = adj[main_col_name].values * sign
-
-        # Aggregate to one point per year
-        years = adj["year"].values
-        n_texts = adj["n_texts"].values
-        unique_years = np.unique(years)
-        for yr in unique_years:
-            mask = years == yr
-            wt_mean = np.average(main_vals[mask], weights=n_texts[mask])
-            total_n = n_texts[mask].sum()
-            all_points.append({"year": yr, "score": wt_mean, "n_texts": int(total_n), "genre": genre_labels.get(g, g)})
-
-        # LOESS
-        agg_means = np.array([
-            np.average(main_vals[years == yr], weights=n_texts[years == yr])
-            for yr in unique_years
-        ])
-        loess_pts = _compute_loess(unique_years, agg_means, span=loess_span)
-        for lp in loess_pts:
-            all_loess.append({"year": lp.year, "fitted": lp.fitted, "se_lo": lp.se_lo, "se_hi": lp.se_hi, "genre": genre_labels.get(g, g)})
+        for lp in arc.loess_aggregate:
+            all_loess.append({
+                "year": lp.year, "fitted": lp.fitted,
+                "se_lo": lp.se_lo, "se_hi": lp.se_hi,
+                "genre": label,
+            })
 
     if not all_points:
         from fastapi import HTTPException
@@ -524,24 +467,25 @@ def arc_print(
         p9.ggplot(agg_df, p9.aes(x="year", y="score"))
         + p9.geom_ribbon(
             p9.aes(x="year", ymin="se_lo", ymax="se_hi", fill="genre"),
-            data=ldf, alpha=0.15, inherit_aes=False,
+            data=ldf, alpha=0.1, inherit_aes=False,
         )
         + p9.geom_point(
-            p9.aes(size="n_texts", shape="genre"),
-            alpha=0.4, color="#333333",
+            p9.aes(size="n_texts", shape="genre", color="genre"),
+            alpha=0.4,
         )
         + p9.geom_line(
-            p9.aes(x="year", y="fitted", linetype="genre"),
-            data=ldf, color="black", size=1.2, inherit_aes=False,
+            p9.aes(x="year", y="fitted", linetype="genre", color="genre"),
+            data=ldf, size=1.0, inherit_aes=False,
         )
         + p9.scale_size_continuous(range=(1, 5), name="Texts")
         + p9.scale_fill_grey(start=0.5, end=0.8)
+        + p9.scale_color_grey(start=0.0, end=0.4)
         + p9.labs(
             x="Year",
             y="<< More concrete | More abstract >>",
             shape="Genre", linetype="Genre",
         )
-        + p9.theme_classic()
+        + p9.theme_minimal()
         + p9.theme(legend_position="right", figure_size=(10, 6))
     )
 
