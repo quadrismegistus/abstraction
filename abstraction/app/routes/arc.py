@@ -528,7 +528,7 @@ def arc_print(
         )
         + p9.geom_point(
             p9.aes(size="n_texts", shape="genre"),
-            alpha=0.4, color="#333",
+            alpha=0.4, color="#333333",
         )
         + p9.geom_line(
             p9.aes(x="year", y="fitted", linetype="genre"),
