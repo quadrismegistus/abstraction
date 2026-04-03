@@ -206,9 +206,8 @@ def shift_share(
     df["_genre_raw"] = df["genre_raw"].apply(_parse_genre_raw)
 
     # Parse is_translated to readable labels
-    df["_translated"] = df["is_translated"].apply(
-        lambda x: "Translated" if x is True or x == "True" else
-                  "Original" if x is False or x == "False" else "(unknown)")
+    df["_translated"] = df["is_translated"].fillna(False).apply(
+        lambda x: "Translated" if x is True or x == "True" else "Original")
 
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
