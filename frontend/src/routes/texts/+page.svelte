@@ -58,7 +58,7 @@
 <div class="texts-page">
   <div class="header">
     <a href="/arc">&larr; Back to arc</a>
-    <h2>{genre} in {corpus} ({yearBin}{binSz > 1 ? `\u2013${yearBin + binSz - 1}` : ''})</h2>
+    <h2>{genre}{corpus ? ` in ${corpus}` : ''} ({yearBin}{binSz > 1 ? `\u2013${yearBin + binSz - 1}` : ''})</h2>
     <span class="count">{total.toLocaleString()} texts</span>
   </div>
 

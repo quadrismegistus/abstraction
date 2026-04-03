@@ -125,7 +125,7 @@
       traces.push({
         x: years,
         y: means,
-        customdata: years.map((y, i) => [counts[i], arc.genre, y]),
+        customdata: years.map((y, i) => ['', counts[i], arc.genre, y]),
         type: 'scatter',
         mode: 'markers',
         marker: {
@@ -389,7 +389,12 @@
       const point = data.points[0];
       if (point?.customdata) {
         const [corpus, nTexts, genre, yr] = point.customdata;
-        goto(`/texts?corpus=${corpus}&year=${yr}&bin_size=${$binSize}&genre=${encodeURIComponent(genre)}`);
+        const params = new URLSearchParams();
+        if (corpus) params.set('corpus', corpus);
+        params.set('year', String(yr));
+        params.set('bin_size', String($binSize));
+        params.set('genre', genre);
+        goto(`/texts?${params.toString()}`);
       }
     });
   }
