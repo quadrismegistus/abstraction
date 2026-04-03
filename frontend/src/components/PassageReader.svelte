@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, chunkSize } from '$lib/stores';
+  import { norm, chunkSize, periodMatched } from '$lib/stores';
   import { fetchPassage } from '$lib/api';
   import type { PassageResponse } from '$lib/types';
 
@@ -25,6 +25,7 @@
       data = await fetchPassage(corpus, textId, chunkIndex, {
         col: $norm,
         chunk_size: String($chunkSize),
+        ...($periodMatched ? { period_matched: 'true' } : {}),
       });
     } catch (e: any) {
       error = e.message;

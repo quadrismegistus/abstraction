@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, chunkSize } from '$lib/stores';
+  import { norm, chunkSize, periodMatched } from '$lib/stores';
   import { fetchTrajectory } from '$lib/api';
   import type { TrajectoryResponse } from '$lib/types';
 
@@ -20,6 +20,7 @@
       data = await fetchTrajectory(corpus, textId, {
         col: $norm,
         chunk_size: String($chunkSize),
+        ...($periodMatched ? { period_matched: 'true' } : {}),
       });
     } catch (e: any) {
       error = e.message;

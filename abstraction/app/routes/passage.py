@@ -12,6 +12,19 @@ router = APIRouter()
 DEFAULT_COL = "Abs-Conc.Median.median"
 
 
+def _resolve_col(col: str, period_matched: bool, year: float | None) -> str:
+    """Resolve the norm column, picking century-matched if period_matched."""
+    if not period_matched or year is None:
+        return col
+    from ...analysis import CENTURY_BINS
+    col_parts = col.split(".")
+    source = col_parts[1] if len(col_parts) >= 2 else "Median"
+    for lo, hi, label in CENTURY_BINS:
+        if lo <= year < hi:
+            return f"Abs-Conc.{source}.{label}"
+    return col
+
+
 def _count_words(txt: str, col: str):
     """Count abstract/concrete/neutral words in text."""
     scores = get_norm_dict(col)
@@ -58,11 +71,22 @@ def get_passage(
     chunk_index: int,
     col: str = DEFAULT_COL,
     chunk_size: int = Query(default=500, ge=50, le=5000),
+    period_matched: bool = False,
+    year: float | None = None,
 ):
     """Get a specific passage chunk with word-level scoring."""
     from .trajectory import _get_text_and_metadata, _chunk_text_simple
 
     txt, _meta, lltk_text = _get_text_and_metadata(corpus, text_id)
+    # Use text's year for period matching if not explicitly provided
+    if period_matched and year is None and _meta:
+        y = _meta.get("year")
+        if y is not None:
+            try:
+                year = float(y)
+            except (TypeError, ValueError):
+                pass
+    col = _resolve_col(col, period_matched, year)
     if txt is None:
         raise HTTPException(status_code=404, detail=f"Text not found: {corpus}/{text_id}")
 

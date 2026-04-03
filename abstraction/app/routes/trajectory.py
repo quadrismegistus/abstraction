@@ -181,10 +181,14 @@ def get_trajectory(
     text_id: str,
     col: str = DEFAULT_COL,
     chunk_size: int = Query(default=500, ge=50, le=5000),
+    period_matched: bool = False,
 ):
     """Compute abstractness trajectory for a single text."""
+    # Resolve period-matched column after loading metadata (need year)
+    # Done below after _get_text_and_metadata
+
     # Check cache
-    cp = _cache_path(corpus, text_id, chunk_size, col)
+    cp = _cache_path(corpus, text_id, chunk_size, col if not period_matched else col + "_pm")
     cached = _load_cached(cp)
     if cached is not None:
         return TrajectoryResponse(**cached)
@@ -200,6 +204,22 @@ def get_trajectory(
                float(v) if hasattr(v, 'item') else
                str(v) if not isinstance(v, (str, int, float, type(None))) else v
             for k, v in meta.items()}
+
+    # Resolve period-matched column
+    if period_matched:
+        year = meta.get("year")
+        if year is not None:
+            from ...analysis import CENTURY_BINS
+            col_parts = col.split(".")
+            source = col_parts[1] if len(col_parts) >= 2 else "Median"
+            try:
+                yr = float(year)
+                for lo, hi, label in CENTURY_BINS:
+                    if lo <= yr < hi:
+                        col = f"Abs-Conc.{source}.{label}"
+                        break
+            except (TypeError, ValueError):
+                pass
 
     # Try LLTK sentence-boundary chunking first
     chunks = None

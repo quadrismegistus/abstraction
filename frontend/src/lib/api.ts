@@ -63,7 +63,7 @@ export function fetchArcTexts(params: {
 
 // Trajectory
 export function fetchTrajectory(corpus: string, textId: string, params?: {
-  col?: string; chunk_size?: string;
+  col?: string; chunk_size?: string; period_matched?: string;
 }) {
   return fetchJson<TrajectoryResponse>(
     `/trajectory/${corpus}/${textId}`, params
@@ -72,7 +72,7 @@ export function fetchTrajectory(corpus: string, textId: string, params?: {
 
 // Passage
 export function fetchPassage(corpus: string, textId: string, chunkIndex: number, params?: {
-  col?: string; chunk_size?: string;
+  col?: string; chunk_size?: string; period_matched?: string;
 }) {
   return fetchJson<PassageResponse>(
     `/passage/${corpus}/${textId}/${chunkIndex}`, params
