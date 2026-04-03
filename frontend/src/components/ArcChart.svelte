@@ -8,7 +8,7 @@
   let plotDiv: HTMLDivElement;
   let Plotly: any;
   let genreArcs: GenreArc[] = $state([]);
-  let mode: 'explore' | 'print' | 'aggregate' = $state('explore');
+  let mode: 'explore' | 'print' | 'aggregate' = $state('aggregate');
   let showRawTrend = $state(false);
 
   function pStars(p: number | null): string {
@@ -18,6 +18,21 @@
     if (p < 0.05) return '*';
     return 'n.s.';
   }
+
+  // Shapes per genre for aggregate mode
+  const genreShapes: Record<string, string> = {
+    'arc_fiction': 'circle',
+    'arc_poetry': 'diamond',
+    'arc_periodical': 'square',
+    'arc_essays': 'triangle-up',
+    'Fiction': 'circle',
+    'Poetry': 'diamond',
+    'Periodical': 'square',
+    'Essay': 'triangle-up',
+    'Drama': 'triangle-down',
+    'Sermon': 'pentagon',
+    'Letters': 'hexagon',
+  };
 
   // Line styles per genre/arc corpus
   const genreStyles: Record<string, { color: string; dash: string; width: number }> = {
@@ -121,7 +136,7 @@
         });
       }
 
-      // Aggregated points — one per bin, sized by n_texts
+      // Aggregated points — one per bin, sized by n_texts, shaped by genre
       traces.push({
         x: years,
         y: means,
@@ -130,9 +145,10 @@
         mode: 'markers',
         marker: {
           color: gs.color,
+          symbol: genreShapes[arc.genre] || 'circle',
           size: counts.map(n => 4 + Math.sqrt(n / maxN) * 16),
           opacity: 0.5,
-          line: { width: 0.5, color: 'white' },
+          line: { width: 0.5, color: gs.color },
         },
         name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts)`,
         hovertemplate:
@@ -429,6 +445,15 @@
     <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>
       {$corpusAdjusted ? 'Show raw' : 'Show adjusted'}
     </button>
+    <button onclick={() => {
+      const p = getParams();
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(p)) {
+        if (Array.isArray(v)) v.forEach(x => qs.append(k, x));
+        else qs.set(k, v);
+      }
+      window.open(`http://${window.location.hostname}:1709/api/arc/print?${qs.toString()}`, '_blank');
+    }}>Export PNG</button>
   </div>
   <div bind:this={plotDiv} class="plot"></div>
 
