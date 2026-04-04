@@ -204,7 +204,8 @@ def arc_texts(
                 ArcText(
                     id=row["_id"], corpus=row["corpus_name"], year=row.get("year"),
                     author=row.get("author"), title=row.get("title"), genre=row.get("genre"),
-                    genre_raw=row.get("genre_raw"), is_translated=row.get("is_translated"),
+                    genre_raw=row.get("genre_raw"),
+                    is_translated=bool(row["is_translated"]) if pd.notna(row.get("is_translated")) else None,
                     score=row.get("period_score"),
                 )
                 for _, row in df.iterrows()
