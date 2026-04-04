@@ -708,6 +708,146 @@ def _score_one_text_with_id(args):
     return result
 
 
+def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
+    """Fast path: collect work items using DuckDB freqs paths + match groups."""
+    # Get arc corpus representative _ids from metadata
+    arc_meta = corpus.load_metadata()
+    if '_id' not in arc_meta.columns:
+        print(f"  {arc_id}: no _id column in metadata, falling back to slow path", flush=True)
+        return _collect_work_items_slow(corpus, arc_id, done_ids)
+
+    arc_ids = set(arc_meta['_id'])
+    print(f"  {arc_id}: {len(arc_ids)} representative texts", flush=True)
+
+    # Find match groups containing arc texts
+    arc_freqs = all_freqs_df[all_freqs_df['_id'].isin(arc_ids)]
+    arc_group_ids = set(arc_freqs['match_group_id'].dropna())
+
+    # Get all texts in those match groups (for multi-version scoring)
+    if arc_group_ids:
+        in_groups = all_freqs_df['match_group_id'].isin(arc_group_ids)
+        in_arc = all_freqs_df['_id'].isin(arc_ids)
+        scoring_df = all_freqs_df[in_groups | in_arc].copy()
+    else:
+        scoring_df = arc_freqs.copy()
+
+    # Build work items: group by match_group_id, collect freqs paths
+    # For texts without a match group, use their _id as the group key
+    scoring_df['_group_key'] = scoring_df['match_group_id'].fillna(scoring_df['_id'])
+    grouped = scoring_df.groupby('_group_key')['path_freqs'].apply(list).to_dict()
+
+    # Map group_key back to the arc representative _id and source corpus
+    rep_info = {}
+    for _, row in arc_freqs.iterrows():
+        gk = row['match_group_id'] if pd.notna(row['match_group_id']) else row['_id']
+        if gk not in rep_info:
+            rep_info[gk] = (row['_id'], row['corpus'])
+
+    # Also handle arc texts that have no freqs themselves but whose group members do
+    for _, row in arc_meta.iterrows():
+        _id = row['_id']
+        if _id in done_ids:
+            continue
+        # Find group key for this _id
+        match = all_freqs_df[all_freqs_df['_id'] == _id]
+        if len(match):
+            gk = match.iloc[0]['match_group_id']
+            if pd.notna(gk) and gk not in rep_info:
+                source = match.iloc[0]['corpus']
+                rep_info[gk] = (_id, source)
+        else:
+            # No freqs row for this _id — check if it has a match group with freqs
+            _id_groups = all_freqs_df[all_freqs_df['_id'] == _id]
+            if not len(_id_groups):
+                # Try match_groups table directly
+                try:
+                    import lltk
+                    mg = lltk.db.conn.execute(
+                        f"SELECT group_id FROM match_db.match_groups WHERE _id = '{_id}'"
+                    ).fetchone()
+                    if mg:
+                        gk = mg[0]
+                        if gk in grouped and gk not in rep_info:
+                            rep_info[gk] = (_id, row.get('corpus', arc_id))
+                except Exception:
+                    pass
+
+    work_items = []
+    seen_freqs_sets = set()
+    n_skipped = 0
+    n_no_freqs = 0
+    n_match_group_extras = 0
+    n_dedup_collapsed = 0
+
+    for gk, (_id, source) in rep_info.items():
+        if _id in done_ids:
+            n_skipped += 1
+            continue
+        rel_paths = grouped.get(gk, [])
+        if not rel_paths:
+            n_no_freqs += 1
+            continue
+        abs_paths = [corpus_root + rp for rp in rel_paths]
+        freqs_key = frozenset(rel_paths)
+        if freqs_key in seen_freqs_sets:
+            n_dedup_collapsed += 1
+            continue
+        seen_freqs_sets.add(freqs_key)
+        if len(abs_paths) > 1:
+            n_match_group_extras += len(abs_paths) - 1
+        work_items.append((_id, source, abs_paths))
+
+    print(f"  {arc_id}: {len(work_items)} to score, "
+          f"{n_skipped} already done, {n_no_freqs} without freqs, "
+          f"{n_match_group_extras} extra match group versions, "
+          f"{n_dedup_collapsed} match group duplicates collapsed", flush=True)
+    return work_items
+
+
+def _collect_work_items_slow(corpus, arc_id, done_ids):
+    """Slow fallback: collect work items by iterating text objects."""
+    work_items = []
+    seen_freqs_sets = set()
+    n_skipped = 0
+    n_no_freqs = 0
+    n_match_group_extras = 0
+    n_dedup_collapsed = 0
+
+    for t in corpus.texts(progress=True):
+        _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
+        if _id in done_ids:
+            n_skipped += 1
+            continue
+        freqs_paths = []
+        try:
+            for m in t.match_group_texts:
+                pf = getattr(m, 'path_freqs', None)
+                if pf and os.path.exists(pf):
+                    freqs_paths.append(pf)
+        except Exception:
+            pf = t.path_freqs
+            if pf and os.path.exists(pf):
+                freqs_paths = [pf]
+        if not freqs_paths:
+            n_no_freqs += 1
+            continue
+        freqs_key = frozenset(freqs_paths)
+        if freqs_key in seen_freqs_sets:
+            n_dedup_collapsed += 1
+            continue
+        seen_freqs_sets.add(freqs_key)
+        if len(freqs_paths) > 1:
+            n_match_group_extras += len(freqs_paths) - 1
+        source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
+        work_items.append((_id, source, freqs_paths))
+
+    print(f"  {arc_id}: {len(work_items)} to score, "
+          f"{n_skipped} already done, {n_no_freqs} without freqs, "
+          f"{n_match_group_extras} extra match group versions, "
+          f"{n_dedup_collapsed} match group duplicates collapsed", flush=True)
+    return work_items
+
+
 def score_arc_corpora(
     output_dir=SCORES_DIR,
     force=False,
@@ -760,6 +900,24 @@ def score_arc_corpora(
     else:
         _init_worker(allnorms, spelling_d, min_words, freqs_cache)
 
+    # Load all freqs paths + match groups from DuckDB in one query
+    corpus_root = os.path.expanduser(PATH_CORPORA) + "/"
+    all_freqs_df = None
+    try:
+        db_cols = [r[0] for r in lltk.db.conn.execute("DESCRIBE texts").fetchall()]
+        if 'path_freqs' in db_cols:
+            print("  Loading freqs paths from DuckDB...", flush=True)
+            all_freqs_df = lltk.db.conn.execute("""
+                SELECT t._id, t.corpus, t.path_freqs,
+                       mg.group_id AS match_group_id
+                FROM texts t
+                LEFT JOIN match_db.match_groups mg ON t._id = mg._id
+                WHERE t.path_freqs IS NOT NULL
+            """).fetchdf()
+            print(f"  DB: {len(all_freqs_df)} texts with freqs paths", flush=True)
+    except Exception as e:
+        print(f"  DB fast path unavailable ({e}), using text objects", flush=True)
+
     results = {}
     for arc_id in sorted(include):
         print(f"  {arc_id}: loading corpus...", flush=True)
@@ -778,53 +936,13 @@ def score_arc_corpora(
             except Exception:
                 pass
 
-        # Collect work items: (_id, source_corpus, freqs_paths)
-        # Use match_group_texts to score all versions of a text and average.
-        # Deduplicate by freqs set: if multiple texts from corpus.texts()
-        # resolve to the same match group freqs, keep only the first (which
-        # is the dedup winner by rank).
+        # Collect work items via fast DB path or slow text-object path
         print(f"  {arc_id}: collecting texts and match group freqs...", flush=True)
-        work_items = []
-        seen_freqs_sets = set()  # frozenset of freqs paths already queued
-        n_skipped = 0
-        n_no_freqs = 0
-        n_match_group_extras = 0
-        n_dedup_collapsed = 0
-        for t in corpus.texts(progress=True):
-            _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
-            if _id in done_ids:
-                n_skipped += 1
-                continue
-            # Gather freqs from all match group members
-            freqs_paths = []
-            try:
-                for m in t.match_group_texts:
-                    pf = getattr(m, 'path_freqs', None)
-                    if pf and os.path.exists(pf):
-                        freqs_paths.append(pf)
-            except Exception:
-                # Fallback to just this text
-                pf = t.path_freqs
-                if pf and os.path.exists(pf):
-                    freqs_paths = [pf]
-            if not freqs_paths:
-                n_no_freqs += 1
-                continue
-            # Deduplicate: skip if we already have a work item with the same freqs
-            freqs_key = frozenset(freqs_paths)
-            if freqs_key in seen_freqs_sets:
-                n_dedup_collapsed += 1
-                continue
-            seen_freqs_sets.add(freqs_key)
-            if len(freqs_paths) > 1:
-                n_match_group_extras += len(freqs_paths) - 1
-            source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
-            work_items.append((_id, source, freqs_paths))
-
-        print(f"  {arc_id}: {len(work_items)} to score, "
-              f"{n_skipped} already done, {n_no_freqs} without freqs, "
-              f"{n_match_group_extras} extra match group versions, "
-              f"{n_dedup_collapsed} match group duplicates collapsed", flush=True)
+        work_items = _collect_work_items_db(
+            corpus, arc_id, done_ids, all_freqs_df, corpus_root
+        ) if all_freqs_df is not None else _collect_work_items_slow(
+            corpus, arc_id, done_ids
+        )
 
         if not work_items:
             continue
