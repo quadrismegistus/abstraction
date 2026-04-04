@@ -42,10 +42,16 @@ class MultiDecompResult(BaseModel):
 
 
 def _parse_genre_raw(genre_raw: str | None) -> str:
-    """Extract the most specific non-'Fiction' genre from 'X | Y | Z' format."""
+    """Extract the most salient genre label from genre_raw.
+
+    genre_raw may contain pipes ("Romance | Fiction") and/or commas
+    ("Romance, political; Allegory").  Split by both "|" and ",", take
+    the first token that isn't just "Fiction", and strip whitespace.
+    """
     if not genre_raw or genre_raw == "":
         return "(unknown)"
-    parts = [p.strip() for p in str(genre_raw).split("|")]
+    import re
+    parts = [p.strip() for p in re.split(r"[|,]", str(genre_raw))]
     for p in parts:
         if p and p != "Fiction" and p != "":
             return p
@@ -125,10 +131,10 @@ def _decompose(df_early, df_late, cat_col, min_texts=5):
 def shift_share(
     col: str = DEFAULT_COL,
     genre: str = "arc_fiction",
-    year_early_min: int = 1700,
-    year_early_max: int = 1780,
-    year_late_min: int = 1850,
-    year_late_max: int = 1950,
+    year_early_min: int = 1640,
+    year_early_max: int = 1680,
+    year_late_min: int = 1740,
+    year_late_max: int = 1780,
     corpus: list[str] = Query(default=[]),
     invert: bool = True,
     period_matched: bool = True,

@@ -592,21 +592,46 @@ ARC_CORPUS_IDS = ["arc_fiction", "arc_poetry", "arc_periodical", "arc_essays"]
 
 
 def _score_one_text_with_id(args):
-    """Score a single text, returning _id and source_corpus."""
-    _id, source_corpus, freqs_path = args
-    try:
-        with open(freqs_path) as f:
-            freqs = json.load(f)
-    except Exception:
+    """Score a single text, returning _id and source_corpus.
+
+    If multiple freqs_paths are given (from match group members), each is
+    scored independently and the results are averaged per norm column.
+    """
+    _id, source_corpus, freqs_paths = args
+    if isinstance(freqs_paths, str):
+        freqs_paths = [freqs_paths]
+
+    all_scores = []
+    for fp in freqs_paths:
+        try:
+            with open(fp) as f:
+                freqs = json.load(f)
+        except Exception:
+            continue
+        if sum(freqs.values()) < _worker_min_words:
+            continue
+        scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
+        if scores:
+            all_scores.append(scores)
+
+    if not all_scores:
         return None
-    if sum(freqs.values()) < _worker_min_words:
-        return None
-    scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
-    if scores:
-        scores["_id"] = _id
-        scores["source_corpus"] = source_corpus
-        return scores
-    return None
+
+    # Average across match group versions
+    if len(all_scores) == 1:
+        result = all_scores[0]
+    else:
+        result = {}
+        all_keys = set()
+        for s in all_scores:
+            all_keys.update(s.keys())
+        for k in all_keys:
+            vals = [s[k] for s in all_scores if k in s]
+            result[k] = sum(vals) / len(vals)
+
+    result["_id"] = _id
+    result["source_corpus"] = source_corpus
+    return result
 
 
 def score_arc_corpora(
@@ -673,16 +698,28 @@ def score_arc_corpora(
             except Exception:
                 pass
 
-        # Collect work items: (_id, source_corpus, freqs_path)
+        # Collect work items: (_id, source_corpus, freqs_paths)
+        # Use match_group_texts to score all versions of a text and average.
         work_items = []
         for t in corpus.texts():
             _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
             if _id in done_ids:
                 continue
-            pf = t.path_freqs
-            if pf and os.path.exists(pf):
+            # Gather freqs from all match group members
+            freqs_paths = []
+            try:
+                for m in t.match_group_texts:
+                    pf = getattr(m, 'path_freqs', None)
+                    if pf and os.path.exists(pf):
+                        freqs_paths.append(pf)
+            except Exception:
+                # Fallback to just this text
+                pf = t.path_freqs
+                if pf and os.path.exists(pf):
+                    freqs_paths = [pf]
+            if freqs_paths:
                 source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
-                work_items.append((_id, source, pf))
+                work_items.append((_id, source, freqs_paths))
 
         if not work_items and done_ids:
             print(f"  {arc_id}: {len(done_ids)} already done, 0 remaining")
