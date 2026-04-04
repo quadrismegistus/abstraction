@@ -733,7 +733,9 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
 
     # Build work items: group by match_group_id, collect freqs paths
     # For texts without a match group, use their _id as the group key
-    scoring_df['_group_key'] = scoring_df['match_group_id'].fillna(scoring_df['_id'])
+    scoring_df['_group_key'] = scoring_df['match_group_id'].astype(str).where(
+        scoring_df['match_group_id'].notna(), scoring_df['_id']
+    )
     grouped = scoring_df.groupby('_group_key')['path_freqs'].apply(list).to_dict()
 
     # Map group_key back to the arc representative _id and source corpus
