@@ -710,11 +710,44 @@ def _score_one_text_with_id(args):
 
 def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
     """Fast path: collect work items using DuckDB freqs paths + match groups."""
-    # Get arc corpus representative _ids from metadata
-    arc_meta = corpus.load_metadata()
-    if '_id' not in arc_meta.columns:
+    import lltk
+    # Get deduped representative _ids.  Use the base SyntheticCorpus query
+    # (which handles dedup) rather than CuratedCorpus.load_metadata() which
+    # adds whitelist entries that can duplicate match group members.
+    qkw = corpus._get_query_kwargs()
+    arc_meta = lltk.db.texts_df(**qkw)
+    if arc_meta is None or '_id' not in arc_meta.columns:
         print(f"  {arc_id}: no _id column in metadata, falling back to slow path", flush=True)
         return _collect_work_items_slow(corpus, arc_id, done_ids)
+
+    # Also include whitelisted _ids from annotations (genre corrections etc.)
+    # but only those not already represented via their match group
+    if hasattr(corpus, '_load_annotations'):
+        annotations = corpus._load_annotations()
+        if annotations:
+            existing_ids = set(arc_meta['_id'])
+            # Get match groups for existing ids to avoid adding duplicates
+            existing_groups = set(
+                all_freqs_df[all_freqs_df['_id'].isin(existing_ids)]['match_group_id'].dropna()
+            )
+            extra_ids = []
+            for _id in annotations:
+                if _id in existing_ids or annotations[_id].get('exclude'):
+                    continue
+                # Check if this _id's match group is already represented
+                id_match = all_freqs_df[all_freqs_df['_id'] == _id]
+                if len(id_match):
+                    gid = id_match.iloc[0]['match_group_id']
+                    if pd.notna(gid) and gid in existing_groups:
+                        continue
+                extra_ids.append(_id)
+            if extra_ids:
+                extra_df = lltk.db.query(
+                    f"SELECT * FROM texts WHERE _id IN ({','.join(repr(i) for i in extra_ids)})"
+                )
+                if extra_df is not None and len(extra_df):
+                    arc_meta = pd.concat([arc_meta, extra_df], ignore_index=True)
+                    print(f"  {arc_id}: +{len(extra_ids)} whitelisted texts", flush=True)
 
     arc_ids = set(arc_meta['_id'])
     print(f"  {arc_id}: {len(arc_ids)} representative texts", flush=True)
@@ -731,48 +764,43 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
     else:
         scoring_df = arc_freqs.copy()
 
-    # Build work items: group by match_group_id, collect freqs paths
-    # For texts without a match group, use their _id as the group key
-    scoring_df['_group_key'] = scoring_df['match_group_id'].astype(str).where(
-        scoring_df['match_group_id'].notna(), scoring_df['_id']
-    )
+    # Build work items: group by match_group_id, collect freqs paths.
+    # For texts without a match group, use their _id as the group key.
+    # Ensure consistent string format for group IDs (int, not float).
+    notna_mask = scoring_df['match_group_id'].notna()
+    gk_series = scoring_df['_id'].copy()
+    gk_series[notna_mask] = scoring_df.loc[notna_mask, 'match_group_id'].astype(int).astype(str)
+    scoring_df['_group_key'] = gk_series
     grouped = scoring_df.groupby('_group_key')['path_freqs'].apply(list).to_dict()
 
-    # Map group_key back to the arc representative _id and source corpus
+    # Map group_key back to the arc representative _id and source corpus.
+    # For arc texts with freqs, use their own row.  For arc texts without
+    # freqs (e.g. earlyprint with no freqs file), look up their match group
+    # so they can still be scored via group members' freqs.
+    def _gk(mgid, _id):
+        return str(int(mgid)) if pd.notna(mgid) else _id
+
     rep_info = {}
     for _, row in arc_freqs.iterrows():
-        gk = row['match_group_id'] if pd.notna(row['match_group_id']) else row['_id']
+        gk = _gk(row['match_group_id'], row['_id'])
         if gk not in rep_info:
             rep_info[gk] = (row['_id'], row['corpus'])
 
-    # Also handle arc texts that have no freqs themselves but whose group members do
-    for _, row in arc_meta.iterrows():
-        _id = row['_id']
-        if _id in done_ids:
-            continue
-        # Find group key for this _id
-        match = all_freqs_df[all_freqs_df['_id'] == _id]
-        if len(match):
-            gk = match.iloc[0]['match_group_id']
-            if pd.notna(gk) and gk not in rep_info:
-                source = match.iloc[0]['corpus']
-                rep_info[gk] = (_id, source)
-        else:
-            # No freqs row for this _id — check if it has a match group with freqs
-            _id_groups = all_freqs_df[all_freqs_df['_id'] == _id]
-            if not len(_id_groups):
-                # Try match_groups table directly
-                try:
-                    import lltk
-                    mg = lltk.db.conn.execute(
-                        f"SELECT group_id FROM match_db.match_groups WHERE _id = '{_id}'"
-                    ).fetchone()
-                    if mg:
-                        gk = mg[0]
-                        if gk in grouped and gk not in rep_info:
-                            rep_info[gk] = (_id, row.get('corpus', arc_id))
-                except Exception:
-                    pass
+    # Arc texts without freqs: check if their match group has freqs
+    arc_ids_with_freqs = set(arc_freqs['_id'])
+    arc_ids_without_freqs = arc_ids - arc_ids_with_freqs
+    if arc_ids_without_freqs:
+        for _id in arc_ids_without_freqs:
+            try:
+                mg_row = lltk.db.conn.execute(
+                    "SELECT group_id FROM match_db.match_groups WHERE _id = ?", [_id]
+                ).fetchone()
+                if mg_row:
+                    gk = str(mg_row[0])
+                    if gk in grouped and gk not in rep_info:
+                        rep_info[gk] = (_id, arc_id)
+            except Exception:
+                pass
 
     work_items = []
     seen_freqs_sets = set()
