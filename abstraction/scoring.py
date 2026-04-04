@@ -10,12 +10,73 @@ import pandas as pd
 from scipy.stats import zscore
 from tqdm import tqdm
 
+import sqlite3
+
 from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA
 from .corpus import load_corpus
 from .norms import get_allnorms
 from .tokenize import tokenize_agnostic, get_spelling_modernizer
 from .counting import count_absconc, count_absconc_path
 from .utils import read_df, save_df
+
+
+# ---------------------------------------------------------------------------
+# Freqs score cache (sqlite-backed, keyed by relative path + modernize flag)
+# ---------------------------------------------------------------------------
+
+FREQS_CACHE_PATH = os.path.join(SCORES_DIR, "freqs_cache.db")
+_CORPORA_PREFIX = os.path.expanduser("~/lltk_data/corpora/")
+
+
+def _freqs_relpath(abspath):
+    """Convert absolute freqs path to relative key under ~/lltk_data/corpora/."""
+    if abspath.startswith(_CORPORA_PREFIX):
+        return abspath[len(_CORPORA_PREFIX):]
+    return abspath
+
+
+def _load_freqs_cache(modernize=False):
+    """Load all cached scores into a dict: relpath -> scores_dict."""
+    if not os.path.exists(FREQS_CACHE_PATH):
+        return {}
+    mod_int = 1 if modernize else 0
+    conn = sqlite3.connect(FREQS_CACHE_PATH)
+    try:
+        rows = conn.execute(
+            "SELECT freqs_key, scores_json FROM freqs_scores WHERE modernized = ?",
+            (mod_int,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        conn.close()
+    cache = {}
+    for key, sj in rows:
+        cache[key] = json.loads(sj)
+    return cache
+
+
+def _save_freqs_cache(new_entries, modernize=False):
+    """Write new cache entries to sqlite. new_entries: list of (relpath, scores_dict)."""
+    if not new_entries:
+        return
+    os.makedirs(os.path.dirname(FREQS_CACHE_PATH), exist_ok=True)
+    mod_int = 1 if modernize else 0
+    conn = sqlite3.connect(FREQS_CACHE_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS freqs_scores (
+            freqs_key TEXT NOT NULL,
+            modernized INTEGER NOT NULL,
+            scores_json TEXT NOT NULL,
+            PRIMARY KEY (freqs_key, modernized)
+        )
+    """)
+    conn.executemany(
+        "INSERT OR REPLACE INTO freqs_scores (freqs_key, modernized, scores_json) VALUES (?, ?, ?)",
+        [(k, mod_int, json.dumps(v)) for k, v in new_entries],
+    )
+    conn.commit()
+    conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -414,12 +475,13 @@ _worker_spelling_d = None
 _worker_min_words = 100
 
 
-def _init_worker(allnorms, spelling_d, min_words):
+def _init_worker(allnorms, spelling_d, min_words, freqs_cache=None):
     """Initialize worker process with shared data."""
-    global _worker_allnorms, _worker_spelling_d, _worker_min_words
+    global _worker_allnorms, _worker_spelling_d, _worker_min_words, _worker_freqs_cache
     _worker_allnorms = allnorms
     _worker_spelling_d = spelling_d
     _worker_min_words = min_words
+    _worker_freqs_cache = freqs_cache or {}
     # Pre-build the norms arrays cache in this worker
     _get_norms_arrays(allnorms)
 
@@ -592,7 +654,11 @@ ARC_CORPUS_IDS = ["arc_fiction", "arc_poetry", "arc_periodical", "arc_essays"]
 
 
 def _score_one_text_with_id(args):
-    """Score a single text, returning _id and source_corpus.
+    """Score a single text, returning (_id, source_corpus, scores, cache_new).
+
+    Returns a dict with scores plus _id/source_corpus.  Also includes a
+    '_cache_new' key: list of (relpath, scores_dict) for paths that were
+    cache misses and need to be persisted.
 
     If multiple freqs_paths are given (from match group members), each is
     scored independently and the results are averaged per norm column.
@@ -602,7 +668,13 @@ def _score_one_text_with_id(args):
         freqs_paths = [freqs_paths]
 
     all_scores = []
+    cache_new = []
     for fp in freqs_paths:
+        relpath = _freqs_relpath(fp)
+        cached = _worker_freqs_cache.get(relpath)
+        if cached is not None:
+            all_scores.append(cached)
+            continue
         try:
             with open(fp) as f:
                 freqs = json.load(f)
@@ -613,13 +685,14 @@ def _score_one_text_with_id(args):
         scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
         if scores:
             all_scores.append(scores)
+            cache_new.append((relpath, scores))
 
     if not all_scores:
         return None
 
     # Average across match group versions
     if len(all_scores) == 1:
-        result = all_scores[0]
+        result = all_scores[0].copy()
     else:
         result = {}
         all_keys = set()
@@ -631,6 +704,7 @@ def _score_one_text_with_id(args):
 
     result["_id"] = _id
     result["source_corpus"] = source_corpus
+    result["_cache_new"] = cache_new
     return result
 
 
@@ -666,6 +740,11 @@ def score_arc_corpora(
 
     _get_norms_arrays(allnorms)
 
+    # Load freqs score cache
+    print("  Loading freqs score cache...", flush=True)
+    freqs_cache = _load_freqs_cache(modernize=modernize)
+    print(f"  Cache: {len(freqs_cache)} entries loaded", flush=True)
+
     include = set(only) if only else set(ARC_CORPUS_IDS)
 
     # Set up multiprocessing
@@ -676,10 +755,10 @@ def score_arc_corpora(
         pool = ctx.Pool(
             num_proc,
             initializer=_init_worker,
-            initargs=(allnorms, spelling_d, min_words),
+            initargs=(allnorms, spelling_d, min_words, freqs_cache),
         )
     else:
-        _init_worker(allnorms, spelling_d, min_words)
+        _init_worker(allnorms, spelling_d, min_words, freqs_cache)
 
     results = {}
     for arc_id in sorted(include):
@@ -750,14 +829,13 @@ def score_arc_corpora(
         if not work_items:
             continue
 
-        print(f"  {arc_id}: {len(done_ids)} done, {len(work_items)} to score")
-
         file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
         fh = open(out_path, "a", newline="")
         writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
 
+        all_cache_new = []
         try:
             if pool is not None:
                 iterator = pool.imap_unordered(_score_one_text_with_id, work_items, chunksize=100)
@@ -766,9 +844,16 @@ def score_arc_corpora(
 
             for result in tqdm(iterator, total=len(work_items), desc=f"  {arc_id}", unit="text"):
                 if result is not None:
+                    cache_new = result.pop("_cache_new", [])
+                    all_cache_new.extend(cache_new)
                     writer.writerow(result)
         finally:
             fh.close()
+
+        # Persist new cache entries
+        if all_cache_new:
+            print(f"  {arc_id}: caching {len(all_cache_new)} new freqs scores", flush=True)
+            _save_freqs_cache(all_cache_new, modernize=modernize)
 
         try:
             results[arc_id] = pd.read_csv(out_path)
