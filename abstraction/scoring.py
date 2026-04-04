@@ -683,6 +683,7 @@ def score_arc_corpora(
 
     results = {}
     for arc_id in sorted(include):
+        print(f"  {arc_id}: loading corpus...", flush=True)
         corpus = lltk.load(arc_id)
         if corpus is None:
             print(f"  {arc_id}: not found in LLTK")
@@ -700,10 +701,15 @@ def score_arc_corpora(
 
         # Collect work items: (_id, source_corpus, freqs_paths)
         # Use match_group_texts to score all versions of a text and average.
+        print(f"  {arc_id}: collecting texts and match group freqs...", flush=True)
         work_items = []
-        for t in corpus.texts():
+        n_skipped = 0
+        n_no_freqs = 0
+        n_match_group_extras = 0
+        for t in corpus.texts(progress=True):
             _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
             if _id in done_ids:
+                n_skipped += 1
                 continue
             # Gather freqs from all match group members
             freqs_paths = []
@@ -718,14 +724,18 @@ def score_arc_corpora(
                 if pf and os.path.exists(pf):
                     freqs_paths = [pf]
             if freqs_paths:
+                if len(freqs_paths) > 1:
+                    n_match_group_extras += len(freqs_paths) - 1
                 source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
                 work_items.append((_id, source, freqs_paths))
+            else:
+                n_no_freqs += 1
 
-        if not work_items and done_ids:
-            print(f"  {arc_id}: {len(done_ids)} already done, 0 remaining")
-            continue
+        print(f"  {arc_id}: {len(work_items)} to score, "
+              f"{n_skipped} already done, {n_no_freqs} without freqs, "
+              f"{n_match_group_extras} extra match group versions", flush=True)
+
         if not work_items:
-            print(f"  {arc_id}: no texts with freqs")
             continue
 
         print(f"  {arc_id}: {len(done_ids)} done, {len(work_items)} to score")
