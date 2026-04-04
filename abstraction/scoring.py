@@ -701,11 +701,16 @@ def score_arc_corpora(
 
         # Collect work items: (_id, source_corpus, freqs_paths)
         # Use match_group_texts to score all versions of a text and average.
+        # Deduplicate by freqs set: if multiple texts from corpus.texts()
+        # resolve to the same match group freqs, keep only the first (which
+        # is the dedup winner by rank).
         print(f"  {arc_id}: collecting texts and match group freqs...", flush=True)
         work_items = []
+        seen_freqs_sets = set()  # frozenset of freqs paths already queued
         n_skipped = 0
         n_no_freqs = 0
         n_match_group_extras = 0
+        n_dedup_collapsed = 0
         for t in corpus.texts(progress=True):
             _id = t._id if hasattr(t, '_id') else f"_{t.corpus.id}/{t.id}"
             if _id in done_ids:
@@ -723,17 +728,24 @@ def score_arc_corpora(
                 pf = t.path_freqs
                 if pf and os.path.exists(pf):
                     freqs_paths = [pf]
-            if freqs_paths:
-                if len(freqs_paths) > 1:
-                    n_match_group_extras += len(freqs_paths) - 1
-                source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
-                work_items.append((_id, source, freqs_paths))
-            else:
+            if not freqs_paths:
                 n_no_freqs += 1
+                continue
+            # Deduplicate: skip if we already have a work item with the same freqs
+            freqs_key = frozenset(freqs_paths)
+            if freqs_key in seen_freqs_sets:
+                n_dedup_collapsed += 1
+                continue
+            seen_freqs_sets.add(freqs_key)
+            if len(freqs_paths) > 1:
+                n_match_group_extras += len(freqs_paths) - 1
+            source = t.corpus.id if hasattr(t, 'corpus') and t.corpus else arc_id
+            work_items.append((_id, source, freqs_paths))
 
         print(f"  {arc_id}: {len(work_items)} to score, "
               f"{n_skipped} already done, {n_no_freqs} without freqs, "
-              f"{n_match_group_extras} extra match group versions", flush=True)
+              f"{n_match_group_extras} extra match group versions, "
+              f"{n_dedup_collapsed} match group duplicates collapsed", flush=True)
 
         if not work_items:
             continue
