@@ -691,7 +691,8 @@ def _score_one_text_with_id(args):
         return None
 
     # Average across match group versions
-    if len(all_scores) == 1:
+    n_versions = len(all_scores)
+    if n_versions == 1:
         result = all_scores[0].copy()
     else:
         result = {}
@@ -704,6 +705,18 @@ def _score_one_text_with_id(args):
 
     result["_id"] = _id
     result["source_corpus"] = source_corpus
+    result["_n_versions"] = n_versions
+    # SD across versions for the median norm (primary score column)
+    if n_versions > 1:
+        med_key = "Abs-Conc.Median.median"
+        med_vals = [s[med_key] for s in all_scores if med_key in s]
+        if len(med_vals) > 1:
+            mean_val = sum(med_vals) / len(med_vals)
+            result["_score_sd"] = (sum((v - mean_val) ** 2 for v in med_vals) / (len(med_vals) - 1)) ** 0.5
+        else:
+            result["_score_sd"] = 0.0
+    else:
+        result["_score_sd"] = 0.0
     result["_cache_new"] = cache_new
     return result
 
@@ -905,7 +918,7 @@ def score_arc_corpora(
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
-    columns = ["_id", "source_corpus"] + sorted(allnorms.columns.tolist())
+    columns = ["_id", "source_corpus", "_n_versions", "_score_sd"] + sorted(allnorms.columns.tolist())
     spelling_d = get_spelling_modernizer() if modernize else None
 
     _get_norms_arrays(allnorms)
