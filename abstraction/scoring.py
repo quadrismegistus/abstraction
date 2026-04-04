@@ -647,6 +647,28 @@ def score_all_corpora(
 
 
 # ---------------------------------------------------------------------------
+# Language detection
+# ---------------------------------------------------------------------------
+
+ENGLISH_MARKERS = frozenset(['the', 'and', 'of', 'to', 'a', 'in', 'is', 'that', 'it', 'for'])
+
+
+def freqs_are_english(freqs_d, min_marker_rate=0.05):
+    """Check if a freqs dict is likely English.
+
+    Uses the fraction of tokens that are common English function words
+    ('the', 'and', 'of', etc.). English texts typically score 15-25%;
+    French/Latin/German texts score <1%. Default threshold 5% is very
+    conservative.
+    """
+    total = sum(freqs_d.values())
+    if total == 0:
+        return False
+    marker_count = sum(freqs_d.get(w, 0) for w in ENGLISH_MARKERS)
+    return (marker_count / total) >= min_marker_rate
+
+
+# ---------------------------------------------------------------------------
 # Scoring synthetic (arc) corpora
 # ---------------------------------------------------------------------------
 
@@ -681,6 +703,8 @@ def _score_one_text_with_id(args):
         except Exception:
             continue
         if sum(freqs.values()) < _worker_min_words:
+            continue
+        if not freqs_are_english(freqs):
             continue
         scores = _score_freqs_dict_allnorms(freqs, _worker_allnorms, _worker_spelling_d)
         if scores:
