@@ -50,6 +50,8 @@ export interface ArcText {
   genre_raw: string | null;
   is_translated: boolean | null;
   score: number | null;
+  n_versions: number | null;
+  score_sd: number | null;
 }
 
 export interface ArcTexts {

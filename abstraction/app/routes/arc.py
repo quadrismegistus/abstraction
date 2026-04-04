@@ -190,8 +190,13 @@ def arc_texts(
             f"SELECT COUNT(*) FROM texts WHERE {where}", params
         ).fetchone()[0]
 
+        # Check if version columns exist in scores table
+        score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
+        has_versions = "_n_versions" in score_table_cols
+        version_sql = ', "_n_versions", "_score_sd"' if has_versions else ""
+
         df = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, {col_sql}
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated{version_sql}, {col_sql}
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -207,6 +212,8 @@ def arc_texts(
                     genre_raw=row.get("genre_raw"),
                     is_translated=bool(row["is_translated"]) if pd.notna(row.get("is_translated")) else None,
                     score=row.get("period_score"),
+                    n_versions=int(row["_n_versions"]) if has_versions and pd.notna(row.get("_n_versions")) else None,
+                    score_sd=float(row["_score_sd"]) if has_versions and pd.notna(row.get("_score_sd")) else None,
                 )
                 for _, row in df.iterrows()
             ]
@@ -215,12 +222,16 @@ def arc_texts(
     else:
         where, params = _build_where(genre, corpus, year_min, year_max, col)
 
+        score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
+        has_versions = "_n_versions" in score_table_cols
+        version_sql = ', "_n_versions", "_score_sd"' if has_versions else ""
+
         total = conn.execute(
             f"SELECT COUNT(*) FROM texts WHERE {where}", params
         ).fetchone()[0]
 
         rows = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, "{col}"
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, "{col}"{version_sql}
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -231,6 +242,8 @@ def arc_texts(
             ArcText(
                 id=r[0], corpus=r[1], year=r[2],
                 author=r[3], title=r[4], genre=r[5], genre_raw=r[6], is_translated=r[7], score=r[8],
+                n_versions=r[9] if has_versions and len(r) > 9 else None,
+                score_sd=r[10] if has_versions and len(r) > 10 else None,
             )
             for r in rows
         ]
@@ -383,6 +396,7 @@ def arc_by_genre(
     corpus_adjusted: bool = False,
     model: str = "quadratic",
     bin_size: int = 10,
+    is_translated: str | None = None,
 ):
     """Return corpus-adjusted decade bins + LOESS per arc corpus.
 
@@ -403,6 +417,13 @@ def arc_by_genre(
         corpus_list = ", ".join(f"'{c}'" for c in corpus)
         corpus_sql = f" AND corpus_name IN ({corpus_list})"
 
+    # Build translation filter
+    translated_sql = ""
+    if is_translated == "true":
+        translated_sql = " AND is_translated = true"
+    elif is_translated == "false":
+        translated_sql = " AND (is_translated IS NULL OR is_translated = false)"
+
     # Load data for all requested genres/arc_corpora
     all_dfs = []
     for g in genre:
@@ -419,7 +440,7 @@ def arc_by_genre(
                     FROM texts
                     WHERE arc_corpus = '{g}'
                       AND year IS NOT NULL
-                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
                 """).fetchdf()
             else:
                 gdf = conn.execute(f"""
@@ -427,7 +448,7 @@ def arc_by_genre(
                     FROM texts
                     WHERE genre = '{g}'
                       AND year IS NOT NULL
-                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
                 """).fetchdf()
         else:
             if is_arc:
@@ -436,7 +457,7 @@ def arc_by_genre(
                     FROM texts
                     WHERE arc_corpus = '{g}'
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
-                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
                 """).fetchdf()
             else:
                 gdf = conn.execute(f"""
@@ -444,7 +465,7 @@ def arc_by_genre(
                     FROM texts
                     WHERE genre = '{g}'
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
-                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}
+                      AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
                 """).fetchdf()
 
         if len(gdf) > 0:

@@ -50,6 +50,7 @@ export function fetchArcByGenre(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string;
   period_matched?: string; corpus_adjusted?: string; loess_span?: string; model?: string; bin_size?: string;
+  is_translated?: string;
 }) {
   return fetchJson<GenreArc[]>('/arc/by-genre', params);
 }

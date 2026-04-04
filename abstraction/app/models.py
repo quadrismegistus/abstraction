@@ -55,6 +55,8 @@ class ArcText(BaseModel):
     genre_raw: str | None = None
     is_translated: bool | None = None
     score: float | None
+    n_versions: int | None = None
+    score_sd: float | None = None
 
 
 class ArcTexts(BaseModel):

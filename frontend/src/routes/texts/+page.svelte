@@ -74,6 +74,8 @@
             <th class="sortable" onclick={() => toggleSort('author')}>Author {sortCol === 'author' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('title')}>Title {sortCol === 'title' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th class="sortable" onclick={() => toggleSort('score')}>Score {sortCol === 'score' ? (sortAsc ? '▲' : '▼') : ''}</th>
+            <th class="sortable" onclick={() => toggleSort('n_versions')}>Versions {sortCol === 'n_versions' ? (sortAsc ? '▲' : '▼') : ''}</th>
+            <th class="sortable" onclick={() => toggleSort('score_sd')}>SD {sortCol === 'score_sd' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th>Genre</th>
             <th>Genre (raw)</th>
             <th>Translated?</th>
@@ -94,6 +96,8 @@
               <td class="score" style="color: {t.score !== null ? (t.score < 0 ? 'hsl(220,60%,40%)' : 'hsl(25,70%,40%)') : '#999'}">
                 {t.score !== null ? t.score.toFixed(3) : '—'}
               </td>
+              <td class="versions">{t.n_versions ?? '—'}</td>
+              <td class="sd">{t.score_sd !== null && t.score_sd !== undefined ? t.score_sd.toFixed(3) : '—'}</td>
               <td class="genre">{t.genre ?? '—'}</td>
               <td class="genre">{t.genre_raw ?? '—'}</td>
               <td class="genre">{t.is_translated === true ? 'Yes' : t.is_translated === false ? 'No' : '—'}</td>
@@ -130,5 +134,7 @@
   .author { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .title { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .score { font-family: monospace; font-size: 0.8rem; width: 70px; }
+  .versions { font-family: monospace; font-size: 0.8rem; width: 40px; color: #666; text-align: center; }
+  .sd { font-family: monospace; font-size: 0.8rem; width: 60px; color: #888; }
   .genre { color: #888; font-size: 0.8rem; }
 </style>
