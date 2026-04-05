@@ -1185,6 +1185,7 @@ def load_all_scored(scores_dir=None, version="v8-raw", exclude=EXCLUDE_CORPORA):
 
 def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
                   corpus_col="corpus_name", fixed_effects=None,
+                  corpus_bias=None,
                   min_year=DEFAULT_MIN_YEAR,
                   max_year=DEFAULT_MAX_YEAR, agg_bin=DEFAULT_AGG_BIN,
                   min_texts_per_bin=3, model="quadratic"):
@@ -1204,6 +1205,10 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
     fixed_effects : list of str, optional
         Additional categorical columns to include as fixed effects (e.g.
         ["norm_period"]). These are added alongside corpus_col.
+    corpus_bias : dict, optional
+        Precomputed corpus bias from corpus_correction.estimate_corpus_bias().
+        When provided, corpus bias is subtracted from raw scores before trend
+        fitting, replacing corpus fixed-effect dummies.
     model : str
         "quadratic", "cubic", "quartic", or "piecewise".
     """
@@ -1230,6 +1235,14 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
 
     if len(sub) == 0:
         return pd.DataFrame()
+
+    # Apply precomputed corpus bias correction (replaces corpus fixed effects)
+    if corpus_bias is not None and corpus_col and corpus_col in sub.columns:
+        coefficients = corpus_bias.get("coefficients", {})
+        corrections = sub[corpus_col].map(coefficients).fillna(0.0)
+        sub[score_col] = sub[score_col] - corrections
+        # Remove corpus from fixed effects since bias is already corrected
+        fe_cols = [fe for fe in fe_cols if fe != corpus_col]
 
     # Aggregate by (decade, corpus, fixed_effects...)
     # Always group by corpus for output; fe_cols determines which get dummies

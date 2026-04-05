@@ -269,6 +269,7 @@ def arc_aggregate(
     split_by: str | None = None,
     is_translated: str | None = None,
     min_texts: int = 1,
+    corpus_corrected: bool = False,
 ):
     """Aggregate arc: simple mean per year bin across ALL texts (no corpus weighting).
 
@@ -282,6 +283,12 @@ def arc_aggregate(
 
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
+
+    # Load corpus bias coefficients if requested
+    corpus_bias = None
+    if corpus_corrected:
+        from ...corpus_correction import load_corpus_bias
+        corpus_bias = load_corpus_bias()
 
     conn = get_connection()
 
@@ -297,11 +304,16 @@ def arc_aggregate(
     elif is_translated == "false":
         translated_filter = " AND (is_translated IS NULL OR is_translated = false)"
 
-    # Extra columns to select for split_by
+    # Extra columns to select for split_by and corpus correction
     extra_cols = ""
     valid_splits = {"genre_raw", "corpus_name", "is_translated"}
+    extra_col_set = set()
     if split_by and split_by in valid_splits:
-        extra_cols = f", {split_by}"
+        extra_col_set.add(split_by)
+    if corpus_bias:
+        extra_col_set.add("corpus_name")
+    if extra_col_set:
+        extra_cols = ", " + ", ".join(extra_col_set)
 
     sign = -1.0 if invert else 1.0
     results = []
@@ -325,7 +337,7 @@ def arc_aggregate(
                 continue
 
             df = assign_period_score(df, source=source)
-            df["_score"] = df["period_score"] * sign
+            df["_score"] = df["period_score"]
             df = df.dropna(subset=["_score"])
         else:
             df = conn.execute(f"""
@@ -338,7 +350,12 @@ def arc_aggregate(
             if len(df) < 30:
                 continue
 
-            df["_score"] = df["_score"] * sign
+        # Apply corpus bias correction before sign flip
+        if corpus_bias and "corpus_name" in df.columns:
+            coefficients = corpus_bias.get("coefficients", {})
+            df["_score"] = df["_score"] - df["corpus_name"].map(coefficients).fillna(0.0)
+
+        df["_score"] = df["_score"] * sign
 
         # Determine split column
         split_col = None
@@ -471,6 +488,7 @@ def arc_by_genre(
     model: str = "quadratic",
     bin_size: int = 10,
     is_translated: str | None = None,
+    corpus_corrected: bool = False,
 ):
     """Return corpus-adjusted decade bins + LOESS per arc corpus.
 
@@ -571,10 +589,17 @@ def arc_by_genre(
         if len(gdf) < 30:
             continue
 
+        # Load corpus bias for match-group-based correction
+        cb = None
+        if corpus_corrected:
+            from ...corpus_correction import load_corpus_bias
+            cb = load_corpus_bias()
+
         adj = adjust_scores(
             gdf, score_col=score_col, min_year=year_min, max_year=year_max,
             corpus_col="corpus_name",
             fixed_effects=fe if fe else None,
+            corpus_bias=cb,
             model=model, agg_bin=bin_size,
         )
         if adj.empty:

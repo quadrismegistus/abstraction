@@ -273,6 +273,19 @@ def cmd_app(args):
         _shutdown(None, None)
 
 
+def cmd_estimate_corpus_bias(args):
+    import sys
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    from .corpus_correction import estimate_corpus_bias, save_corpus_bias
+    result = estimate_corpus_bias(
+        score_col=args.score_col,
+        reference_corpus=args.reference,
+        min_group_overlap=args.min_overlap,
+    )
+    if result:
+        save_corpus_bias(result)
+
+
 def cmd_gen_vecnorms(args):
     import time
     from .models import gen_vecnorms
@@ -411,6 +424,12 @@ def main():
     p.add_argument("--csv", default=None, help="Save results to CSV")
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized counts (v2 instead of v2-raw)")
 
+    # estimate-corpus-bias
+    p = sub.add_parser("estimate-corpus-bias", help="Estimate corpus bias coefficients from match group comparisons")
+    p.add_argument("--score-col", default="Abs-Conc.Median.median", help="Score column to use")
+    p.add_argument("--reference", default="ecco_tcp", help="Reference corpus (bias=0)")
+    p.add_argument("--min-overlap", type=int, default=10, help="Min match groups per corpus")
+
     # app: start web app servers
     p = sub.add_parser("app", help="Start the web app (FastAPI backend + SvelteKit frontend)")
     p.add_argument("--backend-only", action="store_true", help="Start only the FastAPI backend")
@@ -449,6 +468,8 @@ def main():
         cmd_train_skipgrams(args)
     elif args.command == "gen-vecnorms":
         cmd_gen_vecnorms(args)
+    elif args.command == "estimate-corpus-bias":
+        cmd_estimate_corpus_bias(args)
     else:
         parser.print_help()
         sys.exit(1)

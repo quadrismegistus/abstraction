@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, splitBy, translatedFilter, minTexts, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -50,6 +50,11 @@
       <input type="checkbox" checked={$periodMatched}
              onchange={() => $periodMatched = !$periodMatched} />
       Period-matched norms
+    </label>
+    <label class="toggle">
+      <input type="checkbox" checked={$corpusCorrected}
+             onchange={() => $corpusCorrected = !$corpusCorrected} />
+      Corpus-corrected (match groups)
     </label>
     <label class="toggle">
       <input type="checkbox" checked={$corpusSmoothed}
