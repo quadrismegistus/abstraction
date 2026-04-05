@@ -501,9 +501,19 @@
     plotDiv.on('plotly_click', (data: any) => {
       const point = data.points[0];
       if (point?.customdata) {
-        const [corpus, nTexts, genre, yr] = point.customdata;
+        const [first, nTexts, genre, yr] = point.customdata;
         const params = new URLSearchParams();
-        if (corpus) params.set('corpus', corpus);
+        // customdata[0] is either a corpus name (explore mode) or a subgroup
+        // name (aggregate with split_by).  Detect subgroups by checking if
+        // split_by is active.
+        const isSubgroup = $splitBy && mode === 'aggregate';
+        if (isSubgroup) {
+          if (first && first !== 'Aggregate' && first !== 'Other') {
+            params.set('genre_raw', first);
+          }
+        } else {
+          if (first) params.set('corpus', first);
+        }
         params.set('year', String(yr));
         params.set('bin_size', String($binSize));
         params.set('genre', genre);

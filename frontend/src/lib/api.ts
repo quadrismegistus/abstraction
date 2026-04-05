@@ -65,6 +65,7 @@ export function fetchArcByCorpus(params: {
 export function fetchArcTexts(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string;
+  genre_raw?: string;
   page?: string; page_size?: string;
   period_matched?: string;
 }) {

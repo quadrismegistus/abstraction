@@ -9,6 +9,7 @@
   let yearBin = $derived(Number(page.url.searchParams.get('year') || '0'));
   let binSz = $derived(Number(page.url.searchParams.get('bin_size') || '10'));
   let genre = $derived(page.url.searchParams.get('genre') || '');
+  let genreRaw = $derived(page.url.searchParams.get('genre_raw') || '');
 
   let texts: ArcText[] = $state([]);
   let total = $state(0);
@@ -26,6 +27,7 @@
     };
     if (corpus) params.corpus = [corpus];
     if (genre) params.genre = [genre];
+    if (genreRaw) params.genre_raw = genreRaw;
     if ($periodMatched) params.period_matched = 'true';
     const result = await fetchArcTexts(params);
     texts = result.texts;
@@ -50,7 +52,7 @@
   }
 
   $effect(() => {
-    corpus; yearBin; binSz; genre; $norm;
+    corpus; yearBin; binSz; genre; genreRaw; $norm;
     loadData();
   });
 </script>
@@ -58,7 +60,7 @@
 <div class="texts-page">
   <div class="header">
     <a href="/arc">&larr; Back to arc</a>
-    <h2>{genre}{corpus ? ` in ${corpus}` : ''} ({yearBin}{binSz > 1 ? `\u2013${yearBin + binSz - 1}` : ''})</h2>
+    <h2>{genre}{genreRaw ? ` \u2014 ${genreRaw}` : ''}{corpus ? ` in ${corpus}` : ''} ({yearBin}{binSz > 1 ? `\u2013${yearBin + binSz - 1}` : ''})</h2>
     <span class="count">{total.toLocaleString()} texts</span>
   </div>
 

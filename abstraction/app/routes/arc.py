@@ -17,7 +17,7 @@ DEFAULT_COL = "Abs-Conc.Median.median"
 
 def _build_where(genre: list[str], corpus: list[str],
                  year_min: float | None, year_max: float | None,
-                 col: str):
+                 col: str, genre_raw: str | None = None):
     """Build WHERE clause and params for filtering (DuckDB positional params)."""
     clauses = [f'"{col}" IS NOT NULL', "year IS NOT NULL"]
     params: list = []
@@ -41,6 +41,9 @@ def _build_where(genre: list[str], corpus: list[str],
         placeholders = ",".join("?" for _ in corpus)
         clauses.append(f"corpus_name IN ({placeholders})")
         params.extend(corpus)
+    if genre_raw:
+        clauses.append("genre_raw LIKE ?")
+        params.append(f"%{genre_raw}%")
     if year_min is not None:
         clauses.append(f"year >= {year_min}")
     if year_max is not None:
@@ -163,6 +166,7 @@ def arc_texts(
     corpus: list[str] = Query(default=[]),
     year_min: float | None = None,
     year_max: float | None = None,
+    genre_raw: str | None = None,
     page: int = 0,
     page_size: int = 5000,
     period_matched: bool = False,
@@ -182,7 +186,7 @@ def arc_texts(
                       if r[0].startswith(f"Abs-Conc.{source}.")]
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
-        where, params = _build_where(genre, corpus, year_min, year_max, score_cols[0] if score_cols else col)
+        where, params = _build_where(genre, corpus, year_min, year_max, score_cols[0] if score_cols else col, genre_raw=genre_raw)
         # Override the NOT NULL check to require any period column
         where = where.replace(f'"{score_cols[0]}" IS NOT NULL', "1=1") if score_cols else where
 
@@ -220,7 +224,7 @@ def arc_texts(
         else:
             texts = []
     else:
-        where, params = _build_where(genre, corpus, year_min, year_max, col)
+        where, params = _build_where(genre, corpus, year_min, year_max, col, genre_raw=genre_raw)
 
         score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
         has_versions = "_n_versions" in score_table_cols
