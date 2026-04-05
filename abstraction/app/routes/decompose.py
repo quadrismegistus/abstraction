@@ -140,6 +140,7 @@ def shift_share(
     period_matched: bool = True,
     min_texts: int = 5,
     is_translated: str | None = None,
+    corpus_corrected: bool = False,
 ):
     """Shift-share decomposition by genre_raw, corpus, and is_translated.
 
@@ -204,6 +205,14 @@ def shift_share(
     if len(df) == 0:
         from fastapi import HTTPException
         raise HTTPException(404, "No data")
+
+    # Apply corpus bias correction before sign flip
+    if corpus_corrected:
+        from ...corpus_correction import load_corpus_bias
+        bias = load_corpus_bias()
+        if bias:
+            coefficients = bias.get("coefficients", {})
+            df["_score"] = df["_score"] - df["corpus_name"].map(coefficients).fillna(0.0)
 
     sign = -1.0 if invert else 1.0
     df["_score"] = df["_score"] * sign
