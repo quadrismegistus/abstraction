@@ -21,6 +21,67 @@ from .utils import read_df, save_df
 
 
 # ---------------------------------------------------------------------------
+# Read-only connection to LLTK's DuckDB (avoids write-lock contention)
+# ---------------------------------------------------------------------------
+
+_lltk_ro_conn = None
+_lltk_ro_tmpdir = None
+
+def _get_lltk_ro_conn():
+    """Return a read-only DuckDB connection to a snapshot of LLTK's metadb.
+
+    Copies the DB files to a temp directory to avoid DuckDB's write-lock
+    contention (DuckDB blocks even read_only=True when another process holds
+    a write lock on the original file).
+    """
+    global _lltk_ro_conn, _lltk_ro_tmpdir
+    if _lltk_ro_conn is not None:
+        return _lltk_ro_conn
+    import duckdb
+    import shutil
+    import tempfile
+    try:
+        from lltk.tools.metadb import PATH_METADB, PATH_MATCHDB
+    except ImportError:
+        lltk_data = os.path.expanduser("~/lltk_data/data")
+        PATH_METADB = os.path.join(lltk_data, "metadb.duckdb")
+        PATH_MATCHDB = os.path.join(lltk_data, "metadb_matches.duckdb")
+
+    # First try read-only on the originals (works when no writer is active)
+    try:
+        conn = duckdb.connect(PATH_METADB, read_only=True)
+        conn.execute(f"ATTACH '{PATH_MATCHDB}' AS match_db (READ_ONLY)")
+        _lltk_ro_conn = conn
+        return conn
+    except Exception:
+        pass
+
+    # Fall back to snapshot copies
+    print("  LLTK DB locked — copying snapshot for read-only access...", flush=True)
+    _lltk_ro_tmpdir = tempfile.mkdtemp(prefix="lltk_ro_")
+    meta_copy = os.path.join(_lltk_ro_tmpdir, "metadb.duckdb")
+    match_copy = os.path.join(_lltk_ro_tmpdir, "metadb_matches.duckdb")
+    shutil.copy2(PATH_METADB, meta_copy)
+    shutil.copy2(PATH_MATCHDB, match_copy)
+    conn = duckdb.connect(meta_copy, read_only=True)
+    try:
+        conn.execute(f"ATTACH '{match_copy}' AS match_db (READ_ONLY)")
+    except Exception:
+        pass
+    import atexit
+    def _cleanup_ro():
+        global _lltk_ro_conn, _lltk_ro_tmpdir
+        if _lltk_ro_conn is not None:
+            try: _lltk_ro_conn.close()
+            except Exception: pass
+        if _lltk_ro_tmpdir is not None:
+            shutil.rmtree(_lltk_ro_tmpdir, ignore_errors=True)
+    atexit.register(_cleanup_ro)
+    _lltk_ro_conn = conn
+    return conn
+
+
+# ---------------------------------------------------------------------------
 # Freqs score cache (sqlite-backed, keyed by relative path + modernize flag)
 # ---------------------------------------------------------------------------
 
@@ -751,8 +812,27 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
     # Get deduped representative _ids.  Use the base SyntheticCorpus query
     # (which handles dedup) rather than CuratedCorpus.load_metadata() which
     # adds whitelist entries that can duplicate match group members.
+    # Build SQL via lltk.db helpers, but execute on read-only connection.
     qkw = corpus._get_query_kwargs()
-    arc_meta = lltk.db.texts_df(**qkw)
+    ro = _get_lltk_ro_conn()
+    where_sql = lltk.db._build_where(**{k: v for k, v in qkw.items() if k not in ('dedup', 'dedup_by')})
+    dedup = qkw.get('dedup', True)
+    dedup_by = qkw.get('dedup_by', 'rank')
+    if dedup:
+        dedup_sql = lltk.db._dedup_sql(where_sql, dedup_by, texts_table='texts')
+        sql = f"""
+            SELECT t.* FROM texts t
+            LEFT JOIN match_db.match_groups mg ON t._id = mg._id
+            WHERE {where_sql} {dedup_sql}
+            ORDER BY t.year, t.corpus, t.id
+        """
+    else:
+        sql = f"""
+            SELECT t.* FROM texts t
+            WHERE {where_sql}
+            ORDER BY t.year, t.corpus, t.id
+        """
+    arc_meta = ro.execute(sql).fetchdf()
     if arc_meta is None or '_id' not in arc_meta.columns:
         print(f"  {arc_id}: no _id column in metadata, falling back to slow path", flush=True)
         return _collect_work_items_slow(corpus, arc_id, done_ids)
@@ -779,9 +859,9 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
                         continue
                 extra_ids.append(_id)
             if extra_ids:
-                extra_df = lltk.db.query(
+                extra_df = ro.execute(
                     f"SELECT * FROM texts WHERE _id IN ({','.join(repr(i) for i in extra_ids)})"
-                )
+                ).fetchdf()
                 if extra_df is not None and len(extra_df):
                     arc_meta = pd.concat([arc_meta, extra_df], ignore_index=True)
                     print(f"  {arc_id}: +{len(extra_ids)} whitelisted texts", flush=True)
@@ -829,7 +909,7 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
     if arc_ids_without_freqs:
         for _id in arc_ids_without_freqs:
             try:
-                mg_row = lltk.db.conn.execute(
+                mg_row = ro.execute(
                     "SELECT group_id FROM match_db.match_groups WHERE _id = ?", [_id]
                 ).fetchone()
                 if mg_row:
@@ -967,14 +1047,15 @@ def score_arc_corpora(
     else:
         _init_worker(allnorms, spelling_d, min_words, freqs_cache)
 
-    # Load all freqs paths + match groups from DuckDB in one query
+    # Load all freqs paths + match groups from DuckDB in one query (read-only)
     corpus_root = os.path.expanduser(PATH_CORPORA) + "/"
     all_freqs_df = None
     try:
-        db_cols = [r[0] for r in lltk.db.conn.execute("DESCRIBE texts").fetchall()]
+        ro = _get_lltk_ro_conn()
+        db_cols = [r[0] for r in ro.execute("DESCRIBE texts").fetchall()]
         if 'path_freqs' in db_cols:
             print("  Loading freqs paths from DuckDB...", flush=True)
-            all_freqs_df = lltk.db.conn.execute("""
+            all_freqs_df = ro.execute("""
                 SELECT t._id, t.corpus, t.path_freqs,
                        mg.group_id AS match_group_id
                 FROM texts t

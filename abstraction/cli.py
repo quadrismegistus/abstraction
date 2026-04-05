@@ -218,6 +218,13 @@ def cmd_app(args):
     import subprocess
 
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    if args.refresh:
+        from .app.db import _scores_db_path
+        db_path = _scores_db_path()
+        if os.path.exists(db_path):
+            os.remove(db_path)
+            print(f"Removed {db_path}")
     frontend_dir = os.path.join(project_root, "frontend")
 
     procs = []
@@ -411,6 +418,7 @@ def main():
     p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1, use 0.0.0.0 for network access)")
     p.add_argument("--port", type=int, default=1709, help="Backend port (default: 1709)")
     p.add_argument("--frontend-port", type=int, default=1784, help="Frontend port (default: 1784)")
+    p.add_argument("--refresh", action="store_true", help="Delete scores.duckdb before starting (forces rebuild from CSVs)")
 
     args = parser.parse_args()
     if args.command == "app":

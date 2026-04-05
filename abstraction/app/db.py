@@ -9,6 +9,8 @@ No ID normalization needed.
 """
 
 import os
+import shutil
+import tempfile
 import threading
 
 import duckdb
@@ -21,6 +23,7 @@ SCORES_VERSION = "v8-raw"
 LLTK_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb.duckdb")
 
 _local = threading.local()
+_lltk_snapshot_path = None
 
 
 def _scores_db_path():
@@ -40,6 +43,21 @@ def get_connection():
     return conn
 
 
+def _attach_lltk_snapshot(conn):
+    """Copy LLTK's DB to a temp file and attach it (avoids write-lock)."""
+    global _lltk_snapshot_path
+    if _lltk_snapshot_path is None:
+        print("[app] LLTK DB locked — copying snapshot...", flush=True)
+        tmpdir = tempfile.mkdtemp(prefix="lltk_ro_app_")
+        _lltk_snapshot_path = os.path.join(tmpdir, "metadb.duckdb")
+        shutil.copy2(LLTK_DB_PATH, _lltk_snapshot_path)
+    try:
+        conn.execute(f"ATTACH '{_lltk_snapshot_path}' AS lltk (READ_ONLY)")
+    except duckdb.BinderException:
+        pass
+    return conn
+
+
 def _build_connection():
     """Create a DuckDB connection with scores + metadata."""
     db_path = _scores_db_path()
@@ -49,7 +67,10 @@ def _build_connection():
         try:
             conn.execute(f"ATTACH '{LLTK_DB_PATH}' AS lltk (READ_ONLY)")
         except duckdb.BinderException:
-            pass
+            pass  # already attached
+        except duckdb.IOException:
+            # DB locked by another process — use a snapshot copy
+            conn = _attach_lltk_snapshot(conn)
 
     # Create joined view: scores + LLTK metadata
     try:
