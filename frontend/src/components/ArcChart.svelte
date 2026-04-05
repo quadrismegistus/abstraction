@@ -135,6 +135,19 @@
     else renderPrint();
   }
 
+  // Colors for subgroup (genre_raw) display — 10 distinct + Other + Aggregate
+  const subgroupColors: string[] = [
+    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+    '#42d4f4', '#f032e6', '#469990', '#9a6324', '#800000',
+  ];
+  const SUBGROUP_OTHER_COLOR = '#aaaaaa';
+  const SUBGROUP_AGG_COLOR = '#222222';
+
+  const subgroupShapes: string[] = [
+    'circle', 'square', 'diamond', 'triangle-up', 'triangle-down',
+    'pentagon', 'hexagon', 'star', 'cross', 'x',
+  ];
+
   function renderAggregate() {
     const traces: any[] = [];
 
@@ -156,28 +169,91 @@
         });
       }
 
-      // Points — one per bin, sized by n_texts, shaped by genre
-      traces.push({
-        x: arc.points.map(p => p.year),
-        y: arc.points.map(p => p.mean),
-        customdata: arc.points.map(p => ['', p.n_texts, arc.genre, p.year]),
-        type: 'scatter',
-        mode: 'markers',
-        marker: {
-          color: gs.color,
-          symbol: genreShapes[arc.genre] || 'circle',
-          size: arc.points.map(p => 4 + Math.sqrt(p.n_texts / maxN) * 16),
-          opacity: 0.5,
-          line: { width: 0.5, color: gs.color },
-        },
-        name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts)`,
-        hovertemplate:
-          `<b>${arc.genre}</b><br>` +
-          'Year: %{x}<br>Mean: %{y:.3f}<br>' +
-          'Texts: %{customdata[1]:,}<extra></extra>',
-      });
+      // Check if points have subgroups (split_by active)
+      const hasSubgroups = arc.points.some(p => p.subgroup != null);
 
-      // LOESS line
+      if (hasSubgroups) {
+        // Group points by subgroup
+        const bySubgroup: Record<string, typeof arc.points> = {};
+        for (const p of arc.points) {
+          const sg = p.subgroup || 'Aggregate';
+          (bySubgroup[sg] ??= []).push(p);
+        }
+
+        // Build stable color/shape map: Aggregate and Other are fixed,
+        // the rest get assigned in order of first appearance
+        const subgroupKeys = Object.keys(bySubgroup)
+          .filter(k => k !== 'Aggregate' && k !== 'Other')
+          .sort((a, b) => {
+            // Sort by total n_texts descending for consistent ordering
+            const na = bySubgroup[a].reduce((s, p) => s + p.n_texts, 0);
+            const nb = bySubgroup[b].reduce((s, p) => s + p.n_texts, 0);
+            return nb - na;
+          });
+
+        const sgColorMap: Record<string, string> = { Aggregate: SUBGROUP_AGG_COLOR, Other: SUBGROUP_OTHER_COLOR };
+        const sgShapeMap: Record<string, string> = { Aggregate: 'circle', Other: 'diamond' };
+        subgroupKeys.forEach((k, i) => {
+          sgColorMap[k] = subgroupColors[i % subgroupColors.length];
+          sgShapeMap[k] = subgroupShapes[i % subgroupShapes.length];
+        });
+
+        // Render Aggregate points first (behind), then subgroups on top
+        const renderOrder = ['Aggregate', ...subgroupKeys, 'Other'].filter(k => bySubgroup[k]);
+        for (const sg of renderOrder) {
+          const pts = bySubgroup[sg];
+          const color = sgColorMap[sg] || '#999';
+          const symbol = sgShapeMap[sg] || 'circle';
+          const isAgg = sg === 'Aggregate';
+          const sgTotal = pts.reduce((s, p) => s + p.n_texts, 0);
+
+          traces.push({
+            x: pts.map(p => p.year),
+            y: pts.map(p => p.mean),
+            customdata: pts.map(p => [sg, p.n_texts, arc.genre, p.year]),
+            type: 'scatter',
+            mode: 'markers',
+            marker: {
+              color,
+              symbol,
+              size: pts.map(p => isAgg
+                ? 4 + Math.sqrt(p.n_texts / maxN) * 14
+                : 4 + Math.sqrt(p.n_texts / maxN) * 12),
+              opacity: isAgg ? 0.25 : 0.6,
+              line: { width: isAgg ? 1 : 0.5, color: isAgg ? '#000' : 'white' },
+            },
+            name: `${sg} (${sgTotal.toLocaleString()})`,
+            legendgroup: sg,
+            hovertemplate:
+              `<b>${sg}</b><br>` +
+              'Year: %{x}<br>Mean: %{y:.3f}<br>' +
+              'Texts: %{customdata[1]:,}<extra></extra>',
+          });
+        }
+      } else {
+        // No subgroups — original behavior
+        traces.push({
+          x: arc.points.map(p => p.year),
+          y: arc.points.map(p => p.mean),
+          customdata: arc.points.map(p => ['', p.n_texts, arc.genre, p.year]),
+          type: 'scatter',
+          mode: 'markers',
+          marker: {
+            color: gs.color,
+            symbol: genreShapes[arc.genre] || 'circle',
+            size: arc.points.map(p => 4 + Math.sqrt(p.n_texts / maxN) * 16),
+            opacity: 0.5,
+            line: { width: 0.5, color: gs.color },
+          },
+          name: `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts)`,
+          hovertemplate:
+            `<b>${arc.genre}</b><br>` +
+            'Year: %{x}<br>Mean: %{y:.3f}<br>' +
+            'Texts: %{customdata[1]:,}<extra></extra>',
+        });
+      }
+
+      // LOESS line (always the overall aggregate)
       if (arc.loess.length > 0) {
         traces.push({
           x: arc.loess.map(p => p.year),

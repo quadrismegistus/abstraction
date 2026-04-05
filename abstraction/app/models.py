@@ -108,6 +108,7 @@ class AggBinPoint(BaseModel):
     year: float
     mean: float
     n_texts: int
+    subgroup: str | None = None
 
 
 class AggGenreArc(BaseModel):

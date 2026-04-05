@@ -78,6 +78,7 @@ export interface AggBinPoint {
   year: number;
   mean: number;
   n_texts: number;
+  subgroup?: string | null;
 }
 
 export interface AggGenreArc {

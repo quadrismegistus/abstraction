@@ -343,12 +343,7 @@ def arc_aggregate(
             split_col = "is_translated"
 
         if split_col:
-            # One arc per split value
-            for val, sdf in df.groupby(split_col):
-                if len(sdf) < 10:
-                    continue
-                label = f"{g}: {val}" if val else f"{g}: (unknown)"
-                _add_agg_arc(results, sdf, label, bin_size, loess_span)
+            _add_agg_arc_with_subgroups(results, df, g, split_col, bin_size, loess_span)
         else:
             _add_agg_arc(results, df, g, bin_size, loess_span)
 
@@ -380,6 +375,76 @@ def _add_agg_arc(results, df, label, bin_size, loess_span):
         points=points,
         loess=loess_pts,
         n_texts_total=int(agg["n_texts"].sum()),
+    ))
+
+
+def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_span, top_n=10):
+    """Bin with subgroup-tagged points: top N values + Other + Aggregate.
+
+    The LOESS line is computed on the overall aggregate.  Points are broken
+    out by subgroup so the frontend can color them independently.
+    """
+    import re
+    import numpy as np
+
+    df = df.copy()
+    df["_bin"] = (df["year"] // bin_size).astype(int) * bin_size
+
+    # Parse genre_raw into a cleaner label
+    if split_col == "genre_raw":
+        def _parse(val):
+            if not val or str(val) == "" or str(val) == "nan":
+                return "(unknown)"
+            parts = [p.strip() for p in re.split(r"[|,]", str(val))]
+            for p in parts:
+                if p and p != "Fiction" and p != "":
+                    return p
+            return parts[0] if parts else "(unknown)"
+        df["_subgroup"] = df[split_col].apply(_parse)
+    else:
+        df["_subgroup"] = df[split_col].fillna("(unknown)").astype(str)
+
+    # Identify top N subgroups by text count
+    counts = df["_subgroup"].value_counts()
+    top_labels = list(counts.head(top_n).index)
+    df["_subgroup_display"] = df["_subgroup"].where(
+        df["_subgroup"].isin(top_labels), "Other"
+    )
+
+    # Aggregate LOESS (overall, ignoring subgroups)
+    agg_all = df.groupby("_bin").agg(
+        mean=("_score", "mean"),
+        n_texts=("_score", "count"),
+    ).reset_index()
+    loess_pts = _compute_loess(
+        agg_all["_bin"].values.astype(float),
+        agg_all["mean"].values.astype(float),
+        span=loess_span,
+    )
+
+    # Build points: per subgroup × bin + aggregate
+    points = []
+    for (sg, b), sdf in df.groupby(["_subgroup_display", "_bin"]):
+        vals = sdf["_score"].dropna()
+        if len(vals) == 0:
+            continue
+        points.append(AggBinPoint(
+            year=float(b), mean=float(np.mean(vals)),
+            n_texts=len(vals), subgroup=str(sg),
+        ))
+
+    # Aggregate points
+    for _, row in agg_all.iterrows():
+        points.append(AggBinPoint(
+            year=float(row["_bin"]), mean=float(row["mean"]),
+            n_texts=int(row["n_texts"]), subgroup="Aggregate",
+        ))
+
+    results.append(AggGenreArc(
+        genre=label,
+        points=points,
+        loess=loess_pts,
+        n_texts_total=int(agg_all["n_texts"].sum()),
     ))
 
 
