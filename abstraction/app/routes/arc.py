@@ -268,6 +268,7 @@ def arc_aggregate(
     bin_size: int = 5,
     split_by: str | None = None,
     is_translated: str | None = None,
+    min_texts: int = 1,
 ):
     """Aggregate arc: simple mean per year bin across ALL texts (no corpus weighting).
 
@@ -347,14 +348,14 @@ def arc_aggregate(
             split_col = "is_translated"
 
         if split_col:
-            _add_agg_arc_with_subgroups(results, df, g, split_col, bin_size, loess_span)
+            _add_agg_arc_with_subgroups(results, df, g, split_col, bin_size, loess_span, min_texts=min_texts)
         else:
-            _add_agg_arc(results, df, g, bin_size, loess_span)
+            _add_agg_arc(results, df, g, bin_size, loess_span, min_texts=min_texts)
 
     return results
 
 
-def _add_agg_arc(results, df, label, bin_size, loess_span):
+def _add_agg_arc(results, df, label, bin_size, loess_span, min_texts=1):
     """Helper: bin a DataFrame and add an AggGenreArc to results."""
     df = df.copy()
     df["_bin"] = (df["year"] // bin_size).astype(int) * bin_size
@@ -362,6 +363,9 @@ def _add_agg_arc(results, df, label, bin_size, loess_span):
         mean=("_score", "mean"),
         n_texts=("_score", "count"),
     ).reset_index()
+
+    # Filter by min_texts
+    agg = agg[agg["n_texts"] >= min_texts]
 
     points = [
         AggBinPoint(year=float(row["_bin"]), mean=float(row["mean"]), n_texts=int(row["n_texts"]))
@@ -372,7 +376,7 @@ def _add_agg_arc(results, df, label, bin_size, loess_span):
         agg["_bin"].values.astype(float),
         agg["mean"].values.astype(float),
         span=loess_span,
-    )
+    ) if len(agg) >= 5 else []
 
     results.append(AggGenreArc(
         genre=label,
@@ -382,7 +386,7 @@ def _add_agg_arc(results, df, label, bin_size, loess_span):
     ))
 
 
-def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_span, top_n=10):
+def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_span, top_n=10, min_texts=1):
     """Bin with subgroup-tagged points: top N values + Other + Aggregate.
 
     The LOESS line is computed on the overall aggregate.  Points are broken
@@ -415,30 +419,31 @@ def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_s
         df["_subgroup"].isin(top_labels), "Other"
     )
 
-    # Aggregate LOESS (overall, ignoring subgroups)
+    # Aggregate LOESS (overall, ignoring subgroups) — filtered by min_texts
     agg_all = df.groupby("_bin").agg(
         mean=("_score", "mean"),
         n_texts=("_score", "count"),
     ).reset_index()
+    agg_filtered = agg_all[agg_all["n_texts"] >= min_texts]
     loess_pts = _compute_loess(
-        agg_all["_bin"].values.astype(float),
-        agg_all["mean"].values.astype(float),
+        agg_filtered["_bin"].values.astype(float),
+        agg_filtered["mean"].values.astype(float),
         span=loess_span,
-    )
+    ) if len(agg_filtered) >= 5 else []
 
-    # Build points: per subgroup × bin + aggregate
+    # Build points: per subgroup × bin + aggregate — filtered by min_texts
     points = []
     for (sg, b), sdf in df.groupby(["_subgroup_display", "_bin"]):
         vals = sdf["_score"].dropna()
-        if len(vals) == 0:
+        if len(vals) < min_texts:
             continue
         points.append(AggBinPoint(
             year=float(b), mean=float(np.mean(vals)),
             n_texts=len(vals), subgroup=str(sg),
         ))
 
-    # Aggregate points
-    for _, row in agg_all.iterrows():
+    # Aggregate points — also filtered by min_texts
+    for _, row in agg_filtered.iterrows():
         points.append(AggBinPoint(
             year=float(row["_bin"]), mean=float(row["mean"]),
             n_texts=int(row["n_texts"]), subgroup="Aggregate",

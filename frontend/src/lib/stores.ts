@@ -15,6 +15,7 @@ export const binSize = writable(10);
 export const corpusSmoothed = writable(false);
 export const splitBy = writable('');
 export const translatedFilter = writable('');  // '' = all, 'true' = only translated, 'false' = only originals
+export const minTexts = writable(2);  // minimum texts per bin point
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, splitBy, translatedFilter, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, binSize, splitBy, translatedFilter, minTexts, genresList, corporaList, normsList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -76,6 +76,13 @@
              value={$loessSpan}
              oninput={(e) => $loessSpan = +(e.target as HTMLInputElement).value} />
       <span class="slider-val">{$loessSpan.toFixed(2)}</span>
+    </div>
+    <h4>Min texts per point</h4>
+    <div class="slider-row">
+      <input type="range" min="1" max="20" step="1"
+             value={$minTexts}
+             oninput={(e) => $minTexts = +(e.target as HTMLInputElement).value} />
+      <span class="slider-val">{$minTexts}</span>
     </div>
     <h4>Split by</h4>
     <select onchange={(e) => $splitBy = (e.target as HTMLSelectElement).value}>
