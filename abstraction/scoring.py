@@ -807,64 +807,16 @@ def _score_one_text_with_id(args):
 
 
 def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
-    """Fast path: collect work items using DuckDB freqs paths + match groups."""
-    import lltk
-    # Get deduped representative _ids.  Use the base SyntheticCorpus query
-    # (which handles dedup) rather than CuratedCorpus.load_metadata() which
-    # adds whitelist entries that can duplicate match group members.
-    # Build SQL via lltk.db helpers, but execute on read-only connection.
-    qkw = corpus._get_query_kwargs()
-    ro = _get_lltk_ro_conn()
-    where_sql = lltk.db._build_where(**{k: v for k, v in qkw.items() if k not in ('dedup', 'dedup_by')})
-    dedup = qkw.get('dedup', True)
-    dedup_by = qkw.get('dedup_by', 'rank')
-    if dedup:
-        dedup_sql = lltk.db._dedup_sql(where_sql, dedup_by, texts_table='texts')
-        sql = f"""
-            SELECT t.* FROM texts t
-            LEFT JOIN match_db.match_groups mg ON t._id = mg._id
-            WHERE {where_sql} {dedup_sql}
-            ORDER BY t.year, t.corpus, t.id
-        """
-    else:
-        sql = f"""
-            SELECT t.* FROM texts t
-            WHERE {where_sql}
-            ORDER BY t.year, t.corpus, t.id
-        """
-    arc_meta = ro.execute(sql).fetchdf()
+    """Fast path: collect work items using DuckDB freqs paths + match groups.
+
+    Uses corpus.load_metadata() to get the correct set of representative _ids
+    with annotations applied (exclusions, genre overrides, match group
+    propagation, whitelist additions).
+    """
+    arc_meta = corpus.load_metadata()
     if arc_meta is None or '_id' not in arc_meta.columns:
         print(f"  {arc_id}: no _id column in metadata, falling back to slow path", flush=True)
         return _collect_work_items_slow(corpus, arc_id, done_ids)
-
-    # Also include whitelisted _ids from annotations (genre corrections etc.)
-    # but only those not already represented via their match group
-    if hasattr(corpus, '_load_annotations'):
-        annotations = corpus._load_annotations()
-        if annotations:
-            existing_ids = set(arc_meta['_id'])
-            # Get match groups for existing ids to avoid adding duplicates
-            existing_groups = set(
-                all_freqs_df[all_freqs_df['_id'].isin(existing_ids)]['match_group_id'].dropna()
-            )
-            extra_ids = []
-            for _id in annotations:
-                if _id in existing_ids or annotations[_id].get('exclude'):
-                    continue
-                # Check if this _id's match group is already represented
-                id_match = all_freqs_df[all_freqs_df['_id'] == _id]
-                if len(id_match):
-                    gid = id_match.iloc[0]['match_group_id']
-                    if pd.notna(gid) and gid in existing_groups:
-                        continue
-                extra_ids.append(_id)
-            if extra_ids:
-                extra_df = ro.execute(
-                    f"SELECT * FROM texts WHERE _id IN ({','.join(repr(i) for i in extra_ids)})"
-                ).fetchdf()
-                if extra_df is not None and len(extra_df):
-                    arc_meta = pd.concat([arc_meta, extra_df], ignore_index=True)
-                    print(f"  {arc_id}: +{len(extra_ids)} whitelisted texts", flush=True)
 
     arc_ids = set(arc_meta['_id'])
     print(f"  {arc_id}: {len(arc_ids)} representative texts", flush=True)
@@ -907,6 +859,7 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
     arc_ids_with_freqs = set(arc_freqs['_id'])
     arc_ids_without_freqs = arc_ids - arc_ids_with_freqs
     if arc_ids_without_freqs:
+        ro = _get_lltk_ro_conn()
         for _id in arc_ids_without_freqs:
             try:
                 mg_row = ro.execute(
