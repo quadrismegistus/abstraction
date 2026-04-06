@@ -274,8 +274,6 @@ def cmd_app(args):
 
 
 def cmd_estimate_corpus_bias(args):
-    import sys
-    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
     from .corpus_correction import estimate_corpus_bias, save_corpus_bias
     result = estimate_corpus_bias(
         score_col=args.score_col,
