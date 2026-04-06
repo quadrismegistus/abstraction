@@ -31,7 +31,9 @@ def load_match_group_scores(score_col=DEFAULT_SCORE_COL, modernize=False):
     Returns DataFrame with columns: group_id, corpus, freqs_key, score
     filtered to groups with 2+ distinct corpora.
     """
-    from .scoring import _get_lltk_ro_conn
+    import sys
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    import lltk
 
     # Load cached scores
     mod_int = 1 if modernize else 0
@@ -54,8 +56,7 @@ def load_match_group_scores(score_col=DEFAULT_SCORE_COL, modernize=False):
     print(f"  Cache: {len(scores)} entries with {score_col}")
 
     # Load match groups + freqs paths from LLTK DB
-    ro = _get_lltk_ro_conn()
-    df = ro.execute("""
+    df = lltk.db.conn.execute("""
         SELECT t._id, t.corpus, t.path_freqs,
                mg.group_id AS group_id
         FROM texts t

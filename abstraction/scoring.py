@@ -21,67 +21,6 @@ from .utils import read_df, save_df
 
 
 # ---------------------------------------------------------------------------
-# Read-only connection to LLTK's DuckDB (avoids write-lock contention)
-# ---------------------------------------------------------------------------
-
-_lltk_ro_conn = None
-_lltk_ro_tmpdir = None
-
-def _get_lltk_ro_conn():
-    """Return a read-only DuckDB connection to a snapshot of LLTK's metadb.
-
-    Copies the DB files to a temp directory to avoid DuckDB's write-lock
-    contention (DuckDB blocks even read_only=True when another process holds
-    a write lock on the original file).
-    """
-    global _lltk_ro_conn, _lltk_ro_tmpdir
-    if _lltk_ro_conn is not None:
-        return _lltk_ro_conn
-    import duckdb
-    import shutil
-    import tempfile
-    try:
-        from lltk.tools.metadb import PATH_METADB, PATH_MATCHDB
-    except ImportError:
-        lltk_data = os.path.expanduser("~/lltk_data/data")
-        PATH_METADB = os.path.join(lltk_data, "metadb.duckdb")
-        PATH_MATCHDB = os.path.join(lltk_data, "metadb_matches.duckdb")
-
-    # First try read-only on the originals (works when no writer is active)
-    try:
-        conn = duckdb.connect(PATH_METADB, read_only=True)
-        conn.execute(f"ATTACH '{PATH_MATCHDB}' AS match_db (READ_ONLY)")
-        _lltk_ro_conn = conn
-        return conn
-    except Exception:
-        pass
-
-    # Fall back to snapshot copies
-    print("  LLTK DB locked — copying snapshot for read-only access...", flush=True)
-    _lltk_ro_tmpdir = tempfile.mkdtemp(prefix="lltk_ro_")
-    meta_copy = os.path.join(_lltk_ro_tmpdir, "metadb.duckdb")
-    match_copy = os.path.join(_lltk_ro_tmpdir, "metadb_matches.duckdb")
-    shutil.copy2(PATH_METADB, meta_copy)
-    shutil.copy2(PATH_MATCHDB, match_copy)
-    conn = duckdb.connect(meta_copy, read_only=True)
-    try:
-        conn.execute(f"ATTACH '{match_copy}' AS match_db (READ_ONLY)")
-    except Exception:
-        pass
-    import atexit
-    def _cleanup_ro():
-        global _lltk_ro_conn, _lltk_ro_tmpdir
-        if _lltk_ro_conn is not None:
-            try: _lltk_ro_conn.close()
-            except Exception: pass
-        if _lltk_ro_tmpdir is not None:
-            shutil.rmtree(_lltk_ro_tmpdir, ignore_errors=True)
-    atexit.register(_cleanup_ro)
-    _lltk_ro_conn = conn
-    return conn
-
-
-# ---------------------------------------------------------------------------
 # Freqs score cache (sqlite-backed, keyed by relative path + modernize flag)
 # ---------------------------------------------------------------------------
 
@@ -856,13 +795,14 @@ def _collect_work_items_db(corpus, arc_id, done_ids, all_freqs_df, corpus_root):
             rep_info[gk] = (row['_id'], row['corpus'])
 
     # Arc texts without freqs: check if their match group has freqs
+    # Look up match groups from all_freqs_df (already loaded from DB)
     arc_ids_with_freqs = set(arc_freqs['_id'])
     arc_ids_without_freqs = arc_ids - arc_ids_with_freqs
     if arc_ids_without_freqs:
-        ro = _get_lltk_ro_conn()
+        import lltk
         for _id in arc_ids_without_freqs:
             try:
-                mg_row = ro.execute(
+                mg_row = lltk.db.conn.execute(
                     "SELECT group_id FROM match_db.match_groups WHERE _id = ?", [_id]
                 ).fetchone()
                 if mg_row:
@@ -1000,15 +940,14 @@ def score_arc_corpora(
     else:
         _init_worker(allnorms, spelling_d, min_words, freqs_cache)
 
-    # Load all freqs paths + match groups from DuckDB in one query (read-only)
+    # Load all freqs paths + match groups from DuckDB via LLTK's connection
     corpus_root = os.path.expanduser(PATH_CORPORA) + "/"
     all_freqs_df = None
     try:
-        ro = _get_lltk_ro_conn()
-        db_cols = [r[0] for r in ro.execute("DESCRIBE texts").fetchall()]
+        db_cols = [r[0] for r in lltk.db.conn.execute("DESCRIBE texts").fetchall()]
         if 'path_freqs' in db_cols:
             print("  Loading freqs paths from DuckDB...", flush=True)
-            all_freqs_df = ro.execute("""
+            all_freqs_df = lltk.db.conn.execute("""
                 SELECT t._id, t.corpus, t.path_freqs,
                        mg.group_id AS match_group_id
                 FROM texts t
