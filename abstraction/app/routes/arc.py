@@ -479,7 +479,7 @@ def arc_by_genre(
     col: str = DEFAULT_COL,
     genre: list[str] = Query(default=["arc_fiction"]),
     corpus: list[str] = Query(default=[]),
-    year_min: float = 1580,
+    year_min: float = 1565,
     year_max: float = 2020,
     loess_span: float = 0.3,
     invert: bool = True,
@@ -489,6 +489,7 @@ def arc_by_genre(
     bin_size: int = 10,
     is_translated: str | None = None,
     corpus_corrected: bool = False,
+    min_texts: int = 1,
 ):
     """Return corpus-adjusted decade bins + LOESS per arc corpus.
 
@@ -601,6 +602,7 @@ def arc_by_genre(
             fixed_effects=fe if fe else None,
             corpus_bias=cb,
             model=model, agg_bin=bin_size,
+            min_texts_per_bin=min_texts,
         )
         if adj.empty:
             continue
