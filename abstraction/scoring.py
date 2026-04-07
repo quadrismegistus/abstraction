@@ -357,6 +357,31 @@ def _score_freqs_dict_allnorms(freqs, allnorms, spelling_d=None):
     for i, col in enumerate(columns):
         if col_counts[i] > 0:
             result[col] = col_sums[i] / col_counts[i]
+
+    # Abs/conc frequency proportions for Abs-Conc.Median.* columns
+    # Computed for median + each period (C16-C21) at ±0.5 and ±1.0 cutoffs.
+    # Analysis code picks the period-matched column based on text year.
+    _PREFIX = "Abs-Conc.Median."
+    wts = counts_arr[:, 0]
+    for i, col in enumerate(columns):
+        if not col.startswith(_PREFIX) or col_counts[i] == 0:
+            continue
+        period = col[len(_PREFIX):]  # "median", "C16", "C17", etc.
+        vals = matched[:, i]
+        valid = ~np.isnan(vals)
+        v = vals[valid]
+        w = wts[valid]
+        total_w = w.sum()
+        if total_w == 0:
+            continue
+        for cutoff in (0.5, 1.0):
+            pct_abs = w[v <= -cutoff].sum() / total_w
+            pct_conc = w[v >= cutoff].sum() / total_w
+            tag = str(cutoff).replace('.', '')
+            result[f"_pct_abs_{tag}_{period}"] = pct_abs
+            result[f"_pct_conc_{tag}_{period}"] = pct_conc
+            result[f"_pct_absconc_{tag}_{period}"] = pct_abs - pct_conc
+
     return result
 
 
@@ -370,9 +395,23 @@ def _score_freqs_allnorms(path, allnorms, spelling_d=None):
     return _score_freqs_dict_allnorms(freqs, allnorms, spelling_d)
 
 
+_PCT_PERIODS = ("median", "orig", "C16", "C17", "C18", "C19", "C20", "C21")
+_PCT_CUTOFFS = ("05", "10")
+
+def _get_pct_columns():
+    """Return the _pct_* column names for abs/conc frequency proportions."""
+    cols = []
+    for cutoff in _PCT_CUTOFFS:
+        for period in _PCT_PERIODS:
+            cols += [f"_pct_abs_{cutoff}_{period}",
+                     f"_pct_conc_{cutoff}_{period}",
+                     f"_pct_absconc_{cutoff}_{period}"]
+    return cols
+
+
 def _get_csv_columns(allnorms):
     """Return the canonical column order for score CSVs."""
-    return ["id"] + sorted(allnorms.columns.tolist())
+    return ["id"] + _get_pct_columns() + sorted(allnorms.columns.tolist())
 
 
 def _load_done_ids(csv_path):
@@ -915,7 +954,7 @@ def score_arc_corpora(
     os.makedirs(output_dir, exist_ok=True)
     allnorms = get_allnorms()
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
-    columns = ["_id", "source_corpus", "_n_versions", "_score_sd"] + sorted(allnorms.columns.tolist())
+    columns = ["_id", "source_corpus", "_n_versions", "_score_sd"] + _get_pct_columns() + sorted(allnorms.columns.tolist())
     spelling_d = get_spelling_modernizer() if modernize else None
 
     _get_norms_arrays(allnorms)
