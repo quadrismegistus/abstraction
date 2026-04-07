@@ -429,7 +429,7 @@ def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_s
             return parts[0] if parts else "(unknown)"
         df["_subgroup"] = df[split_col].apply(_parse)
     elif split_col == "is_translated":
-        df["_subgroup"] = df[split_col].map({True: "Translated", False: "Original"}).fillna("(unknown)")
+        df["_subgroup"] = df[split_col].map({True: "Translated", False: "Original"}).fillna("Original")
     else:
         df["_subgroup"] = df[split_col].fillna("(unknown)").astype(str)
 
