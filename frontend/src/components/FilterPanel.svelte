@@ -71,6 +71,7 @@
     <h4>Bin size</h4>
     <select onchange={(e) => $binSize = +(e.target as HTMLSelectElement).value}>
       <option value="1" selected={$binSize === 1}>1 year</option>
+      <option value="2" selected={$binSize === 2}>2 years</option>
       <option value="5" selected={$binSize === 5}>5 years</option>
       <option value="10" selected={$binSize === 10}>10 years (decade)</option>
       <option value="25" selected={$binSize === 25}>25 years</option>
