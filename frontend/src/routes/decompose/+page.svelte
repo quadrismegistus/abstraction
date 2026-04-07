@@ -43,6 +43,7 @@
     'genre_raw': 'By Genre (raw)',
     'corpus': 'By Corpus',
     'is_translated': 'By Translation Status',
+    'text_length': 'By Text Length',
   };
 
   function decompLabel(key: string): string {

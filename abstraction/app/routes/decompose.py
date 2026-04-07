@@ -177,7 +177,7 @@ def shift_share(
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, {col_sql}
+            SELECT year, genre_raw, corpus_name, is_translated, n_words, {col_sql}
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -194,7 +194,7 @@ def shift_share(
         df = df.dropna(subset=["_score"])
     else:
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, "{col}" as _score
+            SELECT year, genre_raw, corpus_name, is_translated, n_words, "{col}" as _score
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL AND "{col}" IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -223,6 +223,13 @@ def shift_share(
     # Parse is_translated to readable labels
     df["_translated"] = df["is_translated"].fillna(False).apply(
         lambda x: "Translated" if x is True or x == "True" else "Original")
+
+    # Bin text length
+    df["_length_bin"] = pd.cut(
+        df["n_words"].fillna(0),
+        bins=[0, 10_000, 30_000, 60_000, 100_000, float("inf")],
+        labels=["<10K", "10-30K", "30-60K", "60-100K", ">100K"],
+    ).astype(str)
 
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
@@ -257,6 +264,14 @@ def shift_share(
     r = _decompose(early, late, "_translated", min_texts)
     if r:
         r.decompose_by = "is_translated"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by text length
+    r = _decompose(early, late, "_length_bin", min_texts)
+    if r:
+        r.decompose_by = "text_length"
         r.period_early = period_early
         r.period_late = period_late
         results.append(r)

@@ -87,6 +87,7 @@ def _build_connection():
                 m.genre_raw,
                 m.genre_enriched_source,
                 m.is_translated,
+                m.n_words,
                 s.* EXCLUDE (_id, source_corpus, arc_corpus)
             FROM scores s
             LEFT JOIN lltk.texts m ON s._id = m._id
