@@ -53,6 +53,7 @@ class ArcText(BaseModel):
     title: str | None
     genre: str | None
     genre_raw: str | None = None
+    genre_enriched_source: str | None = None
     is_translated: bool | None = None
     score: float | None
     n_versions: int | None = None

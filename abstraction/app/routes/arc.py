@@ -200,7 +200,7 @@ def arc_texts(
         version_sql = ', "_n_versions", "_score_sd"' if has_versions else ""
 
         df = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated{version_sql}, {col_sql}
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, genre_enriched_source, is_translated{version_sql}, {col_sql}
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -214,6 +214,7 @@ def arc_texts(
                     id=row["_id"], corpus=row["corpus_name"], year=row.get("year"),
                     author=row.get("author"), title=row.get("title"), genre=row.get("genre"),
                     genre_raw=row.get("genre_raw"),
+                    genre_enriched_source=row.get("genre_enriched_source"),
                     is_translated=bool(row["is_translated"]) if pd.notna(row.get("is_translated")) else None,
                     score=row.get("period_score"),
                     n_versions=int(row["_n_versions"]) if has_versions and pd.notna(row.get("_n_versions")) else None,
@@ -235,7 +236,7 @@ def arc_texts(
         ).fetchone()[0]
 
         rows = conn.execute(f"""
-            SELECT _id, corpus_name, year, author, title, genre, genre_raw, is_translated, "{col}"{version_sql}
+            SELECT _id, corpus_name, year, author, title, genre, genre_raw, genre_enriched_source, is_translated, "{col}"{version_sql}
             FROM texts
             WHERE {where}
             ORDER BY year
@@ -245,9 +246,10 @@ def arc_texts(
         texts = [
             ArcText(
                 id=r[0], corpus=r[1], year=r[2],
-                author=r[3], title=r[4], genre=r[5], genre_raw=r[6], is_translated=r[7], score=r[8],
-                n_versions=r[9] if has_versions and len(r) > 9 else None,
-                score_sd=r[10] if has_versions and len(r) > 10 else None,
+                author=r[3], title=r[4], genre=r[5], genre_raw=r[6], genre_enriched_source=r[7],
+                is_translated=r[8], score=r[9],
+                n_versions=r[10] if has_versions and len(r) > 10 else None,
+                score_sd=r[11] if has_versions and len(r) > 11 else None,
             )
             for r in rows
         ]

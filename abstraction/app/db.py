@@ -85,6 +85,7 @@ def _build_connection():
                 m.year,
                 m.genre,
                 m.genre_raw,
+                m.genre_enriched_source,
                 m.is_translated,
                 s.* EXCLUDE (_id, source_corpus, arc_corpus)
             FROM scores s
