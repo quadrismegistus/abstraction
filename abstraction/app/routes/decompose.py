@@ -231,6 +231,10 @@ def shift_share(
         labels=["<10K", "10-30K", "30-60K", "60-100K", ">100K"],
     ).astype(str)
 
+    # Genre x length interaction (short vs long at 40K threshold)
+    length_label = df["n_words"].fillna(0).apply(lambda w: "short" if w < 40_000 else "long")
+    df["_genre_length"] = df["_genre_raw"] + " (" + length_label + ")"
+
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
     late = df[(df["year"] >= year_late_min) & (df["year"] <= year_late_max)]
@@ -272,6 +276,14 @@ def shift_share(
     r = _decompose(early, late, "_length_bin", min_texts)
     if r:
         r.decompose_by = "text_length"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by genre x length
+    r = _decompose(early, late, "_genre_length", min_texts)
+    if r:
+        r.decompose_by = "genre_raw x length"
         r.period_early = period_early
         r.period_late = period_late
         results.append(r)
