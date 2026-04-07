@@ -405,7 +405,7 @@ def _add_agg_arc(results, df, label, bin_size, loess_span, min_texts=1):
     ))
 
 
-def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_span, top_n=10, min_texts=1):
+def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_span, top_n=20, min_texts=1):
     """Bin with subgroup-tagged points: top N values + Other + Aggregate.
 
     The LOESS line is computed on the overall aggregate.  Points are broken

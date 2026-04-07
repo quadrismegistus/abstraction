@@ -137,10 +137,12 @@
     else renderPrint();
   }
 
-  // Colors for subgroup (genre_raw) display — 10 distinct + Other + Aggregate
+  // Colors for subgroup (genre_raw) display — 20 distinct + Other + Aggregate
   const subgroupColors: string[] = [
     '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
     '#42d4f4', '#f032e6', '#469990', '#9a6324', '#800000',
+    '#dcbeff', '#aaffc3', '#ffd8b1', '#000075', '#a9a9a9',
+    '#ffe119', '#bfef45', '#fabebe', '#7f7f7f', '#e6beff',
   ];
   const SUBGROUP_OTHER_COLOR = '#aaaaaa';
   const SUBGROUP_AGG_COLOR = '#222222';
@@ -148,6 +150,8 @@
   const subgroupShapes: string[] = [
     'circle', 'square', 'diamond', 'triangle-up', 'triangle-down',
     'pentagon', 'hexagon', 'star', 'cross', 'x',
+    'circle-open', 'square-open', 'diamond-open', 'triangle-up-open', 'triangle-down-open',
+    'pentagon-open', 'hexagon-open', 'star-open', 'cross-open', 'x-open',
   ];
 
   function renderAggregate() {
