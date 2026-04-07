@@ -8,15 +8,15 @@ export const yearRange = writable<[number, number]>([1565, 2020]);
 export const chunkSize = writable(500);
 export const periodMatched = writable(true);
 export const globalLoading = writable(false);
-export const loessSpan = writable(0.2);
+export const loessSpan = writable(0.15);
 export const adjustModel = writable('quadratic');
 export const corpusAdjusted = writable(false);
 export const binSize = writable(10);
 export const corpusSmoothed = writable(false);
 export const splitBy = writable('');
 export const translatedFilter = writable('');  // '' = all, 'true' = only translated, 'false' = only originals
-export const minTexts = writable(2);  // minimum texts per bin point
-export const corpusCorrected = writable(false);  // match-group-based corpus bias correction
+export const minTexts = writable(1);  // minimum texts per bin point
+export const corpusCorrected = writable(true);  // match-group-based corpus bias correction
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);
