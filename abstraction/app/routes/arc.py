@@ -463,12 +463,6 @@ def _add_agg_arc_with_subgroups(results, df, label, split_col, bin_size, loess_s
             n_texts=len(vals), subgroup=str(sg),
         ))
 
-    # Aggregate points — also filtered by min_texts
-    for _, row in agg_filtered.iterrows():
-        points.append(AggBinPoint(
-            year=float(row["_bin"]), mean=float(row["mean"]),
-            n_texts=int(row["n_texts"]), subgroup="Aggregate",
-        ))
 
     results.append(AggGenreArc(
         genre=label,
