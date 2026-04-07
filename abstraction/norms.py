@@ -141,7 +141,7 @@ def get_orignorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_csv(PATH_NORMS).set_index("word")
     if remove_stopwords:
         exclude = get_stopwords_and_names()
-        df = df[~df.index.isin(exclude)]
+        df = df[~df.index.str.lower().isin(exclude)]
     df["Abs-Conc.Median"] = df.median(axis=1)
     return df
 
@@ -170,7 +170,7 @@ def get_contrasts(dfnorms, zcut=ZCUT):
 
 def get_fields_from_norms(dfnorms, zcut=ZCUT, remove_stopwords=True):
     if remove_stopwords:
-        dfnorms = dfnorms[~dfnorms.index.isin(get_stopwords_and_names())]
+        dfnorms = dfnorms[~dfnorms.index.str.lower().isin(get_stopwords_and_names())]
     fields = {}
     for cdx in get_contrasts(dfnorms, zcut=zcut):
         neg, pos = cdx["contrast"].split("-")
@@ -248,7 +248,7 @@ def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
     df = pd.read_pickle(PATH_VECNORMS)
     if remove_stopwords:
         exclude = get_stopwords_and_names()
-        df = df[~df.index.isin(exclude)]
+        df = df[~df.index.str.lower().isin(exclude)]
     # add median across periods for each contrast.source group
     colgroups = defaultdict(set)
     for col in df.columns:
@@ -265,7 +265,8 @@ def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
     if not force and os.path.exists(PATH_ALLNORMS):
         df = read_df(PATH_ALLNORMS)
         if remove_stopwords:
-            df = df[~df.index.isin(get_stopwords_and_names())]
+            exclude = get_stopwords_and_names()
+            df = df[~df.index.str.lower().isin(exclude)]
         return df
     # Always save the FULL unfiltered table — filtering happens on read
     orig = get_orignorms(remove_stopwords=False)
@@ -274,7 +275,8 @@ def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
     combined = vec.join(orig, how="outer")
     save_df(combined, PATH_ALLNORMS)
     if remove_stopwords:
-        combined = combined[~combined.index.isin(get_stopwords_and_names())]
+        exclude = get_stopwords_and_names()
+        combined = combined[~combined.index.str.lower().isin(exclude)]
     return combined
 
 
