@@ -11,7 +11,7 @@ export const globalLoading = writable(false);
 export const loessSpan = writable(0.15);
 export const adjustModel = writable('quadratic');
 export const corpusAdjusted = writable(false);
-export const binSize = writable(10);
+export const binSize = writable(1);
 export const corpusSmoothed = writable(false);
 export const splitBy = writable('');
 export const translatedFilter = writable('');  // '' = all, 'true' = only translated, 'false' = only originals
