@@ -80,6 +80,7 @@
             <th class="sortable" onclick={() => toggleSort('score_sd')}>SD {sortCol === 'score_sd' ? (sortAsc ? '▲' : '▼') : ''}</th>
             <th>Genre</th>
             <th>Genre (raw)</th>
+            <th>Genre source</th>
             <th>Translated?</th>
           </tr>
         </thead>
@@ -102,6 +103,7 @@
               <td class="sd">{t.score_sd !== null && t.score_sd !== undefined ? t.score_sd.toFixed(3) : '—'}</td>
               <td class="genre">{t.genre ?? '—'}</td>
               <td class="genre">{t.genre_raw ?? '—'}</td>
+              <td class="genre">{t.genre_enriched_source ?? '—'}</td>
               <td class="genre">{t.is_translated === true ? 'Yes' : t.is_translated === false ? 'No' : '—'}</td>
             </tr>
           {/each}

@@ -48,6 +48,7 @@ export interface ArcText {
   title: string | null;
   genre: string | null;
   genre_raw: string | null;
+  genre_enriched_source: string | null;
   is_translated: boolean | null;
   score: number | null;
   n_versions: number | null;
