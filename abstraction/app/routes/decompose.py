@@ -232,7 +232,7 @@ def shift_share(
     ).astype(str)
 
     # Genre x length interaction (short vs long at 40K threshold)
-    length_label = df["n_words"].fillna(0).apply(lambda w: "short" if w < 40_000 else "long")
+    length_label = df["n_words"].fillna(0).apply(lambda w: "short" if w < 30_000 else "long")
     df["_genre_length"] = df["_genre_raw"] + " (" + length_label + ")"
 
     # Split into early/late
