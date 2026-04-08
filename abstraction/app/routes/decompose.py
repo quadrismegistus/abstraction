@@ -177,7 +177,8 @@ def shift_share(
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, n_words, {col_sql}
+            SELECT year, genre_raw, corpus_name, is_translated, n_words,
+                   genre_enriched_source, author_norm, {col_sql}
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -194,7 +195,8 @@ def shift_share(
         df = df.dropna(subset=["_score"])
     else:
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, n_words, "{col}" as _score
+            SELECT year, genre_raw, corpus_name, is_translated, n_words,
+                   genre_enriched_source, author_norm, "{col}" as _score
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL AND "{col}" IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -231,9 +233,18 @@ def shift_share(
         labels=["<10K", "10-30K", "30-60K", "60-100K", ">100K"],
     ).astype(str)
 
-    # Genre x length interaction (short vs long at 40K threshold)
+    # Genre x length interaction (short vs long at 30K threshold)
     length_label = df["n_words"].fillna(0).apply(lambda w: "short" if w < 30_000 else "long")
     df["_genre_length"] = df["_genre_raw"] + " (" + length_label + ")"
+
+    # Genre enrichment source (how was this text classified as fiction?)
+    df["_genre_source"] = df["genre_enriched_source"].fillna("corpus")
+
+    # Author productivity bins
+    author_counts = df["author_norm"].value_counts()
+    df["_author_productivity"] = df["author_norm"].map(author_counts).fillna(0).apply(
+        lambda n: "prolific (10+)" if n >= 10 else "moderate (3-9)" if n >= 3 else "single (1-2)"
+    )
 
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
@@ -284,6 +295,22 @@ def shift_share(
     r = _decompose(early, late, "_genre_length", min_texts)
     if r:
         r.decompose_by = "genre_raw x length"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by genre enrichment source
+    r = _decompose(early, late, "_genre_source", min_texts)
+    if r:
+        r.decompose_by = "genre_source"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by author productivity
+    r = _decompose(early, late, "_author_productivity", min_texts)
+    if r:
+        r.decompose_by = "author_productivity"
         r.period_early = period_early
         r.period_late = period_late
         results.append(r)
