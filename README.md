@@ -116,6 +116,39 @@ Generated with `abstraction report-full --compare`.
 
 ## What drove the shift?
 
+### Shift-share decomposition
+
+Which *structural factors* — genre, text length, narrative form, author gender — drove the aggregate trend? A shift-share (Oaxaca-Blinder) decomposition splits the change between two periods into three components: **Composition** (the mix of categories shifted), **Within** (categories internally changed), and **Interaction** (categories that both grew and changed).
+
+#### The rise: C17 (1600-1700) → C18 (1700-1800), +0.091
+
+| Factor | Composition | Within | Interaction | Key finding |
+|--------|:-----------:|:------:|:-----------:|-------------|
+| Genre (raw) | 23% | 17% | 67% | Novel explodes from 3%→63% share; interaction dominates |
+| Text length | 28% | 70% | 2% | All length bins got more abstract; NOT a Simpson's paradox |
+| Genre x length (30K) | 0% | 18% | 89% | Long novels (>30K) drive the rise; short novels were *already* abstract |
+| Epistolary | 9% | 86% | 5% | Both epistolary and non-epistolary rose; not an epistolary artifact |
+| Narrative form (END) | 15% | 90% | -7% | First-person fiction transformed (0.12→0.43); epistolary born abstract |
+| Author gender | 28% | 86% | -14% | Women drove the rise: 20%→47% share, high scores (0.48→0.56) |
+| Author productivity | 8% | 102% | -9% | Evenly distributed; not driven by a few prolific authors |
+| Translation | -1% | 100% | 1% | Irrelevant |
+
+The rise is a complex story: the Novel's compositional takeover interacts with the rise of women writers, the emergence of epistolary fiction, and a transformation of first-person narration from picaresque concreteness to moral-psychological abstraction.
+
+#### The fall: C18 (1700-1800) → C19 (1800-1900), -0.253
+
+| Factor | Composition | Within | Interaction | Key finding |
+|--------|:-----------:|:------:|:-----------:|-------------|
+| Genre (raw) | -44% | -79% | 24% | Novel collapses 63%→11%; "Fiction" takes over at 81%, scoring low |
+| Text length | 6% | -107% | 1% | Every length bin drops; broad-based concretization |
+| Epistolary | -8% | -96% | 4% | Epistolary vanishes (14%→0.6%); but non-epistolary fell equally hard |
+| Narrative form (END) | -16% | -80% | -2% | Epistolary disappearance biggest factor; third-person takes over |
+| Author gender | -2% | -98% | 0% | Both genders decline in lockstep (women 0.56→0.31, men 0.46→0.22) |
+
+The fall is simpler: broad-based concretization across all categories. The key asymmetry: **women drove the rise** (compositional + within), **but the decline was gender-blind**.
+
+### Word-level analyses
+
 Three word-level analyses identify which words are responsible.
 
 ### 1. Contribution decomposition
