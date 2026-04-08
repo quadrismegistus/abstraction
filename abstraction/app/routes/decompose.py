@@ -81,6 +81,69 @@ def _lookup_narrative_form(df, conn):
         return "(unknown)"
 
 
+_GENDER_CORPORA = (
+    "litlab", "ravengarside", "long_arc_prestige", "end",
+    "chicago", "canon_fiction", "clmet", "gildedage",
+)
+
+# Cache gender lookup across requests (static data)
+_gender_cache: dict[str, str] | None = None
+
+
+def _build_gender_cache(conn) -> dict[str, str]:
+    """Build arc_id -> gender map from source corpora via match groups."""
+    import json
+
+    global _gender_cache
+    if _gender_cache is not None:
+        return _gender_cache
+
+    corpus_list = ", ".join(f"'{c}'" for c in _GENDER_CORPORA)
+
+    # Get gender from source corpora meta JSON
+    rows = conn.execute(f"""
+        SELECT _id, meta FROM lltk.texts
+        WHERE corpus IN ({corpus_list})
+          AND (meta LIKE '%gender%' OR meta LIKE '%author_gender%')
+    """).fetchall()
+
+    source_gender = {}
+    for _id, meta in rows:
+        m = json.loads(meta)
+        g = (m.get("author_gender") or m.get("gender") or "").strip().rstrip(".").lower()
+        if g in ("m", "male", "man"):
+            source_gender[_id] = "Male"
+        elif g in ("f", "female", "woman"):
+            source_gender[_id] = "Female"
+
+    # Propagate via match groups
+    mg_rows = conn.execute(f"""
+        SELECT mg1._id AS arc_id, mg2._id AS source_id
+        FROM matchdb.match_groups mg1
+        JOIN matchdb.match_groups mg2 ON mg1.group_id = mg2.group_id
+        WHERE mg2._id IN (
+            SELECT _id FROM lltk.texts WHERE corpus IN ({corpus_list})
+        )
+    """).fetchall()
+
+    gender_map = {}
+    for arc_id, source_id in mg_rows:
+        if arc_id not in gender_map and source_id in source_gender:
+            gender_map[arc_id] = source_gender[source_id]
+
+    _gender_cache = gender_map
+    return gender_map
+
+
+def _lookup_author_gender(df, conn):
+    """Look up author gender for texts via match groups to corpora with gender metadata."""
+    try:
+        gender_map = _build_gender_cache(conn)
+        return df["_id"].map(gender_map).fillna("(unknown)")
+    except Exception:
+        return "(unknown)"
+
+
 def _parse_genre_raw(genre_raw: str | None) -> str:
     """Extract the most salient genre label from genre_raw.
 
@@ -303,6 +366,9 @@ def shift_share(
     # Narrative form from END (Early Novels Database) via match groups
     df["_narrative_form"] = _lookup_narrative_form(df, conn)
 
+    # Author gender from corpora with gender metadata, via match groups
+    df["_author_gender"] = _lookup_author_gender(df, conn)
+
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
     late = df[(df["year"] >= year_late_min) & (df["year"] <= year_late_max)]
@@ -386,6 +452,16 @@ def shift_share(
     r = _decompose(early, late, "_author_productivity", min_texts)
     if r:
         r.decompose_by = "author_productivity"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by author gender (classified texts only)
+    early_g = early[early["_author_gender"] != "(unknown)"]
+    late_g = late[late["_author_gender"] != "(unknown)"]
+    r = _decompose(early_g, late_g, "_author_gender", min_texts)
+    if r:
+        r.decompose_by = "author_gender"
         r.period_early = period_early
         r.period_late = period_late
         results.append(r)

@@ -49,6 +49,7 @@
     'narrative_form (END)': 'By Narrative Form (END)',
     'genre_source': 'By Genre Enrichment Source',
     'author_productivity': 'By Author Productivity',
+    'author_gender': 'By Author Gender',
   };
 
   function decompLabel(key: string): string {
