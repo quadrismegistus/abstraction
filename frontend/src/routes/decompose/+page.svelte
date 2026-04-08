@@ -45,6 +45,8 @@
     'is_translated': 'By Translation Status',
     'text_length': 'By Text Length',
     'genre_raw x length': 'By Genre x Length (30K)',
+    'epistolary': 'By Epistolary Status',
+    'narrative_form (END)': 'By Narrative Form (END)',
     'genre_source': 'By Genre Enrichment Source',
     'author_productivity': 'By Author Productivity',
   };

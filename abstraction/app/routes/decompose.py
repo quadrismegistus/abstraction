@@ -41,6 +41,46 @@ class MultiDecompResult(BaseModel):
     results: list[DecompResult]
 
 
+def _lookup_narrative_form(df, conn):
+    """Look up END narrative_form for texts via match groups.
+
+    Returns a Series with values like 'Epistolary', 'First-person',
+    'Third-person', or '(unknown)' for texts without END matches.
+    """
+    import json
+
+    try:
+        # Get narrative_form from END texts matched to our texts
+        ids = df["_id"].tolist() if "_id" in df.columns else []
+        if not ids:
+            return "(unknown)"
+
+        # Query: arc texts -> match groups -> END texts with narrative_form
+        nf_rows = conn.execute("""
+            SELECT mg1._id AS arc_id, end_t.meta
+            FROM matchdb.match_groups mg1
+            JOIN matchdb.match_groups mg2 ON mg1.group_id = mg2.group_id
+            JOIN lltk.texts end_t ON mg2._id = end_t._id
+            WHERE end_t.corpus = 'end'
+              AND end_t.meta LIKE '%narrative_form%'
+        """).fetchall()
+
+        # Build lookup: arc_id -> primary narrative form
+        nf_map = {}
+        for arc_id, meta in nf_rows:
+            if arc_id in nf_map:
+                continue  # keep first match
+            m = json.loads(meta)
+            nf = m.get("narrative_form", "")
+            primary = nf.split("|")[0].strip() if nf else ""
+            if primary:
+                nf_map[arc_id] = primary
+
+        return df["_id"].map(nf_map).fillna("(unknown)")
+    except Exception:
+        return "(unknown)"
+
+
 def _parse_genre_raw(genre_raw: str | None) -> str:
     """Extract the most salient genre label from genre_raw.
 
@@ -177,8 +217,8 @@ def shift_share(
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, n_words,
-                   genre_enriched_source, author_norm, {col_sql}
+            SELECT _id, year, genre_raw, corpus_name, is_translated, n_words,
+                   genre_enriched_source, author_norm, title, {col_sql}
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -195,8 +235,8 @@ def shift_share(
         df = df.dropna(subset=["_score"])
     else:
         df = conn.execute(f"""
-            SELECT year, genre_raw, corpus_name, is_translated, n_words,
-                   genre_enriched_source, author_norm, "{col}" as _score
+            SELECT _id, year, genre_raw, corpus_name, is_translated, n_words,
+                   genre_enriched_source, author_norm, title, "{col}" as _score
             FROM texts
             WHERE {filter_col} = '{genre}' AND year IS NOT NULL AND "{col}" IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
@@ -245,6 +285,23 @@ def shift_share(
     df["_author_productivity"] = df["author_norm"].map(author_counts).fillna(0).apply(
         lambda n: "prolific (10+)" if n >= 10 else "moderate (3-9)" if n >= 3 else "single (1-2)"
     )
+
+    # Epistolary detection: genre_raw label OR title keywords
+    def _detect_epistolary(row):
+        gr = str(row.get("genre_raw") or "").lower()
+        title = str(row.get("title") or "").lower()
+        if "epistol" in gr or "epistol" in title:
+            return "epistolary"
+        if "letter" in gr:
+            return "epistolary"
+        if "letter" in title and ("novel" in gr or "fiction" in gr or gr == ""):
+            return "epistolary"
+        return "non-epistolary"
+
+    df["_epistolary"] = df.apply(_detect_epistolary, axis=1)
+
+    # Narrative form from END (Early Novels Database) via match groups
+    df["_narrative_form"] = _lookup_narrative_form(df, conn)
 
     # Split into early/late
     early = df[(df["year"] >= year_early_min) & (df["year"] <= year_early_max)]
@@ -295,6 +352,24 @@ def shift_share(
     r = _decompose(early, late, "_genre_length", min_texts)
     if r:
         r.decompose_by = "genre_raw x length"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by epistolary vs non-epistolary
+    r = _decompose(early, late, "_epistolary", min_texts)
+    if r:
+        r.decompose_by = "epistolary"
+        r.period_early = period_early
+        r.period_late = period_late
+        results.append(r)
+
+    # Decompose by narrative form (END-classified texts only)
+    early_nf = early[early["_narrative_form"] != "(unknown)"]
+    late_nf = late[late["_narrative_form"] != "(unknown)"]
+    r = _decompose(early_nf, late_nf, "_narrative_form", min_texts)
+    if r:
+        r.decompose_by = "narrative_form (END)"
         r.period_early = period_early
         r.period_late = period_late
         results.append(r)

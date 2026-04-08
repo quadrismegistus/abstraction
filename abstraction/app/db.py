@@ -21,6 +21,7 @@ from ..config import PATH_DATA, SCORES_DIR
 SCORES_DB_FILENAME = "scores.duckdb"
 SCORES_VERSION = "v8-raw"
 LLTK_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb.duckdb")
+LLTK_MATCHES_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb_matches.duckdb")
 
 _local = threading.local()
 _lltk_snapshot_path = None
@@ -71,6 +72,15 @@ def _build_connection():
         except duckdb.IOException:
             # DB locked by another process — use a snapshot copy
             conn = _attach_lltk_snapshot(conn)
+
+    # Attach matches DB for match group lookups
+    if os.path.exists(LLTK_MATCHES_DB_PATH):
+        try:
+            conn.execute(f"ATTACH '{LLTK_MATCHES_DB_PATH}' AS matchdb (READ_ONLY)")
+        except duckdb.BinderException:
+            pass  # already attached
+        except duckdb.IOException:
+            pass  # locked, skip
 
     # Create joined view: scores + LLTK metadata
     try:
