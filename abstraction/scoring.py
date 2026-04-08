@@ -495,7 +495,8 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    return df[columns]
+    # Reindex to canonical column order, filling missing columns with NaN
+    return df.reindex(columns=columns)
 
 
 def _version_dir(base, version, modernize):

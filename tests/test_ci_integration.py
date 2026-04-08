@@ -12,6 +12,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import abstraction.scoring as _scoring_mod
+
+
+@pytest.fixture(autouse=True)
+def _clear_norms_cache():
+    """Clear the global norms arrays cache and mock spelling modernizer."""
+    _scoring_mod._NORMS_ARRAYS_CACHE = None
+    # Mock get_spelling_modernizer to avoid file access in CI
+    orig = _scoring_mod.get_spelling_modernizer
+    _scoring_mod.get_spelling_modernizer = lambda: {}
+    yield
+    _scoring_mod._NORMS_ARRAYS_CACHE = None
+    _scoring_mod.get_spelling_modernizer = orig
+
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 CORPUS_DIR = os.path.join(FIXTURES, "test_corpus")
 NORMS_PATH = os.path.join(FIXTURES, "norms.csv")

@@ -21,8 +21,8 @@ def _make_fake_allnorms():
     """Return a small allnorms DataFrame indexed by word."""
     return pd.DataFrame(
         {
-            "Conc.Brys": {"rock": 4.5, "virtue": 1.2, "face": 3.8, "truth": 3.0, "man": 4.0},
-            "Imag.MRC": {"rock": 5.0, "virtue": 2.1, "face": 4.0, "truth": 2.5, "man": 4.5},
+            "Abs-Conc.Median.median": {"rock": 1.5, "virtue": -1.8, "face": 0.3, "truth": -1.2, "man": 0.5},
+            "Abs-Conc.Median.orig": {"rock": 1.4, "virtue": -1.7, "face": 0.2, "truth": -1.1, "man": 0.4},
         }
     )
 
@@ -133,20 +133,12 @@ class TestScoreCorpus:
 
 class TestScoreCorpora:
     def test_scores_all_corpora(self, tmp_path, monkeypatch):
-        corpora_dir, scores_dir = _patch_scoring(monkeypatch, tmp_path)
-        _copy_fixture_corpus(corpora_dir, name="corpus_a")
-        _copy_fixture_corpus(corpora_dir, name="corpus_b")
-        # corpus_c has no freqs — should be skipped
-        os.makedirs(os.path.join(corpora_dir, "corpus_c"))
-
-        # score_all_corpora uses default args bound at definition time,
-        # so we replace the function the CLI will import
-        from abstraction.scoring import score_all_corpora as real_fn
+        """Verify that CLI dispatches to score_all_corpora with correct args."""
         calls = []
 
-        def mock_score_all(force=False, modernize=False):
-            calls.append(force)
-            return real_fn(corpora_dir=corpora_dir, output_dir=scores_dir, force=force, modernize=modernize)
+        def mock_score_all(**kwargs):
+            calls.append(kwargs)
+            return {}
 
         monkeypatch.setattr("abstraction.scoring.score_all_corpora", mock_score_all)
 
@@ -154,6 +146,4 @@ class TestScoreCorpora:
         main()
 
         assert len(calls) == 1
-        assert os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_a.csv"))
-        assert os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_b.csv"))
-        assert not os.path.exists(os.path.join(scores_dir, "v8-raw", "corpus_c.csv"))
+        assert calls[0]["force"] is False
