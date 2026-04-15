@@ -308,12 +308,14 @@ def compute_vec2vec_dists(x2vec, y2vec):
 # Generate vector-based norms
 # ---------------------------------------------------------------------------
 
-def _gen_vecnorms_for_model(pathd, words=None):
+def _gen_vecnorms_for_model(pathd, words=None, contrasts=None):
     model = load_model(pathd["path"], pathd.get("path_vocab"), min_count=MODEL_MIN_COUNT)
     if model is None:
         return []
     kv = model.wv if hasattr(model, "wv") else model
-    field2vec = get_fieldvecs_in_model(model, get_origcontrasts())
+    if contrasts is None:
+        contrasts = get_origcontrasts()
+    field2vec = get_fieldvecs_in_model(model, contrasts)
     if words is None:
         word2vec = {w: kv[w] for w in kv.index_to_key}
     else:
@@ -331,13 +333,22 @@ def _gen_vecnorms_for_model(pathd, words=None):
     return norms
 
 
-def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
+def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None,
+                 contrasts=None, output_path=None, regenerate_allnorms=True):
     """Generate vector-based word norms aggregated by time period.
 
     Parameters
     ----------
     model_dir : str, optional
         Directory containing trained models. If None, uses PATH_MODELS.
+    contrasts : list, optional
+        Contrast word sets from get_origcontrasts() (English, default) or
+        get_origcontrasts_fr() (French). If None, uses English.
+    output_path : str, optional
+        Path to write the vecnorms pickle. If None, uses PATH_VECNORMS.
+    regenerate_allnorms : bool
+        If True, regenerate allnorms.pkl.gz after writing vecnorms. Skip for
+        non-English runs that shouldn't touch the English allnorms file.
     """
     def periodize(y):
         y = int(y)
@@ -370,7 +381,7 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
                 model_i += 1
                 print(f"  [{model_i}/{total_models}] {period} / {corpus} / {pathd.get('run', 'single')} "
                       f"...", end=" ", flush=True)
-                model_rows = _gen_vecnorms_for_model(pathd)
+                model_rows = _gen_vecnorms_for_model(pathd, contrasts=contrasts)
                 rows.extend(model_rows)
                 n_words = len(set(r["word"] for r in model_rows)) if model_rows else 0
                 print(f"{n_words:,} words scored")
@@ -393,12 +404,13 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None):
 
     rows = [{"word": w, **fields} for w, fields in word2field2z.items()]
     df = pd.DataFrame(rows).set_index("word")
-    os.makedirs(os.path.dirname(PATH_VECNORMS), exist_ok=True)
-    df.to_pickle(PATH_VECNORMS)
-    print(f"\nWrote {len(df):,} words × {len(df.columns)} columns to {PATH_VECNORMS}")
+    out = output_path or PATH_VECNORMS
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    df.to_pickle(out)
+    print(f"\nWrote {len(df):,} words × {len(df.columns)} columns to {out}")
 
-    # Regenerate allnorms (orig + vec combined)
-    from .norms import get_allnorms
-    print("Regenerating allnorms...")
-    allnorms = get_allnorms(force=True, remove_stopwords=False)
-    print(f"Wrote {len(allnorms):,} words × {len(allnorms.columns)} columns to allnorms")
+    if regenerate_allnorms:
+        from .norms import get_allnorms
+        print("Regenerating allnorms...")
+        allnorms = get_allnorms(force=True, remove_stopwords=False)
+        print(f"Wrote {len(allnorms):,} words × {len(allnorms.columns)} columns to allnorms")

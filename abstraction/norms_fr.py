@@ -12,9 +12,13 @@ import os
 import numpy as np
 import pandas as pd
 
+from collections import defaultdict
+
 from .config import (
-    PATH_BONIN, PATH_DESROCHERS, PATH_NORMS_FR, ZCUT,
+    PATH_BONIN, PATH_DESROCHERS, PATH_NORMS_FR,
+    PATH_VECNORMS_FR, PATH_ALLNORMS_FR, ZCUT,
 )
+from .utils import read_df, save_df
 from .norms import _add_series_to_norms, get_contrasts, classify_word
 from .utils import zfy
 
@@ -107,12 +111,68 @@ def classify_word_fr(z, zcut=ZCUT):
 # Allnorms-shaped output (for score_corpus_freqs)
 # ---------------------------------------------------------------------------
 
-def get_allnorms_fr(remove_stopwords=True):
+def get_vecnorms_fr(remove_stopwords=True):
+    """Return French vector-based norms, with period-median columns added."""
+    import pandas as pd
+    df = pd.read_pickle(PATH_VECNORMS_FR)
+    if remove_stopwords:
+        df = df[~df.index.isin(get_nltk_stopwords_fr())]
+    colgroups = defaultdict(set)
+    for col in df.columns:
+        if col.count(".") != 2:
+            continue
+        contrast, source, _period = col.split(".")
+        colgroups[f"{contrast}.{source}"] |= {col}
+    for group, cols in colgroups.items():
+        df[f"{group}.median"] = df[list(cols)].median(axis=1)
+    return df
+
+
+def get_allnorms_fr(remove_stopwords=True, force=False):
     """Return French norms in the same schema as `get_allnorms()`.
 
-    Columns have a '.orig' suffix so scoring's _pct_*_orig logic engages.
-    No vector-norm periods (C16–C21) — add once French Word2Vec models exist.
+    Columns have a '.orig' suffix for orig norms and '.{period}' for vec norms.
+    If no vec norms exist on disk, returns orig-only.
     """
-    df = get_orignorms_fr(remove_stopwords=remove_stopwords)
-    df.columns = [c + ".orig" for c in df.columns]
-    return df
+    import os
+    import pandas as pd
+
+    if not force and os.path.exists(PATH_ALLNORMS_FR):
+        df = read_df(PATH_ALLNORMS_FR)
+        if remove_stopwords:
+            df = df[~df.index.isin(get_nltk_stopwords_fr())]
+        return df
+
+    orig = get_orignorms_fr(remove_stopwords=False)
+    orig.columns = [c + ".orig" for c in orig.columns]
+
+    if os.path.exists(PATH_VECNORMS_FR):
+        vec = get_vecnorms_fr(remove_stopwords=False)
+        combined = vec.join(orig, how="outer")
+    else:
+        combined = orig
+
+    save_df(combined, PATH_ALLNORMS_FR)
+    if remove_stopwords:
+        combined = combined[~combined.index.isin(get_nltk_stopwords_fr())]
+    return combined
+
+
+def gen_vecnorms_fr(model_dir=None, bin_year_by=50, num_proc=1):
+    """Generate French vecnorms from trained French Word2Vec models.
+
+    Uses `get_origcontrasts_fr()` for contrast word sets. Writes to
+    PATH_VECNORMS_FR. Does NOT touch English allnorms.
+    """
+    from .config import PATH_MODELS_FR
+    from .models import gen_vecnorms
+    gen_vecnorms(
+        bin_year_by=bin_year_by,
+        num_proc=num_proc,
+        model_dir=model_dir or PATH_MODELS_FR,
+        contrasts=get_origcontrasts_fr(),
+        output_path=PATH_VECNORMS_FR,
+        regenerate_allnorms=False,
+    )
+    # Regenerate French allnorms
+    get_allnorms_fr(force=True)
