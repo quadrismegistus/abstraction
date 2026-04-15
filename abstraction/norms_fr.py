@@ -101,3 +101,18 @@ def get_origcontrasts_fr(remove_stopwords=True):
 
 def classify_word_fr(z, zcut=ZCUT):
     return classify_word(z, zcut=zcut)
+
+
+# ---------------------------------------------------------------------------
+# Allnorms-shaped output (for score_corpus_freqs)
+# ---------------------------------------------------------------------------
+
+def get_allnorms_fr(remove_stopwords=True):
+    """Return French norms in the same schema as `get_allnorms()`.
+
+    Columns have a '.orig' suffix so scoring's _pct_*_orig logic engages.
+    No vector-norm periods (C16–C21) — add once French Word2Vec models exist.
+    """
+    df = get_orignorms_fr(remove_stopwords=remove_stopwords)
+    df.columns = [c + ".orig" for c in df.columns]
+    return df
