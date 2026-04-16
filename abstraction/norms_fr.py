@@ -158,7 +158,7 @@ def get_allnorms_fr(remove_stopwords=True, force=False):
     return combined
 
 
-def gen_vecnorms_fr(model_dir=None, bin_year_by=50, num_proc=1):
+def gen_vecnorms_fr(model_dir=None, bin_year_by=100, num_proc=1):
     """Generate French vecnorms from trained French Word2Vec models.
 
     Uses `get_origcontrasts_fr()` for contrast word sets. Writes to
