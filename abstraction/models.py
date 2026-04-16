@@ -38,7 +38,14 @@ def yield_sentences_from_text(txt, min_len=10):
             buf = []
 
 
-def save_skipgrams_from_paths(paths, ofn, min_len=10):
+def yield_chunks_from_text(txt, chunk_size=30):
+    """Yield fixed-size word chunks without sentence tokenization (much faster)."""
+    words = [w for w in tokenize(txt.lower()) if w and w[0].isalpha()]
+    for i in range(0, len(words) - chunk_size + 1, chunk_size):
+        yield words[i:i + chunk_size]
+
+
+def save_skipgrams_from_paths(paths, ofn, min_len=10, fast=False):
     os.makedirs(os.path.dirname(ofn), exist_ok=True)
     opener = gzip.open(ofn, "wt") if ofn.endswith(".gz") else open(ofn, "w")
     with opener as f:
@@ -47,17 +54,22 @@ def save_skipgrams_from_paths(paths, ofn, min_len=10):
                 continue
             with open(path, encoding="utf-8", errors="ignore") as tf:
                 txt = tf.read()
-            for sent in yield_sentences_from_text(txt, min_len=min_len):
-                f.write(" ".join(sent) + "\n")
+            if fast:
+                for chunk in yield_chunks_from_text(txt):
+                    f.write(" ".join(chunk) + "\n")
+            else:
+                for sent in yield_sentences_from_text(txt, min_len=min_len):
+                    f.write(" ".join(sent) + "\n")
 
 
 def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
                          min_year=None, max_year=None, num_proc=1, force=False,
-                         output_dir=None):
+                         output_dir=None, fast=False):
     """Generate skipgram files for each time period in a corpus."""
     corpus = load_corpus(corpus_name)
     oroot = os.path.join(output_dir or PATH_MODELS, corpus.id)
     df = corpus.metadata.copy()
+    df = df[df["year"].notna()]
     df["period"] = df["year"].apply(
         lambda y: f"{int(y) // period_len * period_len}-{int(y) // period_len * period_len + period_len}"
     )
@@ -75,7 +87,7 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
         objs.append((paths, ofn))
 
     def _do(obj):
-        save_skipgrams_from_paths(obj[0], obj[1])
+        save_skipgrams_from_paths(obj[0], obj[1], fast=fast)
 
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 

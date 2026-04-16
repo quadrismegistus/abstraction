@@ -226,6 +226,8 @@ def cmd_train_skipgrams(args):
     print(f"Generating skipgrams for {args.corpus} (period_len={args.period_len})")
     if output_dir:
         print(f"  output_dir={output_dir}")
+    if args.fast:
+        print("  fast mode (no sentence tokenization)")
     gen_skipgrams_corpus(
         args.corpus,
         period_len=args.period_len,
@@ -234,6 +236,7 @@ def cmd_train_skipgrams(args):
         num_proc=args.workers,
         force=args.force,
         output_dir=output_dir,
+        fast=args.fast,
     )
     print("Done")
 
@@ -427,6 +430,7 @@ def main():
     p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
     p.add_argument("--force", action="store_true", help="Regenerate even if files exist")
     p.add_argument("--output-dir", default=None, help="Output directory (default: data/models/)")
+    p.add_argument("--fast", action="store_true", help="Skip sentence tokenization (fixed-size chunks, 10-50x faster)")
 
     # gen-vecnorms: generate vector-based word norms from trained models
     p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")
