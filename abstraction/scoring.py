@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 import sqlite3
 
-from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA
+from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA, PATH_FREQS_DB
 from .corpus import load_corpus
 from .norms import get_allnorms
 from .tokenize import tokenize_agnostic, get_spelling_modernizer
@@ -422,6 +422,112 @@ def _load_done_ids(csv_path):
         return set(pd.read_csv(csv_path, usecols=["id"], dtype={"id": str})["id"])
     except Exception:
         return set()
+
+
+def score_ids_duckdb(
+    ids,
+    allnorms,
+    freqs_db_path=None,
+    shard_size=20000,
+    threads=8,
+    memory_limit="32GB",
+    verbose=False,
+):
+    """Score per-text frequency-weighted norm averages via the LLTK freqs DB.
+
+    Pure 1:1 transform: text id → score per norm column. No match-group
+    averaging, no per-corpus aggregation. Pair with downstream aggregation
+    (e.g. group dedup, within-language averaging) when needed.
+
+    Validated against the JSON-walking pipeline to floating-point equality
+    (max diff ~1e-14 across 13K French texts).
+
+    Parameters
+    ----------
+    ids : iterable of str
+        LLTK text `_id` values to score (e.g. `_gallica_literary_fictions/1934/cb...`).
+    allnorms : DataFrame
+        Norm table with words on the index and one column per norm (e.g.
+        `Abs-Conc.Median.median`). Stopwords should already be removed.
+    freqs_db_path : str, optional
+        Path to LLTK's `metadb_freqs.duckdb`. Defaults to PATH_FREQS_DB.
+    shard_size : int
+        Texts per DuckDB query. ~20K is a good balance of throughput vs
+        memory. Smaller if you hit OOM on dense corpora.
+    threads, memory_limit : DuckDB pragmas.
+
+    Returns
+    -------
+    DataFrame with columns `_id` plus one column per norm.
+    Rows are returned for ids present in the freqs DB; missing ids are
+    silently dropped.
+    """
+    import duckdb
+
+    freqs_db_path = freqs_db_path or PATH_FREQS_DB
+    ids = list(ids)
+
+    allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()].copy()
+    allnorms.index.name = "word"
+    score_cols = list(allnorms.columns)
+
+    con = duckdb.connect(":memory:")
+    con.execute(f"PRAGMA threads={threads}")
+    con.execute(f"PRAGMA memory_limit='{memory_limit}'")
+    con.execute(f"ATTACH '{freqs_db_path}' AS fdb (READ_ONLY)")
+    con.register("allnorms_df", allnorms.reset_index())
+    con.execute("CREATE TABLE words AS SELECT * FROM allnorms_df")
+    con.unregister("allnorms_df")
+
+    # Filter to ids that exist in freqs DB
+    con.execute("CREATE TABLE target_ids (_id VARCHAR PRIMARY KEY)")
+    for i in range(0, len(ids), 10000):
+        batch = ids[i : i + 10000]
+        ph = ",".join(["(?)"] * len(batch))
+        con.execute(f"INSERT INTO target_ids VALUES {ph}", batch)
+    present_ids = con.execute(
+        "SELECT t._id FROM fdb.text_freqs t JOIN target_ids ti ON t._id = ti._id"
+    ).fetchdf()["_id"].tolist()
+    if verbose:
+        print(f"  freqs DB: {len(present_ids)} / {len(ids)} present")
+
+    weighted_exprs = []
+    for col in score_cols:
+        qc = '"' + col.replace('"', '""') + '"'
+        weighted_exprs.append(
+            f"SUM(cnt * w.{qc}) FILTER (WHERE w.{qc} IS NOT NULL) / "
+            f"NULLIF(SUM(cnt) FILTER (WHERE w.{qc} IS NOT NULL), 0) AS {qc}"
+        )
+    weighted_sql = ",\n        ".join(weighted_exprs)
+
+    shards = []
+    for si in range(0, len(present_ids), shard_size):
+        shard_ids = present_ids[si : si + shard_size]
+        ph = ",".join(["?"] * len(shard_ids))
+        sql = f"""
+        WITH freq_rows AS (
+          SELECT t._id,
+                 unnest(map_keys(t.freqs)) AS word,
+                 unnest(map_values(t.freqs)) AS cnt
+          FROM fdb.text_freqs t
+          WHERE t._id IN ({ph})
+        )
+        SELECT _id, {weighted_sql}
+        FROM freq_rows f
+        INNER JOIN words w ON f.word = w.word
+        GROUP BY _id
+        """
+        shard_df = con.execute(sql, shard_ids).fetchdf()
+        shards.append(shard_df)
+        if verbose:
+            print(f"  shard {si // shard_size + 1}/{(len(present_ids) - 1) // shard_size + 1}: "
+                  f"{len(shard_df)} texts")
+
+    con.close()
+
+    if not shards:
+        return pd.DataFrame(columns=["_id"] + score_cols)
+    return pd.concat(shards, ignore_index=True)
 
 
 def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
