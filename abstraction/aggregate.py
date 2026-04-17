@@ -80,7 +80,10 @@ def get_arc_scores(
     arc_corpus = lltk.load(arc)
     if arc_corpus is None:
         raise ValueError(f"LLTK corpus {arc!r} not found")
-    rep_ids = sorted(set(arc_corpus.load_metadata()["_id"]))
+    # Use metadata() (cached on the corpus) rather than load_metadata() (bypasses
+    # cache, does the full rebuild every call). Since LLTK's CuratedCorpus.
+    # load_metadata rewrite (2026-04-17) this is ~1.5s first call + instant after.
+    rep_ids = sorted(set(arc_corpus.metadata()["_id"]))
 
     # cross_lang_arc parameter kept for backwards compat but ignored.
     # The per-language scores table already prevents cross-language mixing
