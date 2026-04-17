@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, globalLoading, corporaList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, globalLoading, corporaList, dedup } from '$lib/stores';
   import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
   import type { GenreArc, AggGenreArc } from '$lib/types';
 
@@ -87,6 +87,7 @@
     if ($translatedFilter) p.is_translated = $translatedFilter;
     if ($minTexts > 1) p.min_texts = String($minTexts);
     if ($corpusCorrected) p.corpus_corrected = 'true';
+    if ($dedup !== 'within_lang_group') p.dedup = $dedup;
     return p;
   }
 
@@ -536,7 +537,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $corpusCorrected; $loessSpan; $adjustModel; $binSize; $splitBy; $translatedFilter; $minTexts;
+    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $corpusCorrected; $loessSpan; $adjustModel; $binSize; $splitBy; $translatedFilter; $minTexts; $dedup;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();
@@ -557,6 +558,15 @@
     <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
     <button class:active={showRawTrend} onclick={() => showRawTrend = !showRawTrend}>
       {$corpusAdjusted ? 'Show raw' : 'Show adjusted'}
+    </button>
+    <button
+      class:active={$dedup === 'rep_only'}
+      onclick={() => $dedup = $dedup === 'rep_only' ? 'within_lang_group' : 'rep_only'}
+      title={$dedup === 'rep_only'
+        ? 'Each rep shows its own raw per-text score (click to switch to match-group averaging)'
+        : 'Each rep shows the mean across all same-language match-group members (click to switch to raw per-text scores)'}
+    >
+      {$dedup === 'rep_only' ? 'Rep only' : 'Group avg'}
     </button>
     <button onclick={() => {
       if (Plotly && plotDiv) {

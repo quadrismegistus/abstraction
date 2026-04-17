@@ -15,6 +15,19 @@ router = APIRouter()
 DEFAULT_COL = "Abs-Conc.Median.median"
 
 
+def _resolve_dedup(dedup: str) -> tuple[str, str]:
+    """Return (texts_view, scores_table) for the requested dedup mode.
+
+    - within_lang_group (default): each rep's score is the mean across all
+      match-group members in the same language. Uses the `texts` view.
+    - rep_only: each rep's score is its own raw per-text score; no averaging
+      across match group members. Uses the `texts_rep` view.
+    """
+    if dedup == "rep_only":
+        return "texts_rep", "scores_rep"
+    return "texts", "scores"
+
+
 def _build_where(genre: list[str], corpus: list[str],
                  year_min: float | None, year_max: float | None,
                  col: str, genre_raw: str | None = None):
@@ -60,15 +73,17 @@ def arc_aggregated(
     year_min: float | None = None,
     year_max: float | None = None,
     bin_size: int = 10,
+    dedup: str = "within_lang_group",
 ):
     """Return decade-binned summary statistics for the arc plot."""
+    view, _ = _resolve_dedup(dedup)
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
 
     rows = conn.execute(f"""
         SELECT CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
                "{col}", year
-        FROM texts
+        FROM {view}
         WHERE {where}
         ORDER BY decade
     """, params).fetchall()
@@ -105,8 +120,10 @@ def arc_by_corpus(
     year_min: float | None = None,
     year_max: float | None = None,
     bin_size: int = 10,
+    dedup: str = "within_lang_group",
 ):
     """Return per-corpus decade-binned means for the macro arc plot."""
+    view, _ = _resolve_dedup(dedup)
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
 
@@ -114,7 +131,7 @@ def arc_by_corpus(
         SELECT corpus_name, genre,
                CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
                "{col}"
-        FROM texts
+        FROM {view}
         WHERE {where}
         ORDER BY corpus_name, decade
     """, params).fetchall()
@@ -170,6 +187,7 @@ def arc_texts(
     page: int = 0,
     page_size: int = 5000,
     period_matched: bool = False,
+    dedup: str = "within_lang_group",
 ):
     """Return paginated scored texts for scatter plot overlay."""
     import pandas as pd
@@ -178,11 +196,12 @@ def arc_texts(
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
+    view, scores_table = _resolve_dedup(dedup)
     conn = get_connection()
 
     if period_matched:
         # Load all per-century columns for this source
-        score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+        score_cols = [r[0] for r in conn.execute(f"DESCRIBE {scores_table}").fetchall()
                       if r[0].startswith(f"Abs-Conc.{source}.")]
         col_sql = ", ".join(f'"{c}"' for c in score_cols)
 
@@ -191,12 +210,12 @@ def arc_texts(
         where = where.replace(f'"{score_cols[0]}" IS NOT NULL', "1=1") if score_cols else where
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM texts WHERE {where}", params
+            f"SELECT COUNT(*) FROM {view} WHERE {where}", params
         ).fetchone()[0]
 
         # Check if version columns exist in scores table (new pipeline has
-        # _n_versions but not _score_sd; legacy CSVs had both)
-        score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
+        # _n_versions but not _score_sd; legacy CSVs had both; rep_only has neither)
+        score_table_cols = {r[0] for r in conn.execute(f"DESCRIBE {scores_table}").fetchall()}
         has_versions = "_n_versions" in score_table_cols
         has_score_sd = "_score_sd" in score_table_cols
         version_cols = []
@@ -208,7 +227,7 @@ def arc_texts(
 
         df = conn.execute(f"""
             SELECT _id, corpus_name, year, author, title, genre, genre_raw, genre_enriched_source, is_translated{version_sql}, {col_sql}
-            FROM texts
+            FROM {view}
             WHERE {where}
             ORDER BY year
             LIMIT {page_size} OFFSET {page * page_size}
@@ -234,7 +253,7 @@ def arc_texts(
     else:
         where, params = _build_where(genre, corpus, year_min, year_max, col, genre_raw=genre_raw)
 
-        score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
+        score_table_cols = {r[0] for r in conn.execute(f"DESCRIBE {scores_table}").fetchall()}
         has_versions = "_n_versions" in score_table_cols
         has_score_sd = "_score_sd" in score_table_cols
         version_cols = []
@@ -245,12 +264,12 @@ def arc_texts(
         version_sql = (", " + ", ".join(version_cols)) if version_cols else ""
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM texts WHERE {where}", params
+            f"SELECT COUNT(*) FROM {view} WHERE {where}", params
         ).fetchone()[0]
 
         rows = conn.execute(f"""
             SELECT _id, corpus_name, year, author, title, genre, genre_raw, genre_enriched_source, is_translated, "{col}"{version_sql}
-            FROM texts
+            FROM {view}
             WHERE {where}
             ORDER BY year
             LIMIT {page_size} OFFSET {page * page_size}
@@ -288,6 +307,7 @@ def arc_aggregate(
     is_translated: str | None = None,
     min_texts: int = 1,
     corpus_corrected: bool = False,
+    dedup: str = "within_lang_group",
 ):
     """Aggregate arc: simple mean per year bin across ALL texts (no corpus weighting).
 
@@ -308,6 +328,7 @@ def arc_aggregate(
         from ...corpus_correction import load_corpus_bias
         corpus_bias = load_corpus_bias()
 
+    view, scores_table = _resolve_dedup(dedup)
     conn = get_connection()
 
     corpus_filter = ""
@@ -341,12 +362,12 @@ def arc_aggregate(
         filter_col = "arc_corpus" if is_arc else "genre"
 
         if period_matched:
-            score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+            score_cols = [r[0] for r in conn.execute(f"DESCRIBE {scores_table}").fetchall()
                           if r[0].startswith(f"Abs-Conc.{source}.")]
             col_sql = ", ".join(f'"{c}"' for c in score_cols)
             df = conn.execute(f"""
                 SELECT year{extra_cols}, {col_sql}
-                FROM texts
+                FROM {view}
                 WHERE {filter_col} = '{g}' AND year IS NOT NULL
                   AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
             """).fetchdf()
@@ -360,7 +381,7 @@ def arc_aggregate(
         else:
             df = conn.execute(f"""
                 SELECT year{extra_cols}, "{col}" as _score
-                FROM texts
+                FROM {view}
                 WHERE {filter_col} = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
                   AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
             """).fetchdf()
@@ -504,6 +525,7 @@ def arc_by_genre(
     is_translated: str | None = None,
     corpus_corrected: bool = False,
     min_texts: int = 1,
+    dedup: str = "within_lang_group",
 ):
     """Return corpus-adjusted decade bins + LOESS per arc corpus.
 
@@ -516,6 +538,7 @@ def arc_by_genre(
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
+    view, scores_table = _resolve_dedup(dedup)
     conn = get_connection()
 
     # Build source corpus filter
@@ -538,13 +561,13 @@ def arc_by_genre(
         is_arc = g.startswith("arc_")
 
         if period_matched:
-            score_cols = [r[0] for r in conn.execute("DESCRIBE scores").fetchall()
+            score_cols = [r[0] for r in conn.execute(f"DESCRIBE {scores_table}").fetchall()
                           if r[0].startswith(f"Abs-Conc.{source}.")]
             col_sql = ", ".join(f'"{c}"' for c in score_cols)
             if is_arc:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, arc_corpus, {col_sql}
-                    FROM texts
+                    FROM {view}
                     WHERE arc_corpus = '{g}'
                       AND year IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
@@ -552,7 +575,7 @@ def arc_by_genre(
             else:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, genre, {col_sql}
-                    FROM texts
+                    FROM {view}
                     WHERE genre = '{g}'
                       AND year IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
@@ -561,7 +584,7 @@ def arc_by_genre(
             if is_arc:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, arc_corpus, "{col}"
-                    FROM texts
+                    FROM {view}
                     WHERE arc_corpus = '{g}'
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
@@ -569,7 +592,7 @@ def arc_by_genre(
             else:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, genre, "{col}"
-                    FROM texts
+                    FROM {view}
                     WHERE genre = '{g}'
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}

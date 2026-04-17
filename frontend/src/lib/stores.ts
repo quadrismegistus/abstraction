@@ -17,6 +17,7 @@ export const splitBy = writable('');
 export const translatedFilter = writable('');  // '' = all, 'true' = only translated, 'false' = only originals
 export const minTexts = writable(1);  // minimum texts per bin point
 export const corpusCorrected = writable(true);  // match-group-based corpus bias correction
+export const dedup = writable<'within_lang_group' | 'rep_only'>('within_lang_group');  // match-group score aggregation
 
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);

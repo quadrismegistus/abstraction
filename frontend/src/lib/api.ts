@@ -33,6 +33,7 @@ export const fetchGenres = () => fetchJson<string[]>('/meta/genres');
 export function fetchArcAggregated(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string; bin_size?: string;
+  dedup?: string;
 }) {
   return fetchJson<ArcAggregated>('/arc/aggregated', params);
 }
@@ -42,6 +43,7 @@ export function fetchArcAggregate(params: {
   year_min?: string; year_max?: string;
   period_matched?: string; loess_span?: string; bin_size?: string;
   split_by?: string; is_translated?: string;
+  dedup?: string;
 }) {
   return fetchJson<AggGenreArc[]>('/arc/aggregate', params);
 }
@@ -51,6 +53,7 @@ export function fetchArcByGenre(params: {
   year_min?: string; year_max?: string;
   period_matched?: string; corpus_adjusted?: string; loess_span?: string; model?: string; bin_size?: string;
   is_translated?: string;
+  dedup?: string;
 }) {
   return fetchJson<GenreArc[]>('/arc/by-genre', params);
 }
@@ -58,6 +61,7 @@ export function fetchArcByGenre(params: {
 export function fetchArcByCorpus(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string; bin_size?: string;
+  dedup?: string;
 }) {
   return fetchJson<CorpusArc[]>('/arc/by-corpus', params);
 }
@@ -68,6 +72,7 @@ export function fetchArcTexts(params: {
   genre_raw?: string;
   page?: string; page_size?: string;
   period_matched?: string;
+  dedup?: string;
 }) {
   return fetchJson<ArcTexts>('/arc/texts', params);
 }
