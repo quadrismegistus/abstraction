@@ -194,10 +194,17 @@ def arc_texts(
             f"SELECT COUNT(*) FROM texts WHERE {where}", params
         ).fetchone()[0]
 
-        # Check if version columns exist in scores table
+        # Check if version columns exist in scores table (new pipeline has
+        # _n_versions but not _score_sd; legacy CSVs had both)
         score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
         has_versions = "_n_versions" in score_table_cols
-        version_sql = ', "_n_versions", "_score_sd"' if has_versions else ""
+        has_score_sd = "_score_sd" in score_table_cols
+        version_cols = []
+        if has_versions:
+            version_cols.append('"_n_versions"')
+        if has_score_sd:
+            version_cols.append('"_score_sd"')
+        version_sql = (", " + ", ".join(version_cols)) if version_cols else ""
 
         df = conn.execute(f"""
             SELECT _id, corpus_name, year, author, title, genre, genre_raw, genre_enriched_source, is_translated{version_sql}, {col_sql}
@@ -218,7 +225,7 @@ def arc_texts(
                     is_translated=bool(row["is_translated"]) if pd.notna(row.get("is_translated")) else None,
                     score=row.get("period_score"),
                     n_versions=int(row["_n_versions"]) if has_versions and pd.notna(row.get("_n_versions")) else None,
-                    score_sd=float(row["_score_sd"]) if has_versions and pd.notna(row.get("_score_sd")) else None,
+                    score_sd=float(row["_score_sd"]) if has_score_sd and pd.notna(row.get("_score_sd")) else None,
                 )
                 for _, row in df.iterrows()
             ]
@@ -229,7 +236,13 @@ def arc_texts(
 
         score_table_cols = {r[0] for r in conn.execute("DESCRIBE scores").fetchall()}
         has_versions = "_n_versions" in score_table_cols
-        version_sql = ', "_n_versions", "_score_sd"' if has_versions else ""
+        has_score_sd = "_score_sd" in score_table_cols
+        version_cols = []
+        if has_versions:
+            version_cols.append('"_n_versions"')
+        if has_score_sd:
+            version_cols.append('"_score_sd"')
+        version_sql = (", " + ", ".join(version_cols)) if version_cols else ""
 
         total = conn.execute(
             f"SELECT COUNT(*) FROM texts WHERE {where}", params
@@ -243,13 +256,16 @@ def arc_texts(
             LIMIT {page_size} OFFSET {page * page_size}
         """, params).fetchall()
 
+        # Map version cols by index — order matches SELECT's version_cols order
+        n_versions_idx = 10 if has_versions else None
+        score_sd_idx = 10 + (1 if has_versions else 0) if has_score_sd else None
         texts = [
             ArcText(
                 id=r[0], corpus=r[1], year=r[2],
                 author=r[3], title=r[4], genre=r[5], genre_raw=r[6], genre_enriched_source=r[7],
                 is_translated=r[8], score=r[9],
-                n_versions=r[10] if has_versions and len(r) > 10 else None,
-                score_sd=r[11] if has_versions and len(r) > 11 else None,
+                n_versions=r[n_versions_idx] if n_versions_idx is not None else None,
+                score_sd=r[score_sd_idx] if score_sd_idx is not None else None,
             )
             for r in rows
         ]
