@@ -127,7 +127,11 @@ def _build_connection():
                 CREATE OR REPLACE TEMP VIEW {view_name} AS
                 SELECT
                     s._id,
-                    s.source_corpus AS corpus_name,
+                    -- Per-rep source corpus from LLTK (ecco, chadwyck, ...).
+                    -- Falls back to the arc-level label stored in the scores
+                    -- table if LLTK doesn't have a match (shouldn't happen
+                    -- for any rep we scored, but safe).
+                    COALESCE(m.corpus, s.source_corpus) AS corpus_name,
                     s.arc_corpus,
                     m.title,
                     m.author,

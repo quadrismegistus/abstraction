@@ -325,8 +325,8 @@ def arc_aggregate(
     # Load corpus bias coefficients if requested
     corpus_bias = None
     if corpus_corrected:
-        from ...corpus_correction import load_corpus_bias
-        corpus_bias = load_corpus_bias()
+        from ...corpus_correction import load_all_corpus_bias
+        corpus_bias = load_all_corpus_bias()
 
     view, scores_table = _resolve_dedup(dedup)
     conn = get_connection()
@@ -630,8 +630,8 @@ def arc_by_genre(
         # Load corpus bias for match-group-based correction
         cb = None
         if corpus_corrected:
-            from ...corpus_correction import load_corpus_bias
-            cb = load_corpus_bias()
+            from ...corpus_correction import load_all_corpus_bias
+            cb = load_all_corpus_bias()
 
         adj = adjust_scores(
             gdf, score_col=score_col, min_year=year_min, max_year=year_max,

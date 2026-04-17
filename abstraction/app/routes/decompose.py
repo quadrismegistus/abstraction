@@ -313,8 +313,8 @@ def shift_share(
 
     # Apply corpus bias correction before sign flip
     if corpus_corrected:
-        from ...corpus_correction import load_corpus_bias
-        bias = load_corpus_bias()
+        from ...corpus_correction import load_all_corpus_bias
+        bias = load_all_corpus_bias()
         if bias:
             coefficients = bias.get("coefficients", {})
             df["_score"] = df["_score"] - df["corpus_name"].map(coefficients).fillna(0.0)

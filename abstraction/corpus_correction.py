@@ -261,6 +261,43 @@ def load_corpus_bias(path=None):
         return json.load(f)
 
 
+# Language-specific coefficient files. Each is calibrated against its own
+# reference corpus (EN → ecco_tcp, FR → gallica_literary_fictions), so
+# corrections are per-language. Since corpus names don't overlap across
+# languages, a merged dict is safe for heterogeneous queries.
+_LANG_BIAS_FILES = {
+    "en": "corpus_bias_coefficients.json",
+    "fr": "corpus_bias_coefficients_fr.json",
+    "de": "corpus_bias_coefficients_de.json",
+}
+
+
+def load_all_corpus_bias():
+    """Load and merge per-language corpus bias coefficients.
+
+    Returns a dict shaped like the single-language version but containing
+    coefficients from all available languages. Used by the web app to
+    apply per-text correction regardless of which language arc a text
+    belongs to (arc_fiction reps correct against English coeffs, arc_fiction_fr
+    against French, etc. — one unified lookup since corpus names don't collide).
+    """
+    merged = {"coefficients": {}, "se": {}, "_sources": {}}
+    for lang, fn in _LANG_BIAS_FILES.items():
+        p = os.path.join(SCORES_DIR, fn)
+        if not os.path.exists(p):
+            continue
+        with open(p) as f:
+            b = json.load(f)
+        coeffs = b.get("coefficients", {})
+        merged["coefficients"].update(coeffs)
+        merged["se"].update(b.get("se", {}))
+        for corpus_name in coeffs:
+            merged["_sources"][corpus_name] = lang
+    if not merged["coefficients"]:
+        return None
+    return merged
+
+
 def correct_scores_df(df, score_col=DEFAULT_SCORE_COL, corpus_col="corpus_name",
                       bias=None):
     """Subtract corpus bias from scores in a DataFrame.
