@@ -551,6 +551,147 @@ def score_ids_duckdb(
     return pd.concat(shards, ignore_index=True)
 
 
+def score_all_missing(
+    lang="all",
+    batch_size=10000,
+    threads=8,
+    memory_limit="32GB",
+    limit=None,
+    dry_run=False,
+):
+    """Score every text with freqs that isn't yet in scores.duckdb.
+
+    Routes each text to the correct language's norms using LLTK's
+    `texts.lang` (populated by LLTK's `detect-langs` + conservative apply
+    rule). Writes into per-language tables in scores.duckdb via
+    `write_scores()`. Idempotent — safe to rerun; only scores what's missing.
+
+    Parameters
+    ----------
+    lang : 'all' | 'en' | 'fr' | 'de'
+        Which language(s) to score. 'all' iterates en/fr/de in order.
+    batch_size : int
+        Score and flush this many texts per loop iteration. Smaller = more
+        frequent progress + memory relief; larger = less DuckDB overhead.
+    limit : int, optional
+        Cap the total number of texts scored per language (for smoke tests).
+    dry_run : bool
+        Print what would be scored without doing it.
+
+    Returns
+    -------
+    dict mapping lang → {'added': n, 'total': n_total_in_table}.
+    """
+    from .scores_db import _connect as _scores_connect, init_db as _init_scores_db, write_scores
+
+    if lang not in ("all", "en", "fr", "de"):
+        raise ValueError(f"lang must be one of 'all'|'en'|'fr'|'de', got {lang!r}")
+    langs = ["en", "fr", "de"] if lang == "all" else [lang]
+
+    import duckdb
+    import sys
+    import time
+
+    # Import LLTK (needs its conn for metadb + freqs DB to avoid lock conflicts)
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    import lltk
+    lltk_conn = lltk.db.conn
+
+    # Ensure freqs DB is attached in LLTK's conn
+    attached = lltk_conn.execute(
+        "SELECT database_name, path FROM duckdb_databases() WHERE path LIKE '%metadb_freqs%'"
+    ).fetchall()
+    if attached:
+        freqs_alias = attached[0][0]
+    else:
+        lltk_conn.execute(f"ATTACH '{PATH_FREQS_DB}' AS fdb (READ_ONLY)")
+        freqs_alias = "fdb"
+    freqs_table = f"{freqs_alias}.text_freqs"
+
+    _init_scores_db()
+    results = {}
+
+    for lg in langs:
+        print(f"\n=== lang={lg} ===", flush=True)
+        t0 = time.time()
+
+        # Candidate ids: texts with freqs, routed to this lang via LLTK metadb
+        candidates = lltk_conn.execute(
+            f"""
+            SELECT f._id
+            FROM {freqs_table} f
+            JOIN texts t ON f._id = t._id
+            WHERE t.lang = ?
+            """,
+            [lg],
+        ).fetchdf()["_id"].tolist()
+        print(f"  {len(candidates):,} candidate ids (lang={lg}, has freqs)", flush=True)
+
+        # Already-scored ids: query scores.duckdb on a SEPARATE conn (LLTK holds
+        # the lock on metadb; scores.duckdb is a different file so this is fine).
+        scores_con = _scores_connect(read_only=True)
+        try:
+            existing = set(
+                scores_con.execute(f"SELECT _id FROM scores_{lg}").fetchdf()["_id"]
+            )
+        except duckdb.CatalogException:
+            existing = set()
+        finally:
+            scores_con.close()
+        print(f"  {len(existing):,} already scored in scores_{lg}", flush=True)
+
+        todo = [i for i in candidates if i not in existing]
+        if limit is not None:
+            todo = todo[:limit]
+        print(f"  {len(todo):,} to score", flush=True)
+
+        if dry_run or not todo:
+            results[lg] = {"added": 0, "total": len(existing), "candidates": len(candidates)}
+            continue
+
+        # Load allnorms for this lang
+        print(f"  loading allnorms ({lg})...", flush=True)
+        if lg == "fr":
+            from .norms_fr import get_allnorms_fr as _get_allnorms
+        elif lg == "de":
+            from .norms_de import get_allnorms_de as _get_allnorms
+        else:
+            from .norms import get_allnorms as _get_allnorms
+        allnorms = _get_allnorms(remove_stopwords=True)
+        allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
+        print(f"  allnorms: {allnorms.shape[0]:,} words x {allnorms.shape[1]} cols", flush=True)
+
+        # Score in batches, writing to scores.duckdb after each batch for
+        # durability. Reuse LLTK's conn for freqs access (avoids lock conflict).
+        added = 0
+        t_score = time.time()
+        n_batches = (len(todo) + batch_size - 1) // batch_size
+        for bi in range(0, len(todo), batch_size):
+            batch_ids = todo[bi : bi + batch_size]
+            ts = time.time()
+            df = score_ids_duckdb(
+                batch_ids, allnorms, shard_size=batch_size, verbose=False,
+                con=lltk_conn, freqs_table=freqs_table,
+            )
+            if len(df):
+                write_scores(df, lang=lg, upsert=False)
+                added += len(df)
+            rate = (bi + len(batch_ids)) / max(time.time() - t_score, 0.01)
+            remaining = len(todo) - (bi + len(batch_ids))
+            eta_min = remaining / max(rate, 1.0) / 60
+            print(
+                f"  batch {bi // batch_size + 1}/{n_batches}: "
+                f"scored {len(df)}/{len(batch_ids)} in {time.time() - ts:.1f}s "
+                f"[added={added:,}, rate={rate:.0f}/s, ETA={eta_min:.1f} min]",
+                flush=True,
+            )
+
+        print(f"  done: added {added:,} rows for lang={lg} in {time.time() - t0:.0f}s", flush=True)
+        results[lg] = {"added": added, "total": len(existing) + added, "candidates": len(candidates)}
+
+    return results
+
+
 def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
                        modernize=False):
     """Score all freqs/*.json files in a corpus directory against all norms.
