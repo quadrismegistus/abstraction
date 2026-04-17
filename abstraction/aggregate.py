@@ -45,9 +45,7 @@ def get_arc_scores(
     Parameters
     ----------
     arc : str
-        LLTK arc corpus name, e.g. 'arc_fiction'. The reps are loaded from
-        LLTK metadata via the metadb. If you want to bypass LLTK, pass `con`
-        with `arc_reps` already attached/created.
+        LLTK arc corpus name, e.g. 'arc_fiction'. Reps loaded from LLTK metadata.
     lang : str
         Language of the scores table to query. 'en'|'fr'|'de'.
     score_cols : iterable of str, optional
@@ -55,11 +53,14 @@ def get_arc_scores(
     dedup : 'rep_only' | 'within_lang_group'
         - rep_only: return each rep's own per-text score (no aggregation).
         - within_lang_group: average all match-group members' scores per rep.
-          Cross-language groups are excluded if `cross_lang_arc` is provided.
+          Cross-language members are naturally excluded because they don't
+          live in the same-language scores table.
     cross_lang_arc : str, optional
-        Companion arc in another language whose match-group overlap with `arc`
-        should disqualify a group from averaging. E.g. cross_lang_arc='arc_fiction_fr'
-        when arc='arc_fiction' excludes the 97 known translation-pair groups.
+        DEPRECATED. Kept for backwards compatibility but a no-op — the
+        per-language storage already prevents cross-language contamination.
+        Originally used to exclude match groups containing a sibling in
+        another arc, but testing showed this yielded identical results while
+        potentially dropping legitimate same-language group averaging.
     con : DuckDBPyConnection, optional
         Pre-existing connection. Useful if LLTK has DBs locked.
 
@@ -81,12 +82,9 @@ def get_arc_scores(
         raise ValueError(f"LLTK corpus {arc!r} not found")
     rep_ids = sorted(set(arc_corpus.load_metadata()["_id"]))
 
-    cl_ids = None
-    if cross_lang_arc:
-        cl_corpus = lltk.load(cross_lang_arc)
-        if cl_corpus is None:
-            raise ValueError(f"LLTK corpus {cross_lang_arc!r} not found")
-        cl_ids = sorted(set(cl_corpus.load_metadata()["_id"]))
+    # cross_lang_arc parameter kept for backwards compat but ignored.
+    # The per-language scores table already prevents cross-language mixing
+    # at JOIN time.
 
     # For match groups, query LLTK's conn directly (already open).
     lltk_conn = lltk.db.conn
@@ -135,49 +133,30 @@ def get_arc_scores(
         raise ValueError(f"unknown dedup mode: {dedup!r}")
 
     # within_lang_group: query LLTK's conn for the rep→member mapping (small),
-    # then load it into our conn for the JOIN against scores.
-    rep_ids_param = rep_ids
-    cl_clause = ""
-    cl_param = []
-    if cl_ids is not None:
-        cl_clause = """
-            AND mg1.group_id NOT IN (
-                SELECT mg_x.group_id
-                FROM match_db.match_groups mg_x
-                WHERE mg_x._id IN (SELECT UNNEST(?::VARCHAR[]))
-            )
-        """
-        cl_param = [cl_ids]
-
+    # then load it into our conn for the JOIN against scores. Cross-language
+    # members are naturally filtered out because the per-language scores table
+    # only contains same-language _ids.
     rep_to_member = lltk_conn.execute(
-        f"""
+        """
         WITH arc_reps AS (
             SELECT UNNEST(?::VARCHAR[]) AS _id
         ),
-        arc_with_groups AS (
-            SELECT r._id AS rep_id, mg1.group_id
+        with_members AS (
+            SELECT r._id AS rep_id, mg2._id AS member_id
             FROM arc_reps r
             JOIN match_db.match_groups mg1 ON r._id = mg1._id
-            WHERE 1=1
-            {cl_clause}
+            JOIN match_db.match_groups mg2 ON mg1.group_id = mg2.group_id
         ),
-        with_members AS (
-            SELECT awg.rep_id, mg2._id AS member_id
-            FROM arc_with_groups awg
-            JOIN match_db.match_groups mg2 ON awg.group_id = mg2.group_id
-        ),
-        -- Reps with no usable groups (no match groups at all, or only
-        -- cross-lang groups) fall back to their own _id as the single member.
         singletons AS (
             SELECT r._id AS rep_id, r._id AS member_id
             FROM arc_reps r
-            WHERE r._id NOT IN (SELECT awg.rep_id FROM arc_with_groups awg)
+            WHERE r._id NOT IN (SELECT _id FROM match_db.match_groups)
         )
         SELECT rep_id, member_id FROM with_members
         UNION ALL
         SELECT rep_id, member_id FROM singletons
         """,
-        [rep_ids_param] + cl_param,
+        [rep_ids],
     ).fetchdf()
 
     con.register("_rtm_df", rep_to_member)

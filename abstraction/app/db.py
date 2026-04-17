@@ -170,10 +170,10 @@ def init_db(db_path=None):
     from tqdm import tqdm
 
     # Arcs sourced from the new scores.duckdb (Phase 2 pipeline).
-    # Configuration: arc_corpus → (lang, cross_lang_arc).
+    # Configuration: arc_corpus → lang.
     NEW_PIPELINE_ARCS = {
-        "arc_fiction":    {"lang": "en", "cross_lang_arc": "arc_fiction_fr"},
-        "arc_fiction_fr": {"lang": "fr", "cross_lang_arc": "arc_fiction"},
+        "arc_fiction":    {"lang": "en"},
+        "arc_fiction_fr": {"lang": "fr"},
     }
 
     try:
