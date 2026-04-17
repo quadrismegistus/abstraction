@@ -170,10 +170,12 @@ def get_arc_scores(
             FROM arc_with_groups awg
             JOIN match_db.match_groups mg2 ON awg.group_id = mg2.group_id
         ),
+        -- Reps with no usable groups (no match groups at all, or only
+        -- cross-lang groups) fall back to their own _id as the single member.
         singletons AS (
             SELECT r._id AS rep_id, r._id AS member_id
             FROM arc_reps r
-            WHERE r._id NOT IN (SELECT _id FROM match_db.match_groups)
+            WHERE r._id NOT IN (SELECT awg.rep_id FROM arc_with_groups awg)
         )
         SELECT rep_id, member_id FROM with_members
         UNION ALL
