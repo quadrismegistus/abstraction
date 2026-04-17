@@ -49,6 +49,99 @@ def cmd_score_arcs(args):
                       num_proc=args.workers)
 
 
+def cmd_score_ids(args):
+    """Score an LLTK corpus's texts via DuckDB freqs DB (1:1, no aggregation)."""
+    import os, sys, csv, time
+    import pandas as pd
+    from .config import SCORES_DIR
+    from .scoring import score_ids_duckdb
+
+    # Pick allnorms by language
+    if args.lang == "fr":
+        from .norms_fr import get_allnorms_fr as get_allnorms
+    elif args.lang == "de":
+        from .norms_de import get_allnorms_de as get_allnorms
+    else:
+        from .norms import get_allnorms
+
+    # Load corpus metadata via LLTK
+    try:
+        sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+        import lltk
+    except ImportError:
+        print("LLTK not importable; install or set PYTHONPATH", file=sys.stderr)
+        sys.exit(1)
+
+    c = lltk.load(args.corpus)
+    if c is None:
+        print(f"LLTK corpus '{args.corpus}' not found", file=sys.stderr)
+        sys.exit(1)
+    meta = c.load_metadata()
+    if "_id" not in meta.columns:
+        print(f"Corpus '{args.corpus}' metadata has no _id column", file=sys.stderr)
+        sys.exit(1)
+    ids = meta["_id"].tolist()
+    print(f"  {args.corpus}: {len(ids)} texts in metadata")
+
+    # Output path: v8-raw/{corpus}.csv (raw = no spelling modernization)
+    out_dir = os.path.join(SCORES_DIR, "v8-raw")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = args.output or os.path.join(out_dir, f"{args.corpus}.csv")
+
+    # Resume: drop already-scored ids unless --force
+    if args.force and os.path.exists(out_path):
+        os.remove(out_path)
+    done_ids = set()
+    if os.path.exists(out_path):
+        try:
+            done_ids = set(pd.read_csv(out_path, usecols=["_id"])["_id"])
+            print(f"  resume: {len(done_ids)} already scored")
+        except Exception as e:
+            print(f"  could not resume ({e}); starting fresh")
+            os.remove(out_path)
+
+    todo = [i for i in ids if i not in done_ids]
+    if not todo:
+        print(f"  nothing to do; output at {out_path}")
+        return
+
+    print(f"  loading allnorms ({args.lang})...")
+    allnorms = get_allnorms(remove_stopwords=True)
+
+    # LLTK has metadb_freqs.duckdb attached on its conn already; reuse it
+    # so we don't hit the file-handle conflict.
+    con = freqs_table = None
+    try:
+        if hasattr(lltk, "db") and hasattr(lltk.db, "conn"):
+            attached = lltk.db.conn.execute(
+                "SELECT database_name FROM duckdb_databases() WHERE path LIKE '%metadb_freqs%'"
+            ).fetchall()
+            if attached:
+                con = lltk.db.conn
+                freqs_table = f"{attached[0][0]}.text_freqs"
+                print(f"  reusing LLTK conn (freqs attached as {attached[0][0]})")
+    except Exception as e:
+        print(f"  could not reuse LLTK conn ({e}); opening own")
+
+    print(f"  scoring {len(todo)} texts via DuckDB...")
+    t0 = time.time()
+    df = score_ids_duckdb(
+        todo, allnorms, shard_size=args.shard_size, verbose=True,
+        con=con, freqs_table=freqs_table or "fdb.text_freqs",
+    )
+    elapsed = time.time() - t0
+    print(f"  done: {len(df)} scored in {elapsed:.1f}s ({len(df)/elapsed:.0f}/s)")
+
+    # Append (or write) using csv module to handle commas in _id
+    mode = "a" if done_ids else "w"
+    with open(out_path, mode, newline="") as f:
+        writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
+        if not done_ids:
+            writer.writerow(df.columns.tolist())
+        for row in df.itertuples(index=False, name=None):
+            writer.writerow(row)
+    print(f"  wrote {out_path}")
+
 
 def cmd_check_freqs(args):
     from .corpus import check_freqs_coverage
@@ -366,6 +459,18 @@ def main():
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
     p.add_argument("--modernize", action="store_true", help="Enable spelling modernization")
 
+    # score-ids: 1:1 DuckDB-backed scorer for any LLTK corpus, language-aware
+    p = sub.add_parser(
+        "score-ids",
+        help="Score LLTK corpus texts via DuckDB freqs DB (1:1, no match-group averaging)",
+    )
+    p.add_argument("corpus", help="LLTK corpus name (e.g. arc_fiction_fr, gallica_literary_fictions)")
+    p.add_argument("--lang", choices=["en", "fr", "de"], default="en",
+                   help="Language: chooses get_allnorms vs get_allnorms_fr/de (default: en)")
+    p.add_argument("--force", action="store_true", help="Re-score even if output exists")
+    p.add_argument("--output", "-o", default=None, help="Output CSV path (default: data/scores/v8-raw/{corpus}.csv)")
+    p.add_argument("--shard-size", type=int, default=20000, help="Texts per DuckDB query (default: 20000)")
+
     # check-freqs: check metadata-to-freqs coverage
     p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
     p.add_argument("corpus", nargs="?", default=None, help="Corpus name (default: all)")
@@ -483,6 +588,8 @@ def main():
         cmd_score_corpora(args)
     elif args.command == "score-arcs":
         cmd_score_arcs(args)
+    elif args.command == "score-ids":
+        cmd_score_ids(args)
     elif args.command == "check-freqs":
         cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":

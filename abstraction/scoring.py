@@ -432,6 +432,8 @@ def score_ids_duckdb(
     threads=8,
     memory_limit="32GB",
     verbose=False,
+    con=None,
+    freqs_table="fdb.text_freqs",
 ):
     """Score per-text frequency-weighted norm averages via the LLTK freqs DB.
 
@@ -451,10 +453,19 @@ def score_ids_duckdb(
         `Abs-Conc.Median.median`). Stopwords should already be removed.
     freqs_db_path : str, optional
         Path to LLTK's `metadb_freqs.duckdb`. Defaults to PATH_FREQS_DB.
+        Ignored if `con` is provided.
     shard_size : int
         Texts per DuckDB query. ~20K is a good balance of throughput vs
         memory. Smaller if you hit OOM on dense corpora.
-    threads, memory_limit : DuckDB pragmas.
+    threads, memory_limit : DuckDB pragmas. Ignored if `con` is provided.
+    con : duckdb.DuckDBPyConnection, optional
+        Pre-existing connection with the freqs DB already attached.
+        Use this when running alongside LLTK (which holds the lock on
+        metadb_freqs.duckdb in the same process). If provided, also pass
+        `freqs_table` matching the attached alias (e.g. "freqs_db.text_freqs").
+    freqs_table : str
+        Fully-qualified freqs table name. Defaults to "fdb.text_freqs"
+        for the case where this function attaches itself.
 
     Returns
     -------
@@ -464,29 +475,34 @@ def score_ids_duckdb(
     """
     import duckdb
 
-    freqs_db_path = freqs_db_path or PATH_FREQS_DB
     ids = list(ids)
-
     allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()].copy()
     allnorms.index.name = "word"
     score_cols = list(allnorms.columns)
 
-    con = duckdb.connect(":memory:")
-    con.execute(f"PRAGMA threads={threads}")
-    con.execute(f"PRAGMA memory_limit='{memory_limit}'")
-    con.execute(f"ATTACH '{freqs_db_path}' AS fdb (READ_ONLY)")
+    owns_con = con is None
+    if owns_con:
+        con = duckdb.connect(":memory:")
+        con.execute(f"PRAGMA threads={threads}")
+        con.execute(f"PRAGMA memory_limit='{memory_limit}'")
+        con.execute(f"ATTACH '{freqs_db_path or PATH_FREQS_DB}' AS fdb (READ_ONLY)")
+
+    # Use unique table names so we don't collide with caller's tables
+    words_tbl = "_score_ids_words"
+    target_tbl = "_score_ids_target_ids"
+    con.execute(f"DROP TABLE IF EXISTS {words_tbl}")
+    con.execute(f"DROP TABLE IF EXISTS {target_tbl}")
     con.register("allnorms_df", allnorms.reset_index())
-    con.execute("CREATE TABLE words AS SELECT * FROM allnorms_df")
+    con.execute(f"CREATE TEMP TABLE {words_tbl} AS SELECT * FROM allnorms_df")
     con.unregister("allnorms_df")
 
-    # Filter to ids that exist in freqs DB
-    con.execute("CREATE TABLE target_ids (_id VARCHAR PRIMARY KEY)")
+    con.execute(f"CREATE TEMP TABLE {target_tbl} (_id VARCHAR PRIMARY KEY)")
     for i in range(0, len(ids), 10000):
         batch = ids[i : i + 10000]
         ph = ",".join(["(?)"] * len(batch))
-        con.execute(f"INSERT INTO target_ids VALUES {ph}", batch)
+        con.execute(f"INSERT INTO {target_tbl} VALUES {ph}", batch)
     present_ids = con.execute(
-        "SELECT t._id FROM fdb.text_freqs t JOIN target_ids ti ON t._id = ti._id"
+        f"SELECT t._id FROM {freqs_table} t JOIN {target_tbl} ti ON t._id = ti._id"
     ).fetchdf()["_id"].tolist()
     if verbose:
         print(f"  freqs DB: {len(present_ids)} / {len(ids)} present")
@@ -509,12 +525,12 @@ def score_ids_duckdb(
           SELECT t._id,
                  unnest(map_keys(t.freqs)) AS word,
                  unnest(map_values(t.freqs)) AS cnt
-          FROM fdb.text_freqs t
+          FROM {freqs_table} t
           WHERE t._id IN ({ph})
         )
         SELECT _id, {weighted_sql}
         FROM freq_rows f
-        INNER JOIN words w ON f.word = w.word
+        INNER JOIN {words_tbl} w ON f.word = w.word
         GROUP BY _id
         """
         shard_df = con.execute(sql, shard_ids).fetchdf()
@@ -523,7 +539,11 @@ def score_ids_duckdb(
             print(f"  shard {si // shard_size + 1}/{(len(present_ids) - 1) // shard_size + 1}: "
                   f"{len(shard_df)} texts")
 
-    con.close()
+    # Clean up our temp tables
+    con.execute(f"DROP TABLE IF EXISTS {words_tbl}")
+    con.execute(f"DROP TABLE IF EXISTS {target_tbl}")
+    if owns_con:
+        con.close()
 
     if not shards:
         return pd.DataFrame(columns=["_id"] + score_cols)
