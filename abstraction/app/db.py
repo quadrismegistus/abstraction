@@ -170,10 +170,16 @@ def init_db(db_path=None):
     from tqdm import tqdm
 
     # Arcs sourced from the new scores.duckdb (Phase 2 pipeline).
-    # Configuration: arc_corpus → lang.
+    # All arcs now scored 1:1 in scores_en / scores_fr — aggregation happens
+    # here at load time via get_arc_scores.
     NEW_PIPELINE_ARCS = {
         "arc_fiction":    {"lang": "en"},
         "arc_fiction_fr": {"lang": "fr"},
+        "arc_poetry":     {"lang": "en"},
+        "arc_biography":  {"lang": "en"},
+        "arc_essays":     {"lang": "en"},
+        "arc_periodical": {"lang": "en"},
+        "arc_sermons":    {"lang": "en"},
     }
 
     try:
@@ -192,7 +198,6 @@ def init_db(db_path=None):
                 df = get_arc_scores(
                     arc_name, lang=cfg["lang"],
                     dedup="within_lang_group",
-                    cross_lang_arc=cfg["cross_lang_arc"],
                 )
                 df["arc_corpus"] = arc_name
                 df["source_corpus"] = arc_name  # no per-text corpus here; aggregation is lossy
