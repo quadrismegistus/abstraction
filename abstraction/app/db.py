@@ -25,6 +25,7 @@ LLTK_MATCHES_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb_matches.duckd
 
 _local = threading.local()
 _lltk_snapshot_path = None
+_lltk_snapshot_lock = threading.Lock()
 
 
 def _scores_db_path():
@@ -62,13 +63,21 @@ def _attach_lltk_snapshot(conn):
     process (DuckDB doesn't always allow a second same-process ATTACH of
     the same file, and silently succeeds-then-missing in some versions).
     Snapshot is a separate file so no lock conflict is possible.
+
+    Thread-safe: multiple concurrent first-callers will serialize on the
+    copy, and the global path is only published after copy completes, so
+    threads that see the path know the file is fully written.
     """
     global _lltk_snapshot_path
-    if _lltk_snapshot_path is None:
-        print("[app] Snapshotting LLTK metadb for per-thread connections...", flush=True)
-        tmpdir = tempfile.mkdtemp(prefix="lltk_ro_app_")
-        _lltk_snapshot_path = os.path.join(tmpdir, "metadb.duckdb")
-        shutil.copy2(LLTK_DB_PATH, _lltk_snapshot_path)
+    with _lltk_snapshot_lock:
+        if _lltk_snapshot_path is None:
+            print("[app] Snapshotting LLTK metadb for per-thread connections...", flush=True)
+            tmpdir = tempfile.mkdtemp(prefix="lltk_ro_app_")
+            target = os.path.join(tmpdir, "metadb.duckdb")
+            shutil.copy2(LLTK_DB_PATH, target)
+            # Only publish path AFTER copy completes, so racing readers never
+            # attach a partially-written file.
+            _lltk_snapshot_path = target
     if not _db_attached(conn, "lltk"):
         try:
             conn.execute(f"ATTACH '{_lltk_snapshot_path}' AS lltk (READ_ONLY)")
