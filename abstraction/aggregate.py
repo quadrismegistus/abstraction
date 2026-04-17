@@ -103,18 +103,14 @@ def get_arc_scores(
         con.execute(f"ATTACH '{scores_db_path or PATH_SCORES_DB}' AS sdb (READ_ONLY)")
     scores_ref = f"sdb.{table}"
 
-    # Resolve score_cols
+    # Resolve score_cols. information_schema isn't reliable for attached DBs,
+    # so query a single row to get the column list.
     if score_cols is None:
-        cols = con.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = 'sdb' AND table_name = ? "
-            "AND column_name != '_id' ORDER BY ordinal_position",
-            [table],
-        ).fetchall()
-        score_cols = [c[0] for c in cols]
+        probe = con.execute(f"SELECT * FROM {scores_ref} LIMIT 1").fetchdf()
+        score_cols = [c for c in probe.columns if c != "_id"]
     score_cols = list(score_cols)
     if not score_cols:
-        raise ValueError(f"no score columns found in sdb.{table}")
+        raise ValueError(f"no score columns found in {scores_ref}")
     if dedup == "rep_only":
         # Load rep ids into our conn and JOIN with scores
         con.execute("CREATE TEMP TABLE _arc_reps (_id VARCHAR PRIMARY KEY)")

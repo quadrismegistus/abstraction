@@ -122,6 +122,16 @@ def _is_stale(db_path):
     except Exception:
         return True
     db_mtime = os.path.getmtime(db_path)
+
+    # Stale if the canonical scores.duckdb is newer
+    try:
+        from ..config import PATH_SCORES_DB
+        if os.path.exists(PATH_SCORES_DB) and os.path.getmtime(PATH_SCORES_DB) > db_mtime:
+            return True
+    except Exception:
+        pass
+
+    # Also stale if any legacy CSV is newer
     scores_dir = _scores_dir()
     if not os.path.isdir(scores_dir):
         return False
@@ -141,7 +151,7 @@ def init_db(db_path=None):
         print(f"[app] Scores database is fresh: {db_path}")
         return
 
-    print(f"[app] Building scores database from {SCORES_VERSION} CSVs...")
+    print(f"[app] Building scores database...")
 
     import pandas as pd
 
@@ -159,17 +169,51 @@ def init_db(db_path=None):
     all_dfs = []
     from tqdm import tqdm
 
-    # Load arc corpus CSVs (arc_fiction.csv, etc.) — these have _id and source_corpus
-    arc_files = sorted(fn for fn in os.listdir(scores_dir)
-                       if fn.startswith("arc_") and fn.endswith(".csv"))
+    # Arcs sourced from the new scores.duckdb (Phase 2 pipeline).
+    # Configuration: arc_corpus → (lang, cross_lang_arc).
+    NEW_PIPELINE_ARCS = {
+        "arc_fiction":    {"lang": "en", "cross_lang_arc": "arc_fiction_fr"},
+        "arc_fiction_fr": {"lang": "fr", "cross_lang_arc": "arc_fiction"},
+    }
 
-    # Load regular corpus CSVs (for non-arc corpora)
+    try:
+        from ..aggregate import get_arc_scores
+        from ..config import PATH_SCORES_DB
+        has_scores_db = os.path.exists(PATH_SCORES_DB)
+    except Exception as e:
+        print(f"  New pipeline unavailable ({e}); falling back to CSVs only")
+        has_scores_db = False
+
+    new_arc_names = set()
+    if has_scores_db:
+        print(f"  Aggregating {len(NEW_PIPELINE_ARCS)} arcs from scores.duckdb...")
+        for arc_name, cfg in NEW_PIPELINE_ARCS.items():
+            try:
+                df = get_arc_scores(
+                    arc_name, lang=cfg["lang"],
+                    dedup="within_lang_group",
+                    cross_lang_arc=cfg["cross_lang_arc"],
+                )
+                df["arc_corpus"] = arc_name
+                df["source_corpus"] = arc_name  # no per-text corpus here; aggregation is lossy
+                all_dfs.append(df)
+                new_arc_names.add(arc_name)
+                print(f"    {arc_name}: {len(df):,} reps")
+            except Exception as e:
+                print(f"    {arc_name}: FAILED ({e})")
+
+    # Remaining arcs: load legacy CSVs (arcs we haven't re-scored yet).
+    arc_files = sorted(
+        fn for fn in os.listdir(scores_dir)
+        if fn.startswith("arc_") and fn.endswith(".csv")
+        and fn.removesuffix(".csv") not in new_arc_names
+    )
     regular_files = sorted(fn for fn in os.listdir(scores_dir)
                            if fn.endswith(".csv") and not fn.startswith("arc_"))
 
     if arc_files:
-        print(f"  Loading {len(arc_files)} arc corpus CSVs...")
-        for fn in tqdm(arc_files, desc="  Arc corpora"):
+        print(f"  Loading {len(arc_files)} legacy arc corpus CSVs...")
+        for fn in tqdm(arc_files, desc="  Legacy arcs"):
             arc_name = fn.removesuffix(".csv")
             path = os.path.join(scores_dir, fn)
             try:
@@ -178,16 +222,14 @@ def init_db(db_path=None):
                 print(f"    Skipping {fn}: {e}")
                 continue
             df["arc_corpus"] = arc_name
-            # Ensure _id and source_corpus exist
             if "_id" not in df.columns:
                 continue
             if "source_corpus" not in df.columns:
                 df["source_corpus"] = arc_name
             all_dfs.append(df)
 
-    if regular_files and not arc_files:
-        # Fallback: load regular CSVs if no arc CSVs exist yet
-        print(f"  No arc CSVs found, loading {len(regular_files)} regular CSVs...")
+    if regular_files and not arc_files and not all_dfs:
+        print(f"  No arc data; loading {len(regular_files)} regular CSVs as fallback...")
         from .db_compat import load_regular_csvs
         all_dfs = load_regular_csvs(scores_dir, regular_files)
 
