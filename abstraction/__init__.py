@@ -15,6 +15,8 @@ from .norms import (
 from .models import gen_vecnorms
 from .counting import count_absconc, count_absconc_psg, count_absconc_corpus
 from .scoring import score_psg, score_freqs, score_words, get_all_passages, gen_bookpassages, score_corpus_freqs, score_all_corpora, score_ids_duckdb
+from .scores_db import init_db as init_scores_db, write_scores, read_scores, db_stats
+from .aggregate import get_arc_scores
 from .analysis import (
     load_scores, load_all_scored, adjust_scores, assign_period_score,
     fit_arc, fit_arc_corpus, fit_arc_all_corpora,
@@ -54,6 +56,7 @@ __all__ = [
     # scoring
     "score_psg", "score_freqs", "score_words", "get_all_passages",
     "gen_bookpassages", "score_corpus_freqs", "score_all_corpora", "score_ids_duckdb",
+    "init_scores_db", "write_scores", "read_scores", "db_stats", "get_arc_scores",
     # analysis
     "load_scores", "load_all_scored", "adjust_scores",
     "fit_arc", "fit_arc_corpus", "fit_arc_all_corpora",

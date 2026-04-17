@@ -483,9 +483,10 @@ def score_ids_duckdb(
     owns_con = con is None
     if owns_con:
         con = duckdb.connect(":memory:")
-        con.execute(f"PRAGMA threads={threads}")
-        con.execute(f"PRAGMA memory_limit='{memory_limit}'")
         con.execute(f"ATTACH '{freqs_db_path or PATH_FREQS_DB}' AS fdb (READ_ONLY)")
+    # Apply pragmas in both cases — shared connections may default to too few threads
+    con.execute(f"PRAGMA threads={threads}")
+    con.execute(f"PRAGMA memory_limit='{memory_limit}'")
 
     # Use unique table names so we don't collide with caller's tables
     words_tbl = "_score_ids_words"
