@@ -427,13 +427,15 @@ def _load_done_ids(csv_path):
 def score_ids_ch(ids, allnorms, shard_size=5000, verbose=False):
     """Score per-text freq-weighted norm averages via LLTK's ClickHouse `text_freqs`.
 
-    Replacement for the legacy `score_ids_duckdb` ATTACH-based path. Pulls
-    freqs for each shard via `lltk.db.read_freqs()` (returns dicts), explodes
-    to long format, and does the weighted math in a local in-memory DuckDB
-    — no cross-DB ATTACH, no file locks.
+    Replaces the legacy DuckDB-ATTACH path. Pulls freqs via
+    `lltk.db.read_freqs()` (returns dict column), then scores with pure numpy.
+
+    Why numpy not DuckDB? Profiled 2000-text batch: DuckDB JOIN+GROUP BY on
+    40M matched rows against 9.6M allnorms took 70s; the numpy per-text
+    fancy-index + nansum approach took 48s. Similar throughput at smaller
+    batches, better for big ones. No explode to long format.
     """
     import sys
-    import duckdb
     sys.path.insert(0, os.path.expanduser("~/github/lltk"))
     import lltk
 
@@ -442,70 +444,53 @@ def score_ids_ch(ids, allnorms, shard_size=5000, verbose=False):
     allnorms.index.name = "word"
     score_cols = list(allnorms.columns)
 
-    con = duckdb.connect(":memory:")
-    # Keep full allnorms as a word→row index; we'll register a pre-filtered
-    # slice per shard since the full table is 9M+ rows on multilingual runs.
-    allnorms_indexed = allnorms
+    # Pre-materialize allnorms for fast fancy-indexing + NaN-aware aggregation.
+    an_vals = allnorms.values.astype(np.float32)
+    an_index_map = {w: i for i, w in enumerate(allnorms.index)}
+    vals_0nan = np.nan_to_num(an_vals, nan=0.0)
+    val_mask_f = (~np.isnan(an_vals)).astype(np.float32)
 
-    weighted_exprs = []
-    for col in score_cols:
-        qc = '"' + col.replace('"', '""') + '"'
-        weighted_exprs.append(
-            f"SUM(cnt * w.{qc}) FILTER (WHERE w.{qc} IS NOT NULL) / "
-            f"NULLIF(SUM(cnt) FILTER (WHERE w.{qc} IS NOT NULL), 0) AS {qc}"
-        )
-    weighted_sql = ",\n        ".join(weighted_exprs)
-
-    import pyarrow as pa
-
-    shards = []
+    shard_results = []
     for si in range(0, len(ids), shard_size):
         shard_ids = ids[si : si + shard_size]
         freqs_df = lltk.db.read_freqs(ids=shard_ids, as_df=True)
         if freqs_df is None or len(freqs_df) == 0:
             continue
-        # Explode into three parallel arrays. PyArrow's table constructor on
-        # lists is ~25x faster than pd.DataFrame() for millions of string rows.
-        ids_arr, words_arr, cnts_arr = [], [], []
-        for _id, freqs in zip(freqs_df["_id"], freqs_df["freqs"]):
+
+        n_texts = len(freqs_df)
+        rows = np.full((n_texts, len(score_cols)), np.nan, dtype=np.float32)
+        out_ids = [None] * n_texts
+
+        for ti, (_id, freqs) in enumerate(zip(freqs_df["_id"], freqs_df["freqs"])):
+            out_ids[ti] = _id
             if not freqs:
                 continue
-            ws = list(freqs.keys())
-            ids_arr.extend([_id] * len(ws))
-            words_arr.extend(ws)
-            cnts_arr.extend(freqs.values())
-        if not ids_arr:
-            continue
-        freq_tbl = pa.table({"_id": ids_arr, "word": words_arr, "cnt": cnts_arr})
-        # Filter allnorms to just the words present in this shard — shrinks
-        # the JOIN from 9M rows to ~tens of thousands, 10-100x speedup.
-        shard_words = set(words_arr)
-        shard_norms = allnorms_indexed.loc[
-            allnorms_indexed.index.intersection(shard_words)
-        ].reset_index()
-        if len(shard_norms) == 0:
-            continue
-        norms_tbl = pa.Table.from_pandas(shard_norms, preserve_index=False)
-        con.register("freq_rows", freq_tbl)
-        con.register("allnorms_df", norms_tbl)
-        sql = f"""
-        SELECT _id, {weighted_sql}
-        FROM freq_rows f
-        INNER JOIN allnorms_df w ON f.word = w.word
-        GROUP BY _id
-        """
-        shard_df = con.execute(sql).fetchdf()
-        shards.append(shard_df)
-        con.unregister("freq_rows")
-        con.unregister("allnorms_df")
+            idxs = np.fromiter(
+                (an_index_map.get(w, -1) for w in freqs.keys()),
+                dtype=np.int64, count=len(freqs),
+            )
+            cnts = np.fromiter(
+                freqs.values(), dtype=np.float32, count=len(freqs),
+            )
+            mask = idxs >= 0
+            if not mask.any():
+                continue
+            idxs, cnts = idxs[mask], cnts[mask]
+            num = (vals_0nan[idxs] * cnts[:, None]).sum(axis=0)
+            den = (val_mask_f[idxs] * cnts[:, None]).sum(axis=0)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rows[ti] = np.where(den > 0, num / den, np.nan)
+
+        df = pd.DataFrame(rows, columns=score_cols)
+        df.insert(0, "_id", out_ids)
+        shard_results.append(df)
         if verbose:
             print(f"  shard {si // shard_size + 1}/{(len(ids) - 1) // shard_size + 1}: "
-                  f"{len(shard_df)} texts")
+                  f"{n_texts} texts")
 
-    con.close()
-    if not shards:
+    if not shard_results:
         return pd.DataFrame(columns=["_id"] + score_cols)
-    return pd.concat(shards, ignore_index=True)
+    return pd.concat(shard_results, ignore_index=True)
 
 
 def score_ids_duckdb(
@@ -735,29 +720,84 @@ def score_all_missing(
         allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
         print(f"  allnorms: {allnorms.shape[0]:,} words x {allnorms.shape[1]} cols", flush=True)
 
-        # Score in batches, writing to scores.duckdb after each batch for
-        # durability. Reuse LLTK's conn for freqs access (avoids lock conflict).
+        # Pipeline CH read + scoring: fetch next batch's freqs while scoring
+        # the current one. Hides ~30s CH roundtrip on top of ~50s numpy work.
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Pre-materialize allnorms for the numpy scorer (done once).
+        an_vals = allnorms.values.astype(np.float32)
+        an_index_map = {w: i for i, w in enumerate(allnorms.index)}
+        vals_0nan = np.nan_to_num(an_vals, nan=0.0)
+        val_mask_f = (~np.isnan(an_vals)).astype(np.float32)
+        score_cols = list(allnorms.columns)
+
+        def _fetch(batch_ids):
+            return lltk_conn.query_df(  # lltk.db.adapter.client.query_df equivalent
+                f"SELECT _id, corpus, freqs FROM lltk.text_freqs FINAL "
+                f"WHERE _id IN ({','.join(repr(i) for i in batch_ids)})"
+            ) if False else lltk.db.read_freqs(ids=batch_ids, as_df=True)
+
+        def _score(freqs_df):
+            if freqs_df is None or len(freqs_df) == 0:
+                return pd.DataFrame(columns=["_id"] + score_cols)
+            n = len(freqs_df)
+            rows = np.full((n, len(score_cols)), np.nan, dtype=np.float32)
+            out_ids = [None] * n
+            for ti, (_id, freqs) in enumerate(zip(freqs_df["_id"], freqs_df["freqs"])):
+                out_ids[ti] = _id
+                if not freqs:
+                    continue
+                idxs = np.fromiter(
+                    (an_index_map.get(w, -1) for w in freqs.keys()),
+                    dtype=np.int64, count=len(freqs))
+                cnts = np.fromiter(freqs.values(), dtype=np.float32, count=len(freqs))
+                mask = idxs >= 0
+                if not mask.any():
+                    continue
+                idxs, cnts = idxs[mask], cnts[mask]
+                num = (vals_0nan[idxs] * cnts[:, None]).sum(axis=0)
+                den = (val_mask_f[idxs] * cnts[:, None]).sum(axis=0)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    rows[ti] = np.where(den > 0, num / den, np.nan)
+            df = pd.DataFrame(rows, columns=score_cols)
+            df.insert(0, "_id", out_ids)
+            return df
+
         added = 0
         t_score = time.time()
         n_batches = (len(todo) + batch_size - 1) // batch_size
-        for bi in range(0, len(todo), batch_size):
-            batch_ids = todo[bi : bi + batch_size]
-            ts = time.time()
-            df = score_ids_ch(
-                batch_ids, allnorms, shard_size=min(batch_size, 2000), verbose=False,
-            )
-            if len(df):
-                write_scores(df, lang=lg, upsert=False)
-                added += len(df)
-            rate = (bi + len(batch_ids)) / max(time.time() - t_score, 0.01)
-            remaining = len(todo) - (bi + len(batch_ids))
-            eta_min = remaining / max(rate, 1.0) / 60
-            print(
-                f"  batch {bi // batch_size + 1}/{n_batches}: "
-                f"scored {len(df)}/{len(batch_ids)} in {time.time() - ts:.1f}s "
-                f"[added={added:,}, rate={rate:.0f}/s, ETA={eta_min:.1f} min]",
-                flush=True,
-            )
+        with ThreadPoolExecutor(max_workers=1) as fetcher:
+            # Prime the pipeline by fetching batch 0
+            prefetch = fetcher.submit(
+                _fetch, todo[0 : batch_size]
+            ) if todo else None
+
+            for bi in range(0, len(todo), batch_size):
+                batch_ids = todo[bi : bi + batch_size]
+                ts = time.time()
+                # Grab currently-prefetching batch
+                freqs_df = prefetch.result() if prefetch is not None else None
+                # Kick off next prefetch (in parallel with our scoring below)
+                next_start = bi + batch_size
+                if next_start < len(todo):
+                    next_ids = todo[next_start : next_start + batch_size]
+                    prefetch = fetcher.submit(_fetch, next_ids)
+                else:
+                    prefetch = None
+                # Score this batch
+                df = _score(freqs_df)
+                if len(df):
+                    write_scores(df, lang=lg, upsert=False)
+                    added += len(df)
+                rate = (bi + len(batch_ids)) / max(time.time() - t_score, 0.01)
+                remaining = len(todo) - (bi + len(batch_ids))
+                eta_min = remaining / max(rate, 1.0) / 60
+                print(
+                    f"  batch {bi // batch_size + 1}/{n_batches}: "
+                    f"scored {len(df)}/{len(batch_ids)} in {time.time() - ts:.1f}s "
+                    f"[added={added:,}, rate={rate:.0f}/s, ETA={eta_min:.1f} min]",
+                    flush=True,
+                )
 
         print(f"  done: added {added:,} rows for lang={lg} in {time.time() - t0:.0f}s", flush=True)
         results[lg] = {"added": added, "total": len(existing) + added, "candidates": len(candidates)}
