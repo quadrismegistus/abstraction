@@ -424,6 +424,90 @@ def _load_done_ids(csv_path):
         return set()
 
 
+def score_ids_ch(ids, allnorms, shard_size=5000, verbose=False):
+    """Score per-text freq-weighted norm averages via LLTK's ClickHouse `text_freqs`.
+
+    Replacement for the legacy `score_ids_duckdb` ATTACH-based path. Pulls
+    freqs for each shard via `lltk.db.read_freqs()` (returns dicts), explodes
+    to long format, and does the weighted math in a local in-memory DuckDB
+    — no cross-DB ATTACH, no file locks.
+    """
+    import sys
+    import duckdb
+    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
+    import lltk
+
+    ids = list(ids)
+    allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()].copy()
+    allnorms.index.name = "word"
+    score_cols = list(allnorms.columns)
+
+    con = duckdb.connect(":memory:")
+    # Keep full allnorms as a word→row index; we'll register a pre-filtered
+    # slice per shard since the full table is 9M+ rows on multilingual runs.
+    allnorms_indexed = allnorms
+
+    weighted_exprs = []
+    for col in score_cols:
+        qc = '"' + col.replace('"', '""') + '"'
+        weighted_exprs.append(
+            f"SUM(cnt * w.{qc}) FILTER (WHERE w.{qc} IS NOT NULL) / "
+            f"NULLIF(SUM(cnt) FILTER (WHERE w.{qc} IS NOT NULL), 0) AS {qc}"
+        )
+    weighted_sql = ",\n        ".join(weighted_exprs)
+
+    import pyarrow as pa
+
+    shards = []
+    for si in range(0, len(ids), shard_size):
+        shard_ids = ids[si : si + shard_size]
+        freqs_df = lltk.db.read_freqs(ids=shard_ids, as_df=True)
+        if freqs_df is None or len(freqs_df) == 0:
+            continue
+        # Explode into three parallel arrays. PyArrow's table constructor on
+        # lists is ~25x faster than pd.DataFrame() for millions of string rows.
+        ids_arr, words_arr, cnts_arr = [], [], []
+        for _id, freqs in zip(freqs_df["_id"], freqs_df["freqs"]):
+            if not freqs:
+                continue
+            ws = list(freqs.keys())
+            ids_arr.extend([_id] * len(ws))
+            words_arr.extend(ws)
+            cnts_arr.extend(freqs.values())
+        if not ids_arr:
+            continue
+        freq_tbl = pa.table({"_id": ids_arr, "word": words_arr, "cnt": cnts_arr})
+        # Filter allnorms to just the words present in this shard — shrinks
+        # the JOIN from 9M rows to ~tens of thousands, 10-100x speedup.
+        shard_words = set(words_arr)
+        shard_norms = allnorms_indexed.loc[
+            allnorms_indexed.index.intersection(shard_words)
+        ].reset_index()
+        if len(shard_norms) == 0:
+            continue
+        norms_tbl = pa.Table.from_pandas(shard_norms, preserve_index=False)
+        con.register("freq_rows", freq_tbl)
+        con.register("allnorms_df", norms_tbl)
+        sql = f"""
+        SELECT _id, {weighted_sql}
+        FROM freq_rows f
+        INNER JOIN allnorms_df w ON f.word = w.word
+        GROUP BY _id
+        """
+        shard_df = con.execute(sql).fetchdf()
+        shards.append(shard_df)
+        con.unregister("freq_rows")
+        con.unregister("allnorms_df")
+        if verbose:
+            print(f"  shard {si // shard_size + 1}/{(len(ids) - 1) // shard_size + 1}: "
+                  f"{len(shard_df)} texts")
+
+    con.close()
+    if not shards:
+        return pd.DataFrame(columns=["_id"] + score_cols)
+    return pd.concat(shards, ignore_index=True)
+
+
 def score_ids_duckdb(
     ids,
     allnorms,
@@ -592,21 +676,10 @@ def score_all_missing(
     import sys
     import time
 
-    # Import LLTK (needs its conn for metadb + freqs DB to avoid lock conflicts)
+    # LLTK is on ClickHouse now — no ATTACH needed, text_freqs lives at lltk.text_freqs.
     sys.path.insert(0, os.path.expanduser("~/github/lltk"))
     import lltk
     lltk_conn = lltk.db.conn
-
-    # Ensure freqs DB is attached in LLTK's conn
-    attached = lltk_conn.execute(
-        "SELECT database_name, path FROM duckdb_databases() WHERE path LIKE '%metadb_freqs%'"
-    ).fetchall()
-    if attached:
-        freqs_alias = attached[0][0]
-    else:
-        lltk_conn.execute(f"ATTACH '{PATH_FREQS_DB}' AS fdb (READ_ONLY)")
-        freqs_alias = "fdb"
-    freqs_table = f"{freqs_alias}.text_freqs"
 
     _init_scores_db()
     results = {}
@@ -616,15 +689,16 @@ def score_all_missing(
         t0 = time.time()
 
         # Candidate ids: texts with freqs, routed to this lang via LLTK metadb
-        candidates = lltk_conn.execute(
-            f"""
-            SELECT f._id
-            FROM {freqs_table} f
-            JOIN texts t ON f._id = t._id
-            WHERE t.lang = ?
-            """,
-            [lg],
-        ).fetchdf()["_id"].tolist()
+        candidates = [
+            r[0] for r in lltk_conn.execute(
+                f"""
+                SELECT f._id
+                FROM lltk.text_freqs f
+                JOIN lltk.texts t ON f._id = t._id
+                WHERE t.lang = '{lg}'
+                """
+            ).fetchall()
+        ]
         print(f"  {len(candidates):,} candidate ids (lang={lg}, has freqs)", flush=True)
 
         # Already-scored ids: query scores.duckdb on a SEPARATE conn (LLTK holds
@@ -669,9 +743,8 @@ def score_all_missing(
         for bi in range(0, len(todo), batch_size):
             batch_ids = todo[bi : bi + batch_size]
             ts = time.time()
-            df = score_ids_duckdb(
-                batch_ids, allnorms, shard_size=batch_size, verbose=False,
-                con=lltk_conn, freqs_table=freqs_table,
+            df = score_ids_ch(
+                batch_ids, allnorms, shard_size=min(batch_size, 2000), verbose=False,
             )
             if len(df):
                 write_scores(df, lang=lg, upsert=False)
