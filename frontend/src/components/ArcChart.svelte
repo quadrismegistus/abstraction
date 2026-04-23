@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, globalLoading, corporaList, dedup } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, selectedRawCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, globalLoading, corporaList, dedup } from '$lib/stores';
   import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
   import type { GenreArc, AggGenreArc } from '$lib/types';
 
@@ -70,7 +70,8 @@
     const genres = $selectedGenres.length
       ? $selectedGenres
       : ['arc_fiction'];
-    p.genre = genres;
+    // Merge raw corpora into genre list — backend routes them via arc_corpus filter
+    p.genre = [...genres, ...$selectedRawCorpora];
     // Only pass corpus filter if some are unchecked
     const allCorpusNames = $corporaList.map(c => c.name);
     if ($selectedCorpora.length > 0 && $selectedCorpora.length < allCorpusNames.length) {
@@ -155,17 +156,46 @@
     'pentagon-open', 'hexagon-open', 'star-open', 'cross-open', 'x-open',
   ];
 
+  // Color + shape + dash palettes for non-arc_fiction genres in aggregate mode.
+  // arc_fiction is always pinned to black + solid + circle. Grayscale is reserved
+  // for the plotnine print export, which handles its own styling server-side.
+  const aggColors = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#469990', '#9a6324', '#800000'];
+  const aggShapes = ['diamond', 'square', 'triangle-up', 'triangle-down', 'pentagon', 'hexagon', 'star', 'cross'];
+  const aggDashes = ['dashdot', 'dash', 'longdash', 'dot', 'longdashdot', 'solid'];
+
   function renderAggregate() {
     const traces: any[] = [];
 
     const allCounts = aggArcs.flatMap(a => a.points.map(p => p.n_texts));
     const maxN = Math.max(...allCounts, 1);
 
+    // Build per-genre style + shape map for this render. arc_fiction always black;
+    // others cycle through grayscale palette in order of appearance.
+    const dynamicStyles: Record<string, { color: string; dash: string; width: number; symbol: string }> = {};
+    let grayIdx = 0;
+    const rawCorpusIds = new Set($selectedRawCorpora);
     for (const arc of aggArcs) {
-      const gs = genreStyles[arc.genre] || { color: '#333', dash: 'solid', width: 2 };
+      if (rawCorpusIds.has(arc.genre)) {
+        // Background corpus: thin dashed gray, no scatter points
+        dynamicStyles[arc.genre] = { color: '#bbb', dash: 'dash', width: 1.5, symbol: 'circle-open' };
+      } else if (arc.genre === 'arc_fiction') {
+        dynamicStyles[arc.genre] = { color: '#000', dash: 'solid', width: 3, symbol: 'circle' };
+      } else {
+        dynamicStyles[arc.genre] = {
+          color: aggColors[grayIdx % aggColors.length],
+          dash: aggDashes[grayIdx % aggDashes.length],
+          width: 2.5,
+          symbol: aggShapes[grayIdx % aggShapes.length],
+        };
+        grayIdx++;
+      }
+    }
 
-      // SE ribbon
-      if (arc.loess.length > 0) {
+    for (const arc of aggArcs) {
+      const gs = dynamicStyles[arc.genre];
+
+      // SE ribbon (skip for raw background corpora)
+      if (arc.loess.length > 0 && !rawCorpusIds.has(arc.genre)) {
         const lx = arc.loess.map(p => p.year);
         traces.push({
           x: [...lx, ...lx.slice().reverse()],
@@ -237,8 +267,8 @@
               'Texts: %{customdata[1]:,}<extra></extra>',
           });
         }
-      } else {
-        // No subgroups — original behavior
+      } else if (!rawCorpusIds.has(arc.genre)) {
+        // No subgroups, curated arc — original scatter behavior
         traces.push({
           x: arc.points.map(p => p.year),
           y: arc.points.map(p => p.mean),
@@ -247,7 +277,7 @@
           mode: 'markers',
           marker: {
             color: gs.color,
-            symbol: genreShapes[arc.genre] || 'circle',
+            symbol: gs.symbol,
             size: arc.points.map(p => 4 + Math.sqrt(p.n_texts / maxN) * 16),
             opacity: 0.5,
             line: { width: 0.5, color: gs.color },
@@ -259,16 +289,21 @@
             'Texts: %{customdata[1]:,}<extra></extra>',
         });
       }
+      // Raw corpus: no scatter points — LOESS line only (rendered below)
 
       // LOESS line (always the overall aggregate)
       if (arc.loess.length > 0) {
+        const isRaw = rawCorpusIds.has(arc.genre);
         traces.push({
           x: arc.loess.map(p => p.year),
           y: arc.loess.map(p => p.fitted),
           type: 'scatter', mode: 'lines',
           line: { color: gs.color, dash: gs.dash, width: gs.width },
-          name: `${arc.genre} LOESS`,
-          showlegend: false,
+          opacity: isRaw ? 0.6 : 1.0,
+          name: isRaw
+            ? `${arc.genre} (${arc.n_texts_total.toLocaleString()} texts, background)`
+            : `${arc.genre} LOESS`,
+          showlegend: isRaw,
           hovertemplate: `<b>${arc.genre}</b><br>Year: %{x}<br>Score: %{y:.3f}<extra></extra>`,
         });
       }
@@ -537,7 +572,7 @@
   });
 
   $effect(() => {
-    $norm; $selectedGenres; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $corpusCorrected; $loessSpan; $adjustModel; $binSize; $splitBy; $translatedFilter; $minTexts; $dedup;
+    $norm; $selectedGenres; $selectedRawCorpora; $selectedCorpora; $yearRange; $periodMatched; $corpusAdjusted; $corpusSmoothed; $corpusCorrected; $loessSpan; $adjustModel; $binSize; $splitBy; $translatedFilter; $minTexts; $dedup;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       if (Plotly) loadData();

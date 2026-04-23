@@ -28,6 +28,7 @@ async function fetchJson<T>(path: string, params?: Record<string, string | strin
 export const fetchCorpora = () => fetchJson<CorpusInfo[]>('/meta/corpora');
 export const fetchNorms = () => fetchJson<NormInfo[]>('/meta/norms');
 export const fetchGenres = () => fetchJson<string[]>('/meta/genres');
+export const fetchRawCorpora = () => fetchJson<{id: string; label: string; lang: string; n_texts: number}[]>('/meta/raw-corpora');
 
 // Arc
 export function fetchArcAggregated(params: {

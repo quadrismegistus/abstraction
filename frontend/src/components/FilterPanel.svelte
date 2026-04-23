@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { norm, selectedGenres, selectedCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, genresList, corporaList, normsList } from '$lib/stores';
+  import { norm, selectedGenres, selectedCorpora, selectedRawCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, genresList, corporaList, normsList, rawCorporaList } from '$lib/stores';
   import type { NormInfo } from '$lib/types';
 
   // Group norms by source and period
@@ -29,6 +29,12 @@
     $selectedCorpora = $selectedCorpora.includes(c)
       ? $selectedCorpora.filter(x => x !== c)
       : [...$selectedCorpora, c];
+  }
+
+  function toggleRawCorpus(id: string) {
+    $selectedRawCorpora = $selectedRawCorpora.includes(id)
+      ? $selectedRawCorpora.filter(x => x !== id)
+      : [...$selectedRawCorpora, id];
   }
 
 </script>
@@ -128,6 +134,26 @@
     {/if}
   </section>
 
+  {#if $rawCorporaList.length > 0}
+  <section>
+    <h4>Background corpora</h4>
+    <p class="hint">Full unfiltered corpora — shown as dashed reference lines</p>
+    <div class="checkbox-group">
+      {#each $rawCorporaList as c}
+        <label>
+          <input type="checkbox" checked={$selectedRawCorpora.includes(c.id)}
+                 onchange={() => toggleRawCorpus(c.id)} />
+          {c.label} <span class="count">({c.n_texts.toLocaleString()})</span>
+          <span class="lang-tag">{c.lang}</span>
+        </label>
+      {/each}
+    </div>
+    {#if $selectedRawCorpora.length > 0}
+      <button class="clear-btn" onclick={() => $selectedRawCorpora = []}>Clear</button>
+    {/if}
+  </section>
+  {/if}
+
   <section>
     <h4>Year range</h4>
     <div class="range-inputs">
@@ -179,6 +205,8 @@
   .checkbox-group.scrollable { max-height: 200px; overflow-y: auto; }
   label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
   .count { color: #999; font-size: 0.75rem; }
+  .lang-tag { color: #aaa; font-size: 0.7rem; font-style: italic; }
+  .hint { margin: 0 0 4px; font-size: 0.75rem; color: #999; font-style: italic; }
   .btn-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
   .clear-btn {
     padding: 2px 8px; font-size: 0.75rem;

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import favicon from '$lib/assets/favicon.svg';
-  import { fetchCorpora, fetchNorms, fetchGenres } from '$lib/api';
-  import { corporaList, normsList, genresList, selectedCorpora, globalLoading } from '$lib/stores';
+  import { fetchCorpora, fetchNorms, fetchGenres, fetchRawCorpora } from '$lib/api';
+  import { corporaList, normsList, genresList, selectedCorpora, globalLoading, rawCorporaList } from '$lib/stores';
   import FilterPanel from '../components/FilterPanel.svelte';
 
   let { children } = $props();
@@ -10,12 +10,13 @@
 
   onMount(async () => {
     try {
-      const [corpora, norms, genres] = await Promise.all([
-        fetchCorpora(), fetchNorms(), fetchGenres()
+      const [corpora, norms, genres, rawCorpora] = await Promise.all([
+        fetchCorpora(), fetchNorms(), fetchGenres(), fetchRawCorpora()
       ]);
       $corporaList = corpora;
       $normsList = norms;
       $genresList = genres;
+      $rawCorporaList = rawCorpora;
       // Default: all corpora selected
       $selectedCorpora = corpora.map(c => c.name);
     } catch (e) {

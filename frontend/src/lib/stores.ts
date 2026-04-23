@@ -19,7 +19,17 @@ export const minTexts = writable(1);  // minimum texts per bin point
 export const corpusCorrected = writable(true);  // match-group-based corpus bias correction
 export const dedup = writable<'within_lang_group' | 'rep_only'>('within_lang_group');  // match-group score aggregation
 
+export const selectedRawCorpora = writable<string[]>([]);
+
 // Cached metadata (loaded once)
 export const corporaList = writable<CorpusInfo[]>([]);
 export const normsList = writable<NormInfo[]>([]);
 export const genresList = writable<string[]>([]);
+
+export interface RawCorpusOption {
+  id: string;
+  label: string;
+  lang: string;
+  n_texts: number;
+}
+export const rawCorporaList = writable<RawCorpusOption[]>([]);

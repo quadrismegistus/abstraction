@@ -11,6 +11,20 @@
   let loading = $state(true);
   let error = $state('');
   let mode: 'color' | 'print' = $state('color');
+  let humanOnly = $state(false);
+
+  function resolveCol(base: string, human: boolean): string {
+    if (!human) return base;
+    // Swap trailing component (period/.median) for .orig so we only use
+    // human-rated norms. Works for Abs-Conc.Median.median → Abs-Conc.Median.orig,
+    // Abs-Conc.CHB-Conc.C18 → Abs-Conc.CHB-Conc.orig, etc.
+    const parts = base.split('.');
+    if (parts.length >= 3) {
+      parts[parts.length - 1] = 'orig';
+      return parts.join('.');
+    }
+    return base;
+  }
 
   // Tooltip state
   let tooltipWord = $state('');
@@ -23,9 +37,9 @@
     error = '';
     try {
       data = await fetchPassage(corpus, textId, chunkIndex, {
-        col: $norm,
+        col: resolveCol($norm, humanOnly),
         chunk_size: String($chunkSize),
-        ...($periodMatched ? { period_matched: 'true' } : {}),
+        ...($periodMatched && !humanOnly ? { period_matched: 'true' } : {}),
       });
     } catch (e: any) {
       error = e.message;
@@ -61,7 +75,7 @@
   }
 
   $effect(() => {
-    $norm; $chunkSize;
+    $norm; $chunkSize; humanOnly;
     loadData();
   });
 </script>
@@ -82,6 +96,13 @@
       <div class="controls">
         <button class:active={mode === 'color'} onclick={() => mode = 'color'}>Color</button>
         <button class:active={mode === 'print'} onclick={() => mode = 'print'}>Print</button>
+        <button
+          class:active={humanOnly}
+          onclick={() => humanOnly = !humanOnly}
+          title={humanOnly
+            ? 'Only human-rated words are shown; vec-derived scores are hidden'
+            : 'Switch to human-rated norms only (hides W2V-derived scores)'}
+        >Human only</button>
         <button class="export-btn" onclick={exportPrint}>Export</button>
       </div>
     </div>
