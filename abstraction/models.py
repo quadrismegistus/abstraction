@@ -45,26 +45,43 @@ def yield_chunks_from_text(txt, chunk_size=30):
         yield words[i:i + chunk_size]
 
 
-def save_skipgrams_from_paths(paths, ofn, min_len=10, fast=False):
+def save_skipgrams_from_paths(paths, ofn, min_len=10, fast=False, max_skipgrams=None):
+    """Write skipgrams to ofn from paths (shuffled if max_skipgrams set).
+
+    If max_skipgrams is given, paths are shuffled and writing stops once
+    max_skipgrams lines have been written.
+    """
     os.makedirs(os.path.dirname(ofn), exist_ok=True)
+    if max_skipgrams is not None:
+        paths = list(paths)
+        random.shuffle(paths)
+    n_written = 0
     opener = gzip.open(ofn, "wt") if ofn.endswith(".gz") else open(ofn, "w")
     with opener as f:
         for path in tqdm(paths, desc="Generating skipgrams"):
             if not os.path.exists(path):
                 continue
-            with open(path, encoding="utf-8", errors="ignore") as tf:
-                txt = tf.read()
-            if fast:
-                for chunk in yield_chunks_from_text(txt):
-                    f.write(" ".join(chunk) + "\n")
+            if path.endswith(".gz"):
+                import gzip as _gzip
+                with _gzip.open(path, "rt", encoding="utf-8", errors="ignore") as tf:
+                    txt = tf.read()
             else:
-                for sent in yield_sentences_from_text(txt, min_len=min_len):
-                    f.write(" ".join(sent) + "\n")
+                with open(path, encoding="utf-8", errors="ignore") as tf:
+                    txt = tf.read()
+            if fast:
+                gen = yield_chunks_from_text(txt)
+            else:
+                gen = yield_sentences_from_text(txt, min_len=min_len)
+            for chunk in gen:
+                f.write(" ".join(chunk) + "\n")
+                n_written += 1
+                if max_skipgrams is not None and n_written >= max_skipgrams:
+                    return
 
 
 def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
                          min_year=None, max_year=None, num_proc=1, force=False,
-                         output_dir=None, fast=False):
+                         output_dir=None, fast=False, max_skipgrams=None):
     """Generate skipgram files for each time period in a corpus."""
     corpus = load_corpus(corpus_name)
     oroot = os.path.join(output_dir or PATH_MODELS, corpus.id)
@@ -87,7 +104,7 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
         objs.append((paths, ofn))
 
     def _do(obj):
-        save_skipgrams_from_paths(obj[0], obj[1], fast=fast)
+        save_skipgrams_from_paths(obj[0], obj[1], fast=fast, max_skipgrams=max_skipgrams)
 
     pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 

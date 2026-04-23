@@ -41,7 +41,11 @@ class Corpus:
         return self._metadata
 
     def text_path(self, text_id):
-        return os.path.join(self.path, "txt", f"{text_id}.txt")
+        plain = os.path.join(self.path, "txt", f"{text_id}.txt")
+        gz = plain + ".gz"
+        if not os.path.exists(plain) and os.path.exists(gz):
+            return gz
+        return plain
 
     def text_paths(self):
         return [
@@ -50,7 +54,11 @@ class Corpus:
         ]
 
     def read_text(self, text_id):
+        import gzip as _gzip
         path = self.text_path(text_id)
+        if path.endswith(".gz"):
+            with _gzip.open(path, "rt", encoding="utf-8", errors="ignore") as f:
+                return f.read()
         with open(path, encoding="utf-8", errors="ignore") as f:
             return f.read()
 
