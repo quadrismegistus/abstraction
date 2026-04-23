@@ -702,3 +702,263 @@ def plot_arc_by_genre(combined_df, genres=None,
         fig.save(save_to)
 
     return fig
+
+
+# ---------------------------------------------------------------------------
+# UMAP and cross-language line plots (matplotlib)
+# ---------------------------------------------------------------------------
+
+PERIOD_COLORS = {
+    "pre-1600": "#440154",
+    "C17a": "#443983",
+    "C17b": "#31688e",
+    "C18a": "#21918c",
+    "C18b": "#5ec962",
+    "post-1800": "#fde725",
+}
+
+PERIOD_BINS = [0, 1600, 1650, 1700, 1750, 1800, 2100]
+PERIOD_LABELS = ["pre-1600", "C17a", "C17b", "C18a", "C18b", "post-1800"]
+
+FORM_GENRE_COLORS = {
+    "novel": "#1f77b4", "romance": "#ff7f0e", "allegory": "#2ca02c",
+    "tale": "#d62728", "biography": "#9467bd", "novella": "#8c564b",
+    "dialogue": "#e377c2", "satire": "#bcbd22", "(other)": "#bbbbbb",
+}
+
+LANG_COLORS = {"en": "#1f77b4", "fr": "#d62728", "de": "#9467bd"}
+
+
+def _savefig(fig, figname, figdir=None):
+    if figname is None:
+        return
+    path = os.path.join(figdir or "../figures", figname) if not os.path.isabs(figname) else figname
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fig.savefig(path, bbox_inches="tight")
+
+
+def scatter_binary(ax, df, col, title, *, xcol="umap_x", ycol="umap_y",
+                   true_color="#d62728", false_color="#1f77b4"):
+    """Two-colour scatter (true/false on ``col``) with counts in the legend."""
+    from matplotlib.lines import Line2D
+    vals = df[col].fillna(0).astype(int)
+    for v, color, z in [(0, false_color, 1), (1, true_color, 2)]:
+        m = vals == v
+        ax.scatter(df.loc[m, xcol], df.loc[m, ycol], c=color, s=5, alpha=0.4, zorder=z)
+    t, f = int((vals == 1).sum()), int((vals == 0).sum())
+    legend = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=true_color, markersize=8, label=f"true ({t})"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=false_color, markersize=8, label=f"false ({f})"),
+    ]
+    ax.legend(handles=legend, loc="upper right", fontsize=8)
+    ax.set_title(title, fontsize=11)
+    ax.set_xticks([]); ax.set_yticks([])
+
+
+def facet_by_genre(df, genre_cols, color_col=None, *, norm=None, cmap="RdBu",
+                   period_mode=False, figname=None, title="",
+                   xcol="umap_x", ycol="umap_y", ncols=4, figdir=None,
+                   period_colors=None):
+    """Multi-panel UMAP facet — one panel per genre column.
+
+    Each panel shows all points greyed out, then overlays points belonging to
+    that genre coloured either by a continuous ``color_col`` or by ``period_bin``
+    if ``period_mode=True``.
+    """
+    import matplotlib.pyplot as plt
+    period_colors = period_colors or PERIOD_COLORS
+    n = len(genre_cols)
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(16, 4 * nrows))
+    axes = np.atleast_2d(axes).flatten()
+    i = -1
+    for i, gcol in enumerate(genre_cols):
+        ax = axes[i]
+        ax.scatter(df[xcol], df[ycol], c="#e8e8e8", s=3, alpha=0.25, zorder=1)
+        mask = df[gcol] == 1
+        d = df[mask]
+        gname = gcol.replace("genre_", "")
+        if period_mode:
+            for p, color in period_colors.items():
+                dm = d[d["period_bin"] == p]
+                if len(dm):
+                    ax.scatter(dm[xcol], dm[ycol], c=color, s=8, alpha=0.7,
+                               label=f"{p} ({len(dm)})")
+            ax.legend(loc="upper right", fontsize=6, markerscale=1.5)
+            title_extra = ""
+        else:
+            valid = d[color_col].notna()
+            ax.scatter(
+                d.loc[valid, xcol], d.loc[valid, ycol],
+                c=d.loc[valid, color_col], cmap=cmap, norm=norm, s=8, alpha=0.7,
+            )
+            title_extra = f", mean={d[color_col].mean():.2f}" if d[color_col].notna().any() else ""
+        ax.set_title(f"{gname} (n={len(d)}){title_extra}", fontsize=10)
+        ax.set_xticks([]); ax.set_yticks([])
+    for j in range(i + 1, len(axes)):
+        axes[j].set_visible(False)
+    fig.suptitle(title, fontsize=13, y=1.01)
+    plt.tight_layout()
+    _savefig(fig, figname, figdir)
+    return fig
+
+
+def plot_umap_overview(feat, *, form_tags, annotation_cols=(), figname=None,
+                       title=None, figdir=None, xcol="umap_x", ycol="umap_y"):
+    """6-panel overview: primary form-genre / period / abstractness / up to 3 annotations.
+
+    Expects ``feat`` to already have ``form_primary``, ``period_bin``, ``abs_score``
+    and the UMAP coordinates.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    fig, axes = plt.subplots(2, 3, figsize=(17, 11))
+
+    ax = axes[0, 0]
+    order = ["(other)"] + [g.replace("genre_", "") for g in form_tags]
+    for g in order:
+        m = feat["form_primary"] == g
+        if m.sum() == 0: continue
+        z = 1 if g == "(other)" else 2
+        ax.scatter(feat.loc[m, xcol], feat.loc[m, ycol],
+                   c=FORM_GENRE_COLORS.get(g, "#999"), s=5, alpha=0.5,
+                   label=f"{g} ({m.sum()})", zorder=z)
+    ax.legend(loc="upper right", fontsize=7, markerscale=2)
+    ax.set_title("Primary form-genre", fontsize=11); ax.set_xticks([]); ax.set_yticks([])
+
+    ax = axes[0, 1]
+    for p, color in PERIOD_COLORS.items():
+        m = feat["period_bin"] == p
+        if m.sum():
+            ax.scatter(feat.loc[m, xcol], feat.loc[m, ycol], c=color, s=5,
+                       alpha=0.55, label=f"{p} ({m.sum()})")
+    ax.legend(loc="upper right", fontsize=7, markerscale=2)
+    ax.set_title("Period", fontsize=11); ax.set_xticks([]); ax.set_yticks([])
+
+    ax = axes[0, 2]
+    valid = feat["abs_score"].notna()
+    vmin, vmax = feat.loc[valid, "abs_score"].quantile([0.05, 0.95])
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    ax.scatter(feat.loc[~valid, xcol], feat.loc[~valid, ycol], c="#eee", s=4, alpha=0.3)
+    sc = ax.scatter(feat.loc[valid, xcol], feat.loc[valid, ycol],
+                    c=feat.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
+    plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness (+ = abstract)")
+    ax.set_title("Abstractness score", fontsize=11); ax.set_xticks([]); ax.set_yticks([])
+
+    annotation_cols = list(annotation_cols)
+    for i in range(3):
+        col = annotation_cols[i] if i < len(annotation_cols) else None
+        if col and col in feat.columns:
+            scatter_binary(axes[1, i], feat, col, col, xcol=xcol, ycol=ycol)
+        else:
+            axes[1, i].set_visible(False)
+
+    fig.suptitle(title or f"Passage-level UMAP of {len(feat):,} passages",
+                 fontsize=14, y=0.995)
+    plt.tight_layout()
+    _savefig(fig, figname, figdir)
+    return fig
+
+
+def plot_text_umap_4panel(df, *, xcol, ycol, form_tags, figname=None,
+                          title_suffix="", figdir=None):
+    """4-panel text-level UMAP: language / primary genre / abstractness / period."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+
+    ax = axes[0, 0]
+    for lang, color in LANG_COLORS.items():
+        m = df["lang"] == lang
+        if m.sum() == 0: continue
+        ax.scatter(df.loc[m, xcol], df.loc[m, ycol], c=color, s=5, alpha=0.5,
+                   label=f"{lang} ({m.sum()})")
+    ax.legend(fontsize=9, markerscale=3); ax.set_title("Language", fontsize=12)
+    ax.set_xticks([]); ax.set_yticks([])
+
+    ax = axes[0, 1]
+    def _primary(row):
+        for t in form_tags:
+            if row.get(t, 0) == 1:
+                return t.replace("genre_", "")
+        return "(other)"
+    g = df.apply(_primary, axis=1)
+    for gg in ["(other)"] + [t.replace("genre_", "") for t in form_tags]:
+        m = g == gg
+        if m.sum() == 0: continue
+        z = 1 if gg == "(other)" else 2
+        ax.scatter(df.loc[m, xcol], df.loc[m, ycol],
+                   c=FORM_GENRE_COLORS.get(gg, "#999"), s=5, alpha=0.5,
+                   label=f"{gg} ({m.sum()})", zorder=z)
+    ax.legend(fontsize=7, loc="upper right", markerscale=2.5)
+    ax.set_title("Primary genre", fontsize=12); ax.set_xticks([]); ax.set_yticks([])
+
+    ax = axes[1, 0]
+    valid = df["abs_score"].notna()
+    vmin, vmax = df.loc[valid, "abs_score"].quantile([0.05, 0.95])
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    ax.scatter(df.loc[~valid, xcol], df.loc[~valid, ycol], c="#eee", s=4, alpha=0.3)
+    sc = ax.scatter(df.loc[valid, xcol], df.loc[valid, ycol],
+                    c=df.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
+    plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness")
+    ax.set_title("Abstractness", fontsize=12); ax.set_xticks([]); ax.set_yticks([])
+
+    ax = axes[1, 1]
+    for p, color in PERIOD_COLORS.items():
+        m = df["period_bin"] == p
+        if m.sum() == 0: continue
+        ax.scatter(df.loc[m, xcol], df.loc[m, ycol], c=color, s=5, alpha=0.5,
+                   label=f"{p} ({m.sum()})")
+    ax.legend(fontsize=7, loc="upper right", markerscale=2.5)
+    ax.set_title("Period", fontsize=12); ax.set_xticks([]); ax.set_yticks([])
+
+    fig.suptitle(f"Text-level UMAP ({len(df):,} texts, mean-pooled e5){title_suffix}",
+                 fontsize=14, y=0.995)
+    plt.tight_layout()
+    _savefig(fig, figname, figdir)
+    return fig
+
+
+def plot_cross_language_lines(df, field_specs, *, title, figname=None,
+                              figsize=None, y_label="% of passages",
+                              x_offset=25, figdir=None):
+    """Horizontal row of EN-vs-FR line plots, one panel per field.
+
+    ``df`` is long-form with columns ``field, lang, period, pct`` (as produced
+    by ``analysis.fetch_cross_language_fields``). ``field_specs`` is the same
+    list of ``(parent, enum)`` tuples used to build it — drives panel order.
+    """
+    import matplotlib.pyplot as plt
+    n = len(field_specs)
+    figsize = figsize or (max(13, 4 * n), 3.8)
+    fig, axes = plt.subplots(1, n, figsize=figsize)
+    if n == 1:
+        axes = [axes]
+    for ax, (parent, enum) in zip(axes, field_specs):
+        fname = f"{parent}__{enum}"
+        sub = df[df["field"] == fname]
+        for lang, color in [("en", "#1f77b4"), ("fr", "#d62728")]:
+            d = sub[sub["lang"] == lang].sort_values("period")
+            label = f"{lang.upper()} (n={int(d['n'].sum()):,})" if not d.empty else lang.upper()
+            ax.plot(d["period"] + x_offset, d["pct"], "o-", color=color,
+                    label=label, linewidth=2, markersize=6)
+        ax.set_title(enum.replace("_", " "), fontsize=11)
+        ax.set_xlabel("year (bin center)")
+        ax.set_ylabel(y_label)
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+    fig.suptitle(title, fontsize=13, y=1.02)
+    plt.tight_layout()
+    _savefig(fig, figname, figdir)
+    return fig
+
+
+def add_period_bin(df, year_col="year", bins=None, labels=None):
+    """Convenience: add a ``period_bin`` column based on integer year."""
+    bins = bins or PERIOD_BINS
+    labels = labels or PERIOD_LABELS
+    out = df.copy()
+    out["period_bin"] = pd.cut(out[year_col], bins=bins, labels=labels)
+    return out

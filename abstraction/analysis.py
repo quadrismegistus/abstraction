@@ -2289,3 +2289,145 @@ def report_compare(genres=None,
 
     md = "\n".join(lines)
     return md, results
+
+
+# ---------------------------------------------------------------------------
+# Embedding / passage-annotation analysis helpers
+#
+# Thin orchestration layer over largeliterarymodels.analysis primitives
+# (build_feature_matrix, fit_partition_model, compare_cross_language,
+# load_genre_extras, period_dummies). Kept here so notebooks import
+# ready-made pipelines instead of redefining the chaining logic.
+# ---------------------------------------------------------------------------
+
+
+def attach_extras(features, groups, client, *, include_lang=False,
+                  scheme="p500", score_col="Abs-Conc.Median.median"):
+    """Attach genre tags, period dummies, abstractness, optional lang, and
+    passage embeddings to a build_feature_matrix output.
+
+    Returns
+    -------
+    (feat, groups) : DataFrame + updated groups dict. ``feat`` has one row per
+    passage (after inner-join with ``lltk.passage_embeddings``) and includes
+    the columns referenced in ``groups`` plus `year`, `lang`, `embedding`.
+    """
+    from largeliterarymodels.analysis import load_genre_extras, period_dummies
+
+    feat = features.reset_index()
+    ids = list(feat["_id"].unique())
+
+    genre_df = load_genre_extras(ids, client=client)
+    feat = feat.merge(genre_df, left_on="_id", right_index=True, how="left")
+    groups["genre"] = list(genre_df.columns)
+
+    meta = client.query_df(
+        "SELECT _id, year, lang FROM lltk.texts FINAL WHERE _id IN %(ids)s",
+        parameters={"ids": ids},
+    ).drop_duplicates("_id")
+    feat = feat.merge(meta, on="_id", how="left")
+
+    pdum = period_dummies(feat["year"], breaks=[1600, 1700, 1750, 1800])
+    for col in pdum.columns:
+        feat[col] = pdum[col].values
+    groups["period"] = list(pdum.columns)
+
+    if include_lang:
+        feat["lang_en"] = (feat["lang"] == "en").astype(int)
+        groups["language"] = ["lang_en"]
+
+    scores = client.query_df(
+        f"SELECT _id, seq, scores[%(col)s] AS abstractness "
+        f"FROM abstraction.passage_scores "
+        f"WHERE scheme=%(scheme)s AND _id IN %(ids)s",
+        parameters={"col": score_col, "scheme": scheme, "ids": ids},
+    )
+    feat = feat.merge(scores, on=["_id", "seq"], how="left")
+    groups["abstractness"] = ["abstractness"]
+
+    emb = client.query_df(
+        "SELECT _id, seq, embedding FROM lltk.passage_embeddings "
+        "WHERE scheme=%(scheme)s AND _id IN %(ids)s",
+        parameters={"scheme": scheme, "ids": ids},
+    )
+    feat = feat.merge(emb, on=["_id", "seq"], how="inner")
+
+    return feat, groups
+
+
+def run_partition(feat, groups, pca_components=50, emb_col="embedding"):
+    """Build Y/X from a feat dataframe and call fit_partition_model.
+
+    ``feat[emb_col]`` must be a column of array-like vectors (e.g. from
+    ``lltk.passage_embeddings``). All columns referenced in ``groups`` are
+    concatenated into X with NaNs → 0.
+    """
+    from largeliterarymodels.analysis import fit_partition_model
+
+    Y = pd.DataFrame(
+        np.array(feat[emb_col].tolist(), dtype=np.float32),
+        index=feat.index,
+    )
+    all_cols = [c for g in groups.values() for c in g]
+    X = feat[all_cols].fillna(0)
+    return fit_partition_model(Y, X, groups, pca_components=pca_components)
+
+
+def run_umap(X, n_neighbors=30, min_dist=0.3, seed=42, metric="cosine"):
+    """Project X → 2D via UMAP. Defaults match the notebook conventions."""
+    import umap
+    reducer = umap.UMAP(
+        n_components=2, metric=metric,
+        n_neighbors=n_neighbors, min_dist=min_dist,
+        random_state=seed,
+    )
+    return reducer.fit_transform(X)
+
+
+def per_feature_r2(feat, groups, pca_components=50, top_n=30, emb_col="embedding"):
+    """Marginal R² of each feature column against PCA-reduced embeddings.
+
+    For each column in ``groups``, regress the PCA-compressed embedding matrix
+    on that single feature and report the resulting R². Useful for ranking
+    which individual annotations explain the most embedding variance.
+    """
+    from sklearn.decomposition import PCA
+
+    X_raw = np.array(feat[emb_col].tolist(), dtype=np.float32)
+    X_raw = X_raw - X_raw.mean(axis=0)
+    pca = PCA(n_components=pca_components, random_state=42)
+    Xp = pca.fit_transform(X_raw)
+    total_ss = (Xp ** 2).sum()
+    rows = []
+    for group, cols in groups.items():
+        for col in cols:
+            v = feat[col].fillna(0).values.astype(float)
+            if v.std() == 0:
+                continue
+            Y = v.reshape(-1, 1)
+            beta = np.linalg.lstsq(Y, Xp, rcond=None)[0]
+            r2 = 1 - ((Xp - Y @ beta) ** 2).sum() / total_ss
+            rows.append({"group": group, "feature": col, "R2": r2, "prevalence": v.mean()})
+    return pd.DataFrame(rows).sort_values("R2", ascending=False).head(top_n)
+
+
+def fetch_cross_language_fields(field_specs, *, client,
+                                period_bins=(1600, 1650, 1700, 1750, 1800),
+                                prose_only=True):
+    """Fetch cross-language passage-content prevalence for ``(parent, enum)`` specs.
+
+    Wraps ``largeliterarymodels.analysis.compare_cross_language``, returning
+    long-form (lang, period, field, pct, n) with integer period (bin start)
+    and field names prefixed as ``{parent}__{enum}`` for downstream pivots.
+    """
+    from largeliterarymodels.analysis import compare_cross_language
+
+    spec_tuples = [(f"{parent}::{enum}", enum) for parent, enum in field_specs]
+    df = compare_cross_language(
+        spec_tuples, period_bins=list(period_bins),
+        prose_only=prose_only, client=client,
+    )
+    df["period"] = df["period"].astype(str).str.split("-").str[0].astype(int)
+    lookup = {enum: f"{parent}__{enum}" for parent, enum in field_specs}
+    df["field"] = df["field"].map(lookup).fillna(df["field"])
+    return df
