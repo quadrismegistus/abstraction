@@ -13,7 +13,7 @@
 # idempotent — it skips runs whose model.bin already exists.
 
 #SBATCH -J abs-w2v
-#SBATCH -A CHANGE_ME-SL3-CPU          # run `mybalance` on first login; edit this line
+#SBATCH -A HEUSER-SL3-CPU
 #SBATCH -p icelake                    # 76 cores/node; use icelake-himem if OOM
 #SBATCH --nodes=1
 #SBATCH --ntasks=1

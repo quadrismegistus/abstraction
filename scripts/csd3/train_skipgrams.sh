@@ -11,7 +11,7 @@
 # usually faster than shipping raw corpora to CSD3.
 
 #SBATCH -J abs-skip
-#SBATCH -A CHANGE_ME-SL3-CPU
+#SBATCH -A HEUSER-SL3-CPU
 #SBATCH -p icelake
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
