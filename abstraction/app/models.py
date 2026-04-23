@@ -149,3 +149,4 @@ class GenreArc(BaseModel):
 class ScoreRequest(BaseModel):
     text: str
     col: str = "Abs-Conc.Median.median"
+    lang: str | None = None

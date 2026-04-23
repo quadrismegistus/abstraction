@@ -25,10 +25,10 @@ def _resolve_col(col: str, period_matched: bool, year: float | None) -> str:
     return col
 
 
-def _count_words(txt: str, col: str):
+def _count_words(txt: str, col: str, lang: str = "en"):
     """Count abstract/concrete/neutral words in text."""
-    scores = get_norm_dict(col)
-    spelling_d = get_spelling_modernizer()
+    scores = get_norm_dict(col, lang=lang)
+    spelling_d = get_spelling_modernizer() if lang == "en" else {}
     tokens = tokenize_agnostic(txt)
     n_abs = n_conc = n_neutral = 0
     for tok in tokens:
@@ -46,12 +46,12 @@ def _count_words(txt: str, col: str):
     return n_abs, n_conc, n_neutral
 
 
-def _score_text(text: str, col: str) -> PassageResponse:
+def _score_text(text: str, col: str, lang: str = "en") -> PassageResponse:
     """Score a text passage using centralized rendering from passages.py."""
-    body_html = render_passage_body(text, col=col, mode="color")
-    print_body_html = render_passage_body(text, col=col, mode="print")
-    print_html = render_passage_html(text, col=col, show_legend=True)
-    n_abs, n_conc, n_neutral = _count_words(text, col)
+    body_html = render_passage_body(text, col=col, mode="color", lang=lang)
+    print_body_html = render_passage_body(text, col=col, mode="print", lang=lang)
+    print_html = render_passage_html(text, col=col, show_legend=True, lang=lang)
+    n_abs, n_conc, n_neutral = _count_words(text, col, lang=lang)
 
     return PassageResponse(
         text=text,
@@ -73,9 +73,10 @@ def get_passage(
     chunk_size: int = Query(default=500, ge=50, le=5000),
     period_matched: bool = False,
     year: float | None = None,
+    lang: str | None = None,
 ):
     """Get a specific passage chunk with word-level scoring."""
-    from .trajectory import _get_text_and_metadata, _chunk_text_simple
+    from .trajectory import _get_text_and_metadata, _chunk_text_simple, resolve_lang
 
     txt, _meta, lltk_text = _get_text_and_metadata(corpus, text_id)
     # Use text's year for period matching if not explicitly provided
@@ -87,6 +88,7 @@ def get_passage(
             except (TypeError, ValueError):
                 pass
     col = _resolve_col(col, period_matched, year)
+    resolved_lang = resolve_lang(corpus, _meta, lang)
     if txt is None:
         raise HTTPException(status_code=404, detail=f"Text not found: {corpus}/{text_id}")
 
@@ -109,10 +111,11 @@ def get_passage(
             raise HTTPException(status_code=404, detail=f"Chunk index {chunk_index} out of range (0-{len(chunks)-1})")
         chunk_text = chunks[chunk_index]["text"]
 
-    return _score_text(chunk_text, col)
+    return _score_text(chunk_text, col, lang=resolved_lang)
 
 
 @router.post("/score", response_model=PassageResponse)
 def score_arbitrary_text(req: ScoreRequest):
     """Score arbitrary user-provided text."""
-    return _score_text(req.text, req.col)
+    lang = getattr(req, "lang", None) or "en"
+    return _score_text(req.text, req.col, lang=lang)

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Query
 
-from ..db import get_connection
+from ..db import get_connection, RAW_CORPORA
 from ..models import (
     ArcAggregated, ArcBin, ArcText, ArcTexts,
     CorpusArc, CorpusArcBin,
@@ -336,12 +336,12 @@ def arc_aggregate(
         cl = ", ".join(f"'{c}'" for c in corpus)
         corpus_filter = f" AND corpus_name IN ({cl})"
 
-    # is_translated filter (top-level column in LLTK DuckDB)
+    # is_translated filter — CH stores as Nullable(UInt8) (0/1)
     translated_filter = ""
     if is_translated == "true":
-        translated_filter = " AND is_translated = true"
+        translated_filter = " AND is_translated = 1"
     elif is_translated == "false":
-        translated_filter = " AND (is_translated IS NULL OR is_translated = false)"
+        translated_filter = " AND (is_translated IS NULL OR is_translated = 0)"
 
     # Extra columns to select for split_by and corpus correction
     extra_cols = ""
@@ -358,7 +358,7 @@ def arc_aggregate(
     results = []
 
     for g in genre:
-        is_arc = g.startswith("arc_")
+        is_arc = g.startswith("arc_") or g in RAW_CORPORA
         filter_col = "arc_corpus" if is_arc else "genre"
 
         if period_matched:
@@ -547,12 +547,12 @@ def arc_by_genre(
         corpus_list = ", ".join(f"'{c}'" for c in corpus)
         corpus_sql = f" AND corpus_name IN ({corpus_list})"
 
-    # Build translation filter
+    # Build translation filter — CH stores as Nullable(UInt8) (0/1)
     translated_sql = ""
     if is_translated == "true":
-        translated_sql = " AND is_translated = true"
+        translated_sql = " AND is_translated = 1"
     elif is_translated == "false":
-        translated_sql = " AND (is_translated IS NULL OR is_translated = false)"
+        translated_sql = " AND (is_translated IS NULL OR is_translated = 0)"
 
     # Load data for all requested genres/arc_corpora
     all_dfs = []

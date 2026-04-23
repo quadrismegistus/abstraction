@@ -61,6 +61,8 @@ def cmd_score_ids(args):
         from .norms_fr import get_allnorms_fr as get_allnorms
     elif args.lang == "de":
         from .norms_de import get_allnorms_de as get_allnorms
+    elif args.lang == "es":
+        from .norms_es import get_allnorms_es as get_allnorms
     else:
         from .norms import get_allnorms
 
@@ -78,8 +80,11 @@ def cmd_score_ids(args):
         sys.exit(1)
     meta = c.load_metadata()
     if "_id" not in meta.columns:
-        print(f"Corpus '{args.corpus}' metadata has no _id column", file=sys.stderr)
-        sys.exit(1)
+        # Derive _id from corpus name + row id (LLTK convention: _corpusname/id)
+        corpus_id = c.id if hasattr(c, 'id') else args.corpus
+        id_col = meta.index if meta.index.name == "id" else meta.get("id", meta.index)
+        meta = meta.copy()
+        meta["_id"] = [f"_{corpus_id}/{row_id}" for row_id in id_col]
     ids = meta["_id"].tolist()
     print(f"  {args.corpus}: {len(ids)} texts in metadata")
 
@@ -348,6 +353,7 @@ def cmd_train_skipgrams(args):
         force=args.force,
         output_dir=output_dir,
         fast=args.fast,
+        max_skipgrams=args.max_skipgrams,
     )
     print("Done")
 
@@ -360,11 +366,10 @@ def cmd_app(args):
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     if args.refresh:
-        from .app.db import _scores_db_path
-        db_path = _scores_db_path()
-        if os.path.exists(db_path):
-            os.remove(db_path)
-            print(f"Removed {db_path}")
+        # Tells the uvicorn child process (via lifespan -> init_db) to force
+        # rebuild abstraction.scores / scores_rep on CH.
+        os.environ["ABSTRACTION_REFRESH"] = "1"
+        print("--refresh: will rebuild CH scores tables on startup")
     frontend_dir = os.path.join(project_root, "frontend")
 
     procs = []
@@ -413,6 +418,280 @@ def cmd_app(args):
         _shutdown(None, None)
 
 
+def cmd_genre_tag_shift(args):
+    """Shift-share decomposition of abstractness change by genre tags (Oaxaca-Blinder).
+
+    For each genre tag facet (form/mode/register), computes how much of the change
+    in mean abstractness between period A and period B is due to:
+      - Composition: genre mix shifting between periods
+      - Within: genres themselves becoming more/less abstract
+      - Interaction: correlated composition + within change
+    """
+    import pandas as pd
+    import clickhouse_connect
+    from .app.routes.decompose import _decompose
+
+    def parse_period(s):
+        try:
+            start, end = s.split("-")
+            return int(start), int(end)
+        except Exception:
+            print(f"Bad period format {s!r} — expected START-END e.g. 1600-1700", file=sys.stderr)
+            sys.exit(1)
+
+    start_a, end_a = parse_period(args.period_a)
+    start_b, end_b = parse_period(args.period_b)
+
+    arc = args.arc
+    col = args.col
+    if args.facet == "all":
+        facets = ["form", "mode", "register", "flat"]
+    elif args.facet == "flat":
+        facets = ["flat"]
+    else:
+        facets = [args.facet]
+    sign = -1.0 if args.invert else 1.0
+
+    client = clickhouse_connect.get_client(
+        host="localhost", port=8123, username="lltk", password="lltk",
+        database="abstraction",
+    )
+
+    # Fetch all tags per (_id, facet) as arrays — groupArray preserves all tags
+    # so multi-tagged texts (e.g. [novel, novella]) are exploded into both buckets
+    # rather than collapsed to one. facet='unknown' filtered out.
+    year_min = min(start_a, start_b)
+    year_max = max(end_a, end_b)
+    sql = f"""
+    SELECT
+        s._id                 AS _id,
+        any(t.year)           AS year,
+        any(s.`{col}`)        AS _score,
+        gt.facet,
+        groupArray(gt.tag)    AS tags
+    FROM abstraction.scores s
+    JOIN (SELECT _id, year FROM lltk.texts FINAL) t ON s._id = t._id
+    LEFT JOIN lltk.text_genre_tags gt ON s._id = gt._id
+    WHERE s.arc_corpus = %(arc)s
+      AND s.`{col}` IS NOT NULL
+      AND t.year >= %(year_min)s AND t.year < %(year_max)s
+      AND (
+        (t.year >= %(start_a)s AND t.year < %(end_a)s)
+        OR (t.year >= %(start_b)s AND t.year < %(end_b)s)
+      )
+      AND (gt.facet IS NULL OR gt.facet != 'unknown')
+    GROUP BY s._id, gt.facet
+    """
+    raw = client.query_df(sql, parameters=dict(
+        arc=arc, start_a=start_a, end_a=end_a,
+        start_b=start_b, end_b=end_b,
+        year_min=year_min, year_max=year_max,
+    ))
+    client.close()
+
+    if raw.empty:
+        print(f"No scored texts found for arc={arc} in given periods.", file=sys.stderr)
+        sys.exit(1)
+
+    # Base: one row per text
+    base = raw[["_id", "year", "_score"]].drop_duplicates("_id").copy()
+    base["_score"] = base["_score"] * sign
+
+    # Explode tags: one row per (_id, facet, tag). Multi-tag texts appear once
+    # per tag so they contribute to every bucket they belong to.
+    tagged = (
+        raw[raw["facet"].notna()]
+        .explode("tags")
+        .rename(columns={"tags": "tag"})
+        .dropna(subset=["tag"])
+        .drop_duplicates(subset=["_id", "facet", "tag"])
+        [["_id", "facet", "tag"]]
+    )
+
+    # Per-facet decomposition: merge base with that facet's tags, run _decompose
+    early_base = base[(base["year"] >= start_a) & (base["year"] < end_a)]
+    late_base  = base[(base["year"] >= start_b) & (base["year"] < end_b)]
+
+    if early_base.empty or late_base.empty:
+        print("No data in one or both periods.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\narc={arc}  col={col}  invert={args.invert}")
+    print(f"Period A: {start_a}–{end_a}  (N={len(early_base):,}  mean={early_base['_score'].mean():.4f})")
+    print(f"Period B: {start_b}–{end_b}  (N={len(late_base):,}  mean={late_base['_score'].mean():.4f})")
+    print(f"Overall change: {late_base['_score'].mean() - early_base['_score'].mean():+.4f}")
+
+    all_results = []
+    for facet in facets:
+        # Build per-facet df: explode multi-tag texts into multiple rows.
+        # "flat" pools all tags across facets (deduplicated by (_id, tag)).
+        if facet == "flat":
+            facet_tags = tagged[["_id", "tag"]].drop_duplicates().rename(columns={"tag": "_tag"})
+        else:
+            facet_tags = tagged[tagged["facet"] == facet][["_id", "tag"]].rename(columns={"tag": "_tag"})
+        early = early_base.merge(facet_tags, on="_id", how="left")
+        late  = late_base.merge(facet_tags, on="_id", how="left")
+        early["_tag"] = early["_tag"].fillna("(untagged)")
+        late["_tag"]  = late["_tag"].fillna("(untagged)")
+
+        result = _decompose(early, late, "_tag", min_texts=args.min_count)
+        if result is None:
+            print(f"\n[{facet}] No result (too few texts per tag?)")
+            continue
+
+        result.decompose_by = f"genre_tag:{facet}"
+        result.period_early = f"{start_a}-{end_a}"
+        result.period_late = f"{start_b}-{end_b}"
+        all_results.append(result)
+
+        print(f"\n{'─'*90}")
+        print(f"  Facet: {facet}   composition={result.total_composition:+.4f}  "
+              f"within={result.total_within:+.4f}  interaction={result.total_interaction:+.4f}")
+        print(f"{'─'*90}")
+        hdr = (f"  {'tag':<28} {'n_a':>6} {'n_b':>6} {'mean_a':>8} {'mean_b':>8}"
+               f" {'comp':>8} {'within':>8} {'inter':>8} {'total':>8}")
+        print(hdr)
+        print(f"  {'-'*86}")
+        for row in result.rows:
+            print(f"  {row.category:<28} {row.n_early:>6} {row.n_late:>6}"
+                  f" {row.mean_early:>8.4f} {row.mean_late:>8.4f}"
+                  f" {row.composition_effect:>8.4f} {row.within_effect:>8.4f}"
+                  f" {row.interaction:>8.4f} {row.total_effect:>8.4f}")
+
+    if args.csv and all_results:
+        rows_data = []
+        for res in all_results:
+            facet_label = res.decompose_by.split(":")[1] if ":" in res.decompose_by else res.decompose_by
+            for row in res.rows:
+                rows_data.append({
+                    "facet": facet_label,
+                    "tag": row.category,
+                    "n_a": row.n_early, "n_b": row.n_late,
+                    "mean_a": row.mean_early, "mean_b": row.mean_late,
+                    "share_a": row.share_early, "share_b": row.share_late,
+                    "composition_effect": row.composition_effect,
+                    "within_effect": row.within_effect,
+                    "interaction": row.interaction,
+                    "total_effect": row.total_effect,
+                })
+        pd.DataFrame(rows_data).to_csv(args.csv, index=False)
+        print(f"\nSaved to {args.csv}")
+
+
+def cmd_score_passages(args):
+    """Score every passage in lltk.passages → abstraction.passage_scores.
+
+    Stores all norm columns as Map(String, Float32) so downstream queries can
+    extract any score: scores['Abs-Conc.Median.median']. Tokenization uses
+    tokenize_agnostic (regex word-boundary splitter, not str.split).
+    """
+    import time
+    import numpy as np
+    import clickhouse_connect
+    from .aggregate import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD
+    from .scoring import score_text_allcols, build_allnorms_index
+
+    lang = args.lang
+
+    print(f"  loading allnorms ({lang})...")
+    if lang == "fr":
+        from .norms_fr import get_allnorms_fr
+        allnorms = get_allnorms_fr(remove_stopwords=True)
+    elif lang == "de":
+        from .norms_de import get_allnorms_de
+        allnorms = get_allnorms_de(remove_stopwords=True)
+    else:
+        from .norms import get_allnorms
+        allnorms = get_allnorms(remove_stopwords=True)
+    print(f"  allnorms: {len(allnorms):,} words × {len(allnorms.columns)} columns")
+    norm_index = build_allnorms_index(allnorms)
+
+    client = clickhouse_connect.get_client(
+        host=CH_HOST, port=CH_PORT, username=CH_USER, password=CH_PASSWORD,
+    )
+
+    client.command("""
+        CREATE TABLE IF NOT EXISTS abstraction.passage_scores (
+            _id     String,
+            scheme  String,
+            seq     UInt32,
+            lang    String,
+            scores  Map(String, Float32)
+        ) ENGINE = MergeTree()
+        ORDER BY (_id, scheme, seq)
+    """)
+
+    count_sql = """
+        SELECT count()
+        FROM lltk.passages p
+        LEFT JOIN lltk.text_langs tl ON p._id = tl._id
+        WHERE coalesce(tl.lang_detected, p.lang) = {lang:String}
+    """
+    total = client.query(count_sql, parameters={"lang": lang}).result_rows[0][0]
+    print(f"  lltk.passages: {total:,} {lang} passages")
+
+    if args.force:
+        client.command(
+            "ALTER TABLE abstraction.passage_scores DELETE WHERE lang = {lang:String}",
+            parameters={"lang": lang},
+        )
+        done = set()
+        print("  --force: cleared existing scores")
+    else:
+        done_rows = client.query(
+            "SELECT _id, scheme, seq FROM abstraction.passage_scores WHERE lang = {lang:String}",
+            parameters={"lang": lang},
+        ).result_rows
+        done = {(r[0], r[1], r[2]) for r in done_rows}
+        if done:
+            print(f"  resume: {len(done):,} already scored")
+
+    from tqdm import tqdm
+
+    batch_size = args.batch_size
+    offset = 0
+
+    fetch_sql = """
+        SELECT p._id, p.scheme, p.seq, p.text
+        FROM lltk.passages p
+        LEFT JOIN lltk.text_langs tl ON p._id = tl._id
+        WHERE coalesce(tl.lang_detected, p.lang) = {lang:String}
+        ORDER BY p._id, p.scheme, p.seq
+        LIMIT {limit:UInt32} OFFSET {offset:UInt32}
+    """
+
+    with tqdm(total=total - len(done), unit="psg", desc=f"score-passages ({lang})") as pbar:
+        while True:
+            rows = client.query(
+                fetch_sql,
+                parameters={"lang": lang, "limit": batch_size, "offset": offset},
+            ).result_rows
+
+            if not rows:
+                break
+
+            insert_rows = []
+            for _id, scheme, seq, text in rows:
+                if (_id, scheme, seq) in done:
+                    continue
+                scores = score_text_allcols(text, allnorms, index=norm_index)
+                if scores:
+                    insert_rows.append((_id, scheme, seq, lang, scores))
+
+            if insert_rows:
+                client.insert(
+                    "abstraction.passage_scores",
+                    insert_rows,
+                    column_names=["_id", "scheme", "seq", "lang", "scores"],
+                )
+                pbar.update(len(insert_rows))
+
+            offset += batch_size
+
+    print(f"  done")
+    client.close()
+
+
 def cmd_estimate_corpus_bias(args):
     from .corpus_correction import estimate_corpus_bias, save_corpus_bias
     result = estimate_corpus_bias(
@@ -426,11 +705,25 @@ def cmd_estimate_corpus_bias(args):
 
 def cmd_gen_vecnorms(args):
     import time
-    from .models import gen_vecnorms
-    print(f"Generating vector norms (period_len={args.period_len})")
+    lang = getattr(args, 'lang', 'en') or 'en'
+    print(f"Generating vector norms lang={lang} (period_len={args.period_len})")
     t0 = time.time()
-    gen_vecnorms(bin_year_by=args.period_len, num_proc=args.workers,
-                 model_dir=getattr(args, 'model_dir', None))
+    if lang == 'fr':
+        from .norms_fr import gen_vecnorms_fr
+        gen_vecnorms_fr(model_dir=getattr(args, 'model_dir', None),
+                        bin_year_by=args.period_len, num_proc=args.workers)
+    elif lang == 'de':
+        from .norms_de import gen_vecnorms_de
+        gen_vecnorms_de(model_dir=getattr(args, 'model_dir', None),
+                        bin_year_by=args.period_len, num_proc=args.workers)
+    elif lang == 'es':
+        from .norms_es import gen_vecnorms_es
+        gen_vecnorms_es(model_dir=getattr(args, 'model_dir', None),
+                        bin_year_by=args.period_len, num_proc=args.workers)
+    else:
+        from .models import gen_vecnorms
+        gen_vecnorms(bin_year_by=args.period_len, num_proc=args.workers,
+                     model_dir=getattr(args, 'model_dir', None))
     elapsed = time.time() - t0
     print(f"Done in {elapsed:.0f}s")
 
@@ -483,8 +776,8 @@ def main():
         help="Score LLTK corpus texts via DuckDB freqs DB (1:1, no match-group averaging)",
     )
     p.add_argument("corpus", help="LLTK corpus name (e.g. arc_fiction_fr, gallica_literary_fictions)")
-    p.add_argument("--lang", choices=["en", "fr", "de"], default="en",
-                   help="Language: chooses get_allnorms vs get_allnorms_fr/de (default: en)")
+    p.add_argument("--lang", choices=["en", "fr", "de", "es"], default="en",
+                   help="Language: chooses get_allnorms vs get_allnorms_fr/de/es (default: en)")
     p.add_argument("--force", action="store_true", help="Re-score even if output exists")
     p.add_argument("--output", "-o", default=None, help="Output CSV path (default: data/scores/v8-raw/{corpus}.csv)")
     p.add_argument("--shard-size", type=int, default=20000, help="Texts per DuckDB query (default: 20000)")
@@ -568,9 +861,12 @@ def main():
     p.add_argument("--force", action="store_true", help="Regenerate even if files exist")
     p.add_argument("--output-dir", default=None, help="Output directory (default: data/models/)")
     p.add_argument("--fast", action="store_true", help="Skip sentence tokenization (fixed-size chunks, 10-50x faster)")
+    p.add_argument("--max-skipgrams", type=int, default=None, metavar="N",
+                   help="Cap skipgrams per period at N (texts shuffled, writing stops at cap)")
 
     # gen-vecnorms: generate vector-based word norms from trained models
     p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")
+    p.add_argument("--lang", default="en", choices=["en", "fr", "de", "es"], help="Language (default: en)")
     p.add_argument("--period-len", type=int, default=100, help="Period length for binning (default: 100)")
     p.add_argument("--model-dir", default=None, help="Model directory (default: data/models/)")
     p.add_argument("--workers", type=int, default=1, help="Parallel processes (default: 1)")
@@ -594,6 +890,40 @@ def main():
     p.add_argument("--csv", default=None, help="Save results to CSV")
     p.add_argument("--modernize", action="store_true", help="Use spelling-modernized counts (v2 instead of v2-raw)")
 
+    # genre-tag-shift: shift-share decomposition of abstractness by genre tags
+    p = sub.add_parser(
+        "genre-tag-shift",
+        help="Shift-share decomposition of abstractness change by genre tags (Oaxaca-Blinder)",
+    )
+    p.add_argument("--period-a", required=True, metavar="START-END",
+                   help="Earlier period, exclusive end e.g. 1640-1680")
+    p.add_argument("--period-b", required=True, metavar="START-END",
+                   help="Later period, exclusive end e.g. 1740-1780")
+    p.add_argument("--arc", default="arc_fiction",
+                   help="Arc corpus name (default: arc_fiction)")
+    p.add_argument("--col", default="Abs-Conc.Median.median",
+                   help="Score column (default: Abs-Conc.Median.median)")
+    p.add_argument("--facet", default="form", choices=["form", "mode", "register", "flat", "all"],
+                   help="Genre tag facet (default: form); 'flat' pools all tags across facets; 'all' runs all four")
+    p.add_argument("--invert", action="store_true", default=True,
+                   help="Negate scores so positive = more abstract (default: True)")
+    p.add_argument("--no-invert", dest="invert", action="store_false")
+    p.add_argument("--min-count", type=int, default=5,
+                   help="Min texts per tag to include (default: 5)")
+    p.add_argument("--csv", default=None, help="Save results to CSV")
+
+    # score-passages: score every passage in lltk.passages → abstraction.passage_scores
+    p = sub.add_parser(
+        "score-passages",
+        help="Score all passages in lltk.passages and write to abstraction.passage_scores",
+    )
+    p.add_argument("--lang", choices=["en", "fr", "de"], default="en",
+                   help="Language to score (default: en; uses lang_detected where available)")
+    p.add_argument("--batch-size", type=int, default=5000,
+                   help="Passages per CH fetch batch (default: 5000)")
+    p.add_argument("--force", action="store_true",
+                   help="Delete and re-score existing rows for this lang")
+
     # estimate-corpus-bias
     p = sub.add_parser("estimate-corpus-bias", help="Estimate corpus bias coefficients from match group comparisons")
     p.add_argument("--score-col", default="Abs-Conc.Median.median", help="Score column to use")
@@ -607,7 +937,7 @@ def main():
     p.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1, use 0.0.0.0 for network access)")
     p.add_argument("--port", type=int, default=1709, help="Backend port (default: 1709)")
     p.add_argument("--frontend-port", type=int, default=1784, help="Frontend port (default: 1784)")
-    p.add_argument("--refresh", action="store_true", help="Delete scores.duckdb before starting (forces rebuild from CSVs)")
+    p.add_argument("--refresh", action="store_true", help="Force rebuild of abstraction.scores / scores_rep on CH at startup")
 
     args = parser.parse_args()
     if args.command == "app":
@@ -644,6 +974,10 @@ def main():
         cmd_train_skipgrams(args)
     elif args.command == "gen-vecnorms":
         cmd_gen_vecnorms(args)
+    elif args.command == "genre-tag-shift":
+        cmd_genre_tag_shift(args)
+    elif args.command == "score-passages":
+        cmd_score_passages(args)
     elif args.command == "estimate-corpus-bias":
         cmd_estimate_corpus_bias(args)
     else:

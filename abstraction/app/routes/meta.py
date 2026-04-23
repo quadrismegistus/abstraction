@@ -4,7 +4,7 @@ import re
 
 from fastapi import APIRouter
 
-from ..db import get_connection
+from ..db import get_connection, RAW_CORPORA
 from ..models import CorpusInfo, NormInfo
 
 router = APIRouter()
@@ -99,3 +99,29 @@ def list_genres():
     arc_list = [r[0] for r in arcs]
     genre_list = [r[0] for r in genres]
     return arc_list + [g for g in genre_list if g not in arc_list]
+
+
+class RawCorpusInfo(NormInfo.__class__):
+    pass
+
+
+@router.get("/raw-corpora")
+def list_raw_corpora():
+    """Return available raw (unfiltered) corpora with labels, langs, and text counts."""
+    conn = get_connection()
+    results = []
+    for corpus_id, cfg in RAW_CORPORA.items():
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM texts WHERE arc_corpus = ?", [corpus_id]
+            ).fetchone()
+            n = row[0] if row else 0
+        except Exception:
+            n = 0
+        results.append({
+            "id": corpus_id,
+            "label": cfg["label"],
+            "lang": cfg["lang"],
+            "n_texts": n,
+        })
+    return results

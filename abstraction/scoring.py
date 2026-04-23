@@ -86,10 +86,38 @@ def _save_freqs_cache(new_entries, modernize=False):
 _NORM_DICTS = {}
 
 
-def get_norm_dict(col="Abs-Conc.Median.median"):
-    if col not in _NORM_DICTS:
-        _NORM_DICTS[col] = get_allnorms()[col].dropna().to_dict()
-    return _NORM_DICTS[col]
+def _get_allnorms_for_lang(lang):
+    """Return the allnorms DataFrame for the given language code ('en'/'fr'/'de'/'es')."""
+    if lang == "fr":
+        from .norms_fr import get_allnorms_fr
+        return get_allnorms_fr()
+    if lang == "de":
+        from .norms_de import get_allnorms_de
+        return get_allnorms_de()
+    if lang == "es":
+        from .norms_es import get_allnorms_es
+        return get_allnorms_es()
+    return get_allnorms()
+
+
+def get_norm_dict(col="Abs-Conc.Median.median", lang="en"):
+    """Return {word: score} for the given norm column in the given language.
+
+    Cached per (col, lang). Non-English languages dispatch to `get_allnorms_fr`
+    / `get_allnorms_de`. Falls back to English if the column is missing from
+    the requested language's allnorms (e.g. asking for a vecnorm that only
+    exists in the English table).
+    """
+    key = (col, lang)
+    if key not in _NORM_DICTS:
+        allnorms = _get_allnorms_for_lang(lang)
+        if col not in allnorms.columns:
+            if lang != "en":
+                # Column absent from non-English norms — fall back to English.
+                return get_norm_dict(col, lang="en")
+            raise KeyError(f"Norm column {col!r} not found for lang={lang!r}")
+        _NORM_DICTS[key] = allnorms[col].dropna().to_dict()
+    return _NORM_DICTS[key]
 
 
 def _modernize_score(word, norm_dict, spelling_d):
@@ -110,10 +138,10 @@ def _modernize_score(word, norm_dict, spelling_d):
     return None, None
 
 
-def score_psg(txt, col="Abs-Conc.Median.median"):
+def score_psg(txt, col="Abs-Conc.Median.median", lang="en"):
     """Score a passage's mean concreteness (negative = abstract, positive = concrete)."""
-    scores = get_norm_dict(col)
-    spelling_d = get_spelling_modernizer()
+    scores = get_norm_dict(col, lang=lang)
+    spelling_d = get_spelling_modernizer() if lang == "en" else {}
     total, n = 0.0, 0
     for tok in tokenize_agnostic(txt.lower()):
         s, _ = _modernize_score(tok, scores, spelling_d)
@@ -127,14 +155,14 @@ def score_psg(txt, col="Abs-Conc.Median.median"):
 # Frequency-based scoring (for pre-computed word frequency files)
 # ---------------------------------------------------------------------------
 
-def score_freqs(freqs, col="Abs-Conc.Median.median"):
+def score_freqs(freqs, col="Abs-Conc.Median.median", lang="en"):
     """Score from a word frequency dict {word: count, ...}.
 
     Returns the count-weighted mean concreteness score. Useful for corpora
     that store pre-tokenized frequency files (JSON) rather than raw text.
     """
-    scores = get_norm_dict(col)
-    spelling_d = get_spelling_modernizer()
+    scores = get_norm_dict(col, lang=lang)
+    spelling_d = get_spelling_modernizer() if lang == "en" else {}
     total_score = 0.0
     total_count = 0
     for word, count in freqs.items():
@@ -146,18 +174,74 @@ def score_freqs(freqs, col="Abs-Conc.Median.median"):
     return total_score / total_count if total_count else np.nan
 
 
-def score_freqs_file(path, col="Abs-Conc.Median.median"):
+def score_freqs_file(path, col="Abs-Conc.Median.median", lang="en"):
     """Score a JSON word-frequency file."""
     with open(path) as f:
         freqs = json.load(f)
-    return score_freqs(freqs, col=col)
+    return score_freqs(freqs, col=col, lang=lang)
+
+
+def build_allnorms_index(allnorms):
+    """Precompute numpy structures for repeated fast scoring with score_text_allcols.
+
+    Call once before a scoring loop; pass the result as `index` to score_text_allcols.
+    Returns a tuple (col_names, index_map, vals_0nan, mask_f).
+    """
+    allnorms = allnorms[~allnorms.index.duplicated()]
+    index_map = {w: i for i, w in enumerate(allnorms.index)}
+    vals = allnorms.values.astype(np.float32)
+    vals_0nan = np.nan_to_num(vals, nan=0.0)
+    mask_f = (~np.isnan(vals)).astype(np.float32)
+    return list(allnorms.columns), index_map, vals_0nan, mask_f
+
+
+def score_text_allcols(text, allnorms, index=None):
+    """Tokenize raw text and return a {col: score} dict for every allnorms column.
+
+    Single pass: tokenize → Counter → numpy fancy-index against all columns.
+
+    For repeated calls (e.g. scoring many passages), pass a precomputed `index`
+    from build_allnorms_index() to avoid rebuilding per call.
+    """
+    from collections import Counter
+    from .tokenize import tokenize_agnostic
+
+    tokens = tokenize_agnostic(text.lower())
+    freqs = Counter(t for t in tokens if t.strip() and t.isalpha())
+    if not freqs:
+        return {}
+
+    if index is None:
+        col_names, index_map, vals_0nan, mask_f = build_allnorms_index(allnorms)
+    else:
+        col_names, index_map, vals_0nan, mask_f = index
+
+    idxs = np.fromiter(
+        (index_map.get(w, -1) for w in freqs), dtype=np.int64, count=len(freqs)
+    )
+    cnts = np.fromiter(freqs.values(), dtype=np.float32, count=len(freqs))
+    valid = idxs >= 0
+    if not valid.any():
+        return {}
+
+    idxs, cnts = idxs[valid], cnts[valid]
+    num = (vals_0nan[idxs] * cnts[:, None]).sum(axis=0)
+    den = (mask_f[idxs] * cnts[:, None]).sum(axis=0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        scores = np.where(den > 0, num / den, np.nan)
+
+    return {
+        col: float(s)
+        for col, s in zip(col_names, scores)
+        if not np.isnan(s)
+    }
 
 
 # ---------------------------------------------------------------------------
 # Word-level scoring (per-token scores for visualization)
 # ---------------------------------------------------------------------------
 
-def score_words(txt, col="Abs-Conc.Median.median"):
+def score_words(txt, col="Abs-Conc.Median.median", lang="en"):
     """Tokenize a text and return a DataFrame with per-word concreteness scores.
 
     Each row is a token with its position, the raw token, and its z-score
@@ -165,8 +249,8 @@ def score_words(txt, col="Abs-Conc.Median.median"):
     spelling for unmatched words. Useful for density plots and color-coded
     passage rendering.
     """
-    scores = get_norm_dict(col)
-    spelling_d = get_spelling_modernizer()
+    scores = get_norm_dict(col, lang=lang)
+    spelling_d = get_spelling_modernizer() if lang == "en" else {}
     tokens = tokenize_agnostic(txt.lower())
     rows = []
     for i, tok in enumerate(tokens):

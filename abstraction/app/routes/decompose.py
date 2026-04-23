@@ -55,12 +55,16 @@ def _lookup_narrative_form(df, conn):
         if not ids:
             return "(unknown)"
 
-        # Query: arc texts -> match groups -> END texts with narrative_form
+        # Query: arc texts -> match groups -> END texts with narrative_form.
+        # CH requires FINAL to dedupe ReplacingMergeTree reads, and FINAL
+        # doesn't accept an inline alias — wrap in subqueries.
         nf_rows = conn.execute("""
             SELECT mg1._id AS arc_id, end_t.meta
-            FROM matchdb.match_groups mg1
-            JOIN matchdb.match_groups mg2 ON mg1.group_id = mg2.group_id
-            JOIN lltk.texts end_t ON mg2._id = end_t._id
+            FROM (SELECT _id, group_id FROM lltk.match_groups FINAL) mg1
+            INNER JOIN (SELECT _id, group_id FROM lltk.match_groups FINAL) mg2
+              ON mg1.group_id = mg2.group_id
+            INNER JOIN (SELECT _id, corpus, meta FROM lltk.texts FINAL) end_t
+              ON mg2._id = end_t._id
             WHERE end_t.corpus = 'end'
               AND end_t.meta LIKE '%narrative_form%'
         """).fetchall()
@@ -102,7 +106,7 @@ def _build_gender_cache(conn) -> dict[str, str]:
 
     # Get gender from source corpora meta JSON
     rows = conn.execute(f"""
-        SELECT _id, meta FROM lltk.texts
+        SELECT _id, meta FROM lltk.texts FINAL
         WHERE corpus IN ({corpus_list})
           AND (meta LIKE '%gender%' OR meta LIKE '%author_gender%')
     """).fetchall()
@@ -116,13 +120,14 @@ def _build_gender_cache(conn) -> dict[str, str]:
         elif g in ("f", "female", "woman"):
             source_gender[_id] = "Female"
 
-    # Propagate via match groups
+    # Propagate via match groups (FINAL needed on ReplacingMergeTree tables)
     mg_rows = conn.execute(f"""
         SELECT mg1._id AS arc_id, mg2._id AS source_id
-        FROM matchdb.match_groups mg1
-        JOIN matchdb.match_groups mg2 ON mg1.group_id = mg2.group_id
+        FROM (SELECT _id, group_id FROM lltk.match_groups FINAL) mg1
+        INNER JOIN (SELECT _id, group_id FROM lltk.match_groups FINAL) mg2
+          ON mg1.group_id = mg2.group_id
         WHERE mg2._id IN (
-            SELECT _id FROM lltk.texts WHERE corpus IN ({corpus_list})
+            SELECT _id FROM lltk.texts FINAL WHERE corpus IN ({corpus_list})
         )
     """).fetchall()
 
@@ -268,9 +273,9 @@ def shift_share(
 
     translated_filter = ""
     if is_translated == "true":
-        translated_filter = " AND is_translated = true"
+        translated_filter = " AND is_translated = 1"
     elif is_translated == "false":
-        translated_filter = " AND (is_translated IS NULL OR is_translated = false)"
+        translated_filter = " AND (is_translated IS NULL OR is_translated = 0)"
 
     if period_matched:
         col_parts = col.split(".")
@@ -325,9 +330,9 @@ def shift_share(
     # Parse genre_raw
     df["_genre_raw"] = df["genre_raw"].apply(_parse_genre_raw)
 
-    # Parse is_translated to readable labels
-    df["_translated"] = df["is_translated"].fillna(False).apply(
-        lambda x: "Translated" if x is True or x == "True" else "Original")
+    # Parse is_translated (CH returns Nullable(UInt8), i.e. 0/1/NA) to readable labels
+    df["_translated"] = df["is_translated"].apply(
+        lambda x: "Translated" if x == 1 else "Original")
 
     # Bin text length
     df["_length_bin"] = pd.cut(

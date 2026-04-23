@@ -1,323 +1,360 @@
 """
-DuckDB database for the web app.
+ClickHouse-backed database layer for the web app.
 
-Loads arc corpus scores (arc_fiction.csv, arc_poetry.csv, etc.) into a
-local DuckDB, JOINed with LLTK's metadata DB for year/author/title.
+Replaces the previous DuckDB/scores.duckdb + LLTK metadb ATTACH plumbing.
+All data lives on the local CH server:
+  - abstraction.scores_{en,fr,de}    raw per-text scores (1:1 with lltk.texts)
+  - abstraction.scores                wide union: per-arc, within_lang_group dedup
+  - abstraction.scores_rep            wide union: per-arc, rep_only (no averaging)
+  - abstraction.texts      VIEW       scores JOIN lltk.texts
+  - abstraction.texts_rep  VIEW       scores_rep JOIN lltk.texts
 
-Arc CSVs use _id (canonical LLTK ID) and source_corpus columns.
-No ID normalization needed.
+Routes consume `abstraction.texts` / `abstraction.texts_rep` via a thin
+DuckDB-compatibility shim (`CHConn`) so the existing `conn.execute(sql, params)
+.fetchall() / .fetchdf()` idiom keeps working.
 """
 
-import os
-import shutil
-import tempfile
 import threading
+from typing import Any, Optional, Sequence
 
-import duckdb
+import clickhouse_connect
+import pandas as pd
 
-from ..config import PATH_DATA, SCORES_DIR
+from ..aggregate import get_arc_scores, get_corpus_scores
 
 
-SCORES_DB_FILENAME = "scores.duckdb"
-SCORES_VERSION = "v8-raw"
-LLTK_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb.duckdb")
-LLTK_MATCHES_DB_PATH = os.path.expanduser("~/lltk_data/data/metadb_matches.duckdb")
+CH_HOST = "localhost"
+CH_PORT = 8123
+CH_USER = "lltk"
+CH_PASSWORD = "lltk"
+CH_DB = "abstraction"
 
 _local = threading.local()
-_lltk_snapshot_path = None
-_lltk_snapshot_lock = threading.Lock()
 
 
-def _scores_db_path():
-    return os.path.join(PATH_DATA, SCORES_DB_FILENAME)
+# Arcs whose scores come from the new CH scores_{lang} tables.
+NEW_PIPELINE_ARCS = {
+    "arc_fiction":    {"lang": "en"},
+    "arc_fiction_fr": {"lang": "fr"},
+    "arc_fiction_de": {"lang": "de"},
+    "arc_poetry":     {"lang": "en"},
+    "arc_biography":  {"lang": "en"},
+    "arc_essays":     {"lang": "en"},
+    "arc_periodical": {"lang": "en"},
+    "arc_sermons":    {"lang": "en"},
+}
+
+# General-purpose historical corpora (no genre filter, no match-group dedup).
+# Displayed as background reference lines in the web app.
+RAW_CORPORA = {
+    "spanish_pd_books": {"lang": "es", "label": "Spanish PD Books"},
+    "french_pd_books":  {"lang": "fr", "label": "French PD Books"},
+    "german_pd":        {"lang": "de", "label": "German PD"},
+    "blbooks":          {"lang": "en", "label": "BL Books"},
+}
 
 
-def _scores_dir():
-    return os.path.join(SCORES_DIR, SCORES_VERSION)
+# ──────────────────────────────────────────────────────────────────────
+# DuckDB-compat shim: conn.execute(sql, params).fetchall() / .fetchdf()
+# ──────────────────────────────────────────────────────────────────────
+
+class _Cursor:
+    """Mimics a DuckDB cursor so routes don't need to change shape."""
+
+    def __init__(self, client, sql: str, params: Optional[Sequence] = None):
+        self._client = client
+        self._sql, self._pdict = _translate_qmarks(sql, params)
+        self._df: Optional[pd.DataFrame] = None
+
+    def _run(self) -> pd.DataFrame:
+        if self._df is None:
+            self._df = self._client.query_df(self._sql, parameters=self._pdict)
+        return self._df
+
+    @staticmethod
+    def _clean_row(r):
+        """Replace pandas NA with None so pydantic/json can serialize."""
+        return tuple(None if pd.isna(v) else v for v in r)
+
+    def fetchall(self) -> list[tuple]:
+        df = self._run()
+        return [self._clean_row(r) for r in df.itertuples(index=False, name=None)]
+
+    def fetchone(self):
+        df = self._run()
+        if len(df) == 0:
+            return None
+        return self._clean_row(df.iloc[0])
+
+    def fetchdf(self) -> pd.DataFrame:
+        return self._run()
 
 
-def get_connection():
-    """Get a per-thread DuckDB connection with scores + LLTK metadata."""
-    conn = getattr(_local, 'conn', None)
+def _translate_qmarks(sql: str, params: Optional[Sequence]) -> tuple[str, dict]:
+    """Convert DuckDB-style `?` positional params to CH `%(pN)s` named params.
+
+    Naive but sufficient for the routes here — they never embed `?` inside
+    string literals.
+    """
+    if not params:
+        return sql, {}
+    out_parts = []
+    idx = 0
+    for ch in sql:
+        if ch == "?":
+            out_parts.append(f"%(p{idx})s")
+            idx += 1
+        else:
+            out_parts.append(ch)
+    new_sql = "".join(out_parts)
+    pdict = {f"p{i}": v for i, v in enumerate(params)}
+    if idx != len(params):
+        raise ValueError(
+            f"parameter count mismatch: sql has {idx} placeholders, "
+            f"{len(params)} values provided"
+        )
+    return new_sql, pdict
+
+
+class CHConn:
+    """Wraps a clickhouse_connect client with a duckdb-style execute() API."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def execute(self, sql: str, params: Optional[Sequence] = None) -> _Cursor:
+        return _Cursor(self._client, sql, params)
+
+    def close(self):
+        self._client.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Connection factory
+# ──────────────────────────────────────────────────────────────────────
+
+def _raw_client(database: str = CH_DB):
+    return clickhouse_connect.get_client(
+        host=CH_HOST, port=CH_PORT,
+        username=CH_USER, password=CH_PASSWORD,
+        database=database,
+    )
+
+
+def get_connection() -> CHConn:
+    """Per-thread CHConn wrapper. Routes call conn.execute(sql, params)."""
+    conn = getattr(_local, "conn", None)
     if conn is None:
-        conn = _build_connection()
+        conn = CHConn(_raw_client())
         _local.conn = conn
     return conn
 
 
-def _db_attached(conn, alias: str) -> bool:
-    """True if `alias` appears in the conn's attached-database list."""
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM duckdb_databases() WHERE database_name = ?", [alias]
-        ).fetchone()
-        return bool(row)
-    except Exception:
-        return False
+# ──────────────────────────────────────────────────────────────────────
+# Init: build abstraction.scores + abstraction.scores_rep + VIEWs
+# ──────────────────────────────────────────────────────────────────────
+
+def _backtick(c: str) -> str:
+    return "`" + c.replace("`", "``") + "`"
 
 
-def _attach_lltk_snapshot(conn):
-    """Copy LLTK's DB to a temp file once per process and attach it.
+def _build_arc_scores_df(dedup_mode: str) -> tuple[pd.DataFrame, list[str]]:
+    """Call get_arc_scores for curated arcs and get_corpus_scores for raw corpora;
+    concat into one wide DataFrame with (_id, arc_corpus, source_corpus, <score cols>).
 
-    Used when the canonical file is already held by another conn in this
-    process (DuckDB doesn't always allow a second same-process ATTACH of
-    the same file, and silently succeeds-then-missing in some versions).
-    Snapshot is a separate file so no lock conflict is possible.
-
-    Thread-safe: multiple concurrent first-callers will serialize on the
-    copy, and the global path is only published after copy completes, so
-    threads that see the path know the file is fully written.
+    Returns (df, score_cols) where score_cols is the union of score cols across
+    all arcs. Missing cols per-arc become NaN via pd.concat.
     """
-    global _lltk_snapshot_path
-    with _lltk_snapshot_lock:
-        if _lltk_snapshot_path is None:
-            print("[app] Snapshotting LLTK metadb for per-thread connections...", flush=True)
-            tmpdir = tempfile.mkdtemp(prefix="lltk_ro_app_")
-            target = os.path.join(tmpdir, "metadb.duckdb")
-            shutil.copy2(LLTK_DB_PATH, target)
-            # Only publish path AFTER copy completes, so racing readers never
-            # attach a partially-written file.
-            _lltk_snapshot_path = target
-    if not _db_attached(conn, "lltk"):
+    dfs = []
+    for arc_name, cfg in NEW_PIPELINE_ARCS.items():
         try:
-            conn.execute(f"ATTACH '{_lltk_snapshot_path}' AS lltk (READ_ONLY)")
+            df = get_arc_scores(arc_name, lang=cfg["lang"], dedup=dedup_mode)
         except Exception as e:
-            print(f"[app] snapshot attach failed: {e}", flush=True)
-    return conn
-
-
-def _build_connection():
-    """Create a DuckDB connection with scores + metadata."""
-    db_path = _scores_db_path()
-    conn = duckdb.connect(db_path, read_only=True)
-
-    # Attach LLTK metadb. Try the canonical file first; if it's locked (or if
-    # the attach appears to succeed but the alias doesn't actually get
-    # registered — a subtle DuckDB behaviour when the same file is already
-    # attached by a different conn in the same process), fall back to a
-    # snapshot copy.
-    if os.path.exists(LLTK_DB_PATH):
-        try:
-            conn.execute(f"ATTACH '{LLTK_DB_PATH}' AS lltk (READ_ONLY)")
-        except Exception:
-            pass
-        if not _db_attached(conn, "lltk"):
-            _attach_lltk_snapshot(conn)
-
-    # Attach matches DB for match group lookups
-    if os.path.exists(LLTK_MATCHES_DB_PATH):
-        try:
-            conn.execute(f"ATTACH '{LLTK_MATCHES_DB_PATH}' AS matchdb (READ_ONLY)")
-        except Exception:
-            pass  # optional — routes that don't use it still work
-
-    # Create joined views: one per dedup mode (scores → texts, scores_rep → texts_rep).
-    # Routes pick which view to query based on the `dedup` query param.
-    view_to_table = [("texts", "scores"), ("texts_rep", "scores_rep")]
-    existing_tables = {
-        r[0] for r in conn.execute(
-            "SELECT table_name FROM information_schema.tables"
-        ).fetchall()
-    }
-    for view_name, table_name in view_to_table:
-        if table_name not in existing_tables:
-            continue  # table hasn't been built yet (e.g. legacy-only install)
-        try:
-            conn.execute(f"""
-                CREATE OR REPLACE TEMP VIEW {view_name} AS
-                SELECT
-                    s._id,
-                    -- Per-rep source corpus from LLTK (ecco, chadwyck, ...).
-                    -- Falls back to the arc-level label stored in the scores
-                    -- table if LLTK doesn't have a match (shouldn't happen
-                    -- for any rep we scored, but safe).
-                    COALESCE(m.corpus, s.source_corpus) AS corpus_name,
-                    s.arc_corpus,
-                    m.title,
-                    m.author,
-                    m.year,
-                    m.genre,
-                    m.genre_raw,
-                    m.genre_enriched_source,
-                    m.is_translated,
-                    m.n_words,
-                    m.author_norm,
-                    s.* EXCLUDE (_id, source_corpus, arc_corpus)
-                FROM {table_name} s
-                LEFT JOIN lltk.texts m ON s._id = m._id
-            """)
-        except Exception as e:
-            print(f"[app] Could not create {view_name} view: {e}")
-
-    return conn
-
-
-def _is_stale(db_path):
-    """Check if scores DB needs rebuilding."""
-    if not os.path.exists(db_path):
-        return True
-    if os.path.getsize(db_path) == 0:
-        return True
-    try:
-        conn = duckdb.connect(db_path, read_only=True)
-        conn.execute("SELECT 1 FROM scores LIMIT 1")
-        conn.close()
-    except Exception:
-        return True
-    db_mtime = os.path.getmtime(db_path)
-
-    # Stale if the canonical scores.duckdb is newer
-    try:
-        from ..config import PATH_SCORES_DB
-        if os.path.exists(PATH_SCORES_DB) and os.path.getmtime(PATH_SCORES_DB) > db_mtime:
-            return True
-    except Exception:
-        pass
-
-    # Also stale if any legacy CSV is newer
-    scores_dir = _scores_dir()
-    if not os.path.isdir(scores_dir):
-        return False
-    for fn in os.listdir(scores_dir):
-        if fn.endswith(".csv"):
-            if os.path.getmtime(os.path.join(scores_dir, fn)) > db_mtime:
-                return True
-    return False
-
-
-def init_db(db_path=None):
-    """Build the scores DuckDB if stale or missing."""
-    if db_path is None:
-        db_path = _scores_db_path()
-
-    if not _is_stale(db_path):
-        print(f"[app] Scores database is fresh: {db_path}")
-        return
-
-    print(f"[app] Building scores database...")
-
-    import pandas as pd
-
-    scores_dir = _scores_dir()
-    if not os.path.isdir(scores_dir):
-        print(f"[app] No scores directory: {scores_dir}")
-        return
-
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    if os.path.exists(db_path):
-        os.remove(db_path)
-
-    conn = duckdb.connect(db_path)
-
-    all_dfs = []
-    from tqdm import tqdm
-
-    # Arcs sourced from the new scores.duckdb (Phase 2 pipeline).
-    # All arcs now scored 1:1 in scores_en / scores_fr — aggregation happens
-    # here at load time via get_arc_scores.
-    NEW_PIPELINE_ARCS = {
-        "arc_fiction":    {"lang": "en"},
-        "arc_fiction_fr": {"lang": "fr"},
-        "arc_poetry":     {"lang": "en"},
-        "arc_biography":  {"lang": "en"},
-        "arc_essays":     {"lang": "en"},
-        "arc_periodical": {"lang": "en"},
-        "arc_sermons":    {"lang": "en"},
-    }
-
-    try:
-        from ..aggregate import get_arc_scores
-        from ..config import PATH_SCORES_DB
-        has_scores_db = os.path.exists(PATH_SCORES_DB)
-    except Exception as e:
-        print(f"  New pipeline unavailable ({e}); falling back to CSVs only")
-        has_scores_db = False
-
-    # Build both dedup modes so the UI can toggle between them without a rebuild.
-    # within_lang_group → scores table (default, match-group averaged scores)
-    # rep_only          → scores_rep table (each rep's own raw per-text score)
-    DEDUP_TABLES = [
-        ("scores", "within_lang_group"),
-        ("scores_rep", "rep_only"),
-    ]
-
-    new_arc_names = set()
-    arc_files = sorted(
-        fn for fn in os.listdir(scores_dir)
-        if fn.startswith("arc_") and fn.endswith(".csv")
-    )
-    regular_files = sorted(fn for fn in os.listdir(scores_dir)
-                           if fn.endswith(".csv") and not fn.startswith("arc_"))
-
-    for table_name, dedup in DEDUP_TABLES:
-        if not has_scores_db:
-            break
-        print(f"\n  Building {table_name} (dedup={dedup})...")
-        all_dfs: list = []
-        for arc_name, cfg in NEW_PIPELINE_ARCS.items():
-            try:
-                df = get_arc_scores(
-                    arc_name, lang=cfg["lang"],
-                    dedup=dedup,
-                )
-                df["arc_corpus"] = arc_name
-                df["source_corpus"] = arc_name
-                all_dfs.append(df)
-                if table_name == "scores":
-                    new_arc_names.add(arc_name)
-                print(f"    {arc_name}: {len(df):,} reps")
-            except Exception as e:
-                print(f"    {arc_name}: FAILED ({e})")
-
-        # Legacy CSV fallback only applies to the default (within_lang_group) table —
-        # legacy CSVs contained match-group averaged scores, not rep_only.
-        if table_name == "scores":
-            legacy_files = [
-                fn for fn in arc_files
-                if fn.removesuffix(".csv") not in new_arc_names
-            ]
-            if legacy_files:
-                print(f"    Loading {len(legacy_files)} legacy arc CSVs...")
-                for fn in tqdm(legacy_files, desc="    Legacy arcs"):
-                    arc_name = fn.removesuffix(".csv")
-                    path = os.path.join(scores_dir, fn)
-                    try:
-                        df = pd.read_csv(path, dtype={"_id": str, "source_corpus": str})
-                    except Exception as e:
-                        print(f"      Skipping {fn}: {e}")
-                        continue
-                    df["arc_corpus"] = arc_name
-                    if "_id" not in df.columns:
-                        continue
-                    if "source_corpus" not in df.columns:
-                        df["source_corpus"] = arc_name
-                    all_dfs.append(df)
-            if regular_files and not legacy_files and not all_dfs:
-                print(f"    No arc data; loading {len(regular_files)} regular CSVs...")
-                from .db_compat import load_regular_csvs
-                all_dfs = load_regular_csvs(scores_dir, regular_files)
-
-        if not all_dfs:
-            print(f"    No data for {table_name}; skipping")
+            print(f"    {arc_name}: FAILED ({e})")
             continue
+        df["arc_corpus"] = arc_name
+        df["source_corpus"] = arc_name
+        dfs.append(df)
+        print(f"    {arc_name}: {len(df):,} reps")
 
-        combined = pd.concat(all_dfs, ignore_index=True)
-        conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM combined")
-        conn.execute(f"CREATE INDEX idx_{table_name}_id ON {table_name} (_id)")
-        conn.execute(f"CREATE INDEX idx_{table_name}_arc ON {table_name} (arc_corpus)")
-        conn.execute(f"CREATE INDEX idx_{table_name}_source ON {table_name} (source_corpus)")
-        n_rows = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-        print(f"    {table_name}: {n_rows:,} rows written")
+    for corpus_name, cfg in RAW_CORPORA.items():
+        try:
+            df = get_corpus_scores(corpus_name, lang=cfg["lang"])
+        except Exception as e:
+            print(f"    {corpus_name} (raw): FAILED ({e})")
+            continue
+        if df.empty:
+            print(f"    {corpus_name} (raw): 0 texts — skipping")
+            continue
+        df["arc_corpus"] = corpus_name
+        df["source_corpus"] = corpus_name
+        dfs.append(df)
+        print(f"    {corpus_name} (raw): {len(df):,} texts")
 
-    # Final count from default table
+    if not dfs:
+        return pd.DataFrame(), []
+    combined = pd.concat(dfs, ignore_index=True)
+    non_score_cols = {"_id", "arc_corpus", "source_corpus", "_n_versions"}
+    score_cols = [c for c in combined.columns if c not in non_score_cols]
+    return combined, score_cols
+
+
+def _ddl_scores_table(table: str, score_cols: list[str], has_versions: bool) -> str:
+    defs = [
+        "`_id` String",
+        "`arc_corpus` LowCardinality(String)",
+        "`source_corpus` LowCardinality(String)",
+    ]
+    if has_versions:
+        defs.append("`_n_versions` Nullable(UInt32)")
+    for c in score_cols:
+        defs.append(f"{_backtick(c)} Nullable(Float32) CODEC(ZSTD(3))")
+    cols_sql = ",\n    ".join(defs)
+    return f"""
+CREATE TABLE {CH_DB}.{table} (
+    {cols_sql}
+) ENGINE = MergeTree() ORDER BY (arc_corpus, `_id`)
+"""
+
+
+def _create_texts_view(admin_client, view_name: str, scores_table: str):
+    """Create abstraction.{view_name} as scores_table JOIN lltk.texts."""
+    admin_client.command(f"DROP VIEW IF EXISTS {CH_DB}.{view_name}")
+    admin_client.command(f"""
+        CREATE VIEW {CH_DB}.{view_name} AS
+        SELECT
+            s.`_id` AS `_id`,
+            -- Fall back to source_corpus label if LLTK doesn't have a match
+            if(m.corpus = '', s.source_corpus, m.corpus) AS corpus_name,
+            s.arc_corpus AS arc_corpus,
+            m.title AS title,
+            m.author AS author,
+            m.year AS year,
+            m.genre AS genre,
+            m.genre_raw AS genre_raw,
+            m.genre_enriched_source AS genre_enriched_source,
+            m.is_translated AS is_translated,
+            m.n_words AS n_words,
+            m.author_norm AS author_norm,
+            s.* EXCEPT (`_id`, arc_corpus, source_corpus)
+        FROM {CH_DB}.{scores_table} s
+        LEFT JOIN (SELECT * FROM lltk.texts FINAL) m ON s.`_id` = m.`_id`
+    """)
+
+
+def _tables_healthy(admin) -> bool:
+    """Check whether scores + scores_rep + both VIEWs exist and have rows."""
     try:
-        n_rows = conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
-        n_arcs = conn.execute("SELECT COUNT(DISTINCT arc_corpus) FROM scores").fetchone()[0]
+        existing = {r[0] for r in admin.query(f"SHOW TABLES FROM {CH_DB}").result_rows}
+        for name in ("scores", "scores_rep", "texts", "texts_rep"):
+            if name not in existing:
+                return False
+        for table in ("scores", "scores_rep"):
+            n = admin.query(f"SELECT count() FROM {CH_DB}.{table}").result_rows[0][0]
+            if n == 0:
+                return False
+        return True
     except Exception:
-        n_rows, n_arcs = 0, 0
-    conn.close()
+        return False
 
-    # Reset thread-local connections so they pick up new DB
+
+def init_db(force: bool = False):
+    """Build abstraction.scores, abstraction.scores_rep, and matching VIEWs
+    on ClickHouse.
+
+    Idempotent. By default skips rebuild if tables exist and have rows; pass
+    `force=True` (or set `ABSTRACTION_REFRESH=1`) to drop + rebuild from scratch.
+    """
+    import os as _os
+    if not force and _os.environ.get("ABSTRACTION_REFRESH") == "1":
+        force = True
+
+    admin = _raw_client()
+
+    if not force and _tables_healthy(admin):
+        counts = {
+            t: admin.query(f"SELECT count() FROM {CH_DB}.{t}").result_rows[0][0]
+            for t in ("scores", "scores_rep")
+        }
+        print(f"[app] Scores tables fresh (scores={counts['scores']:,}, scores_rep={counts['scores_rep']:,}); skipping rebuild. Pass --refresh to force.")
+        admin.close()
+        return
+
+    print("[app] Building CH-side scores tables and VIEWs...")
+
+    for table in ("scores", "scores_rep"):
+        admin.command(f"DROP VIEW IF EXISTS {CH_DB}.{'texts' if table == 'scores' else 'texts_rep'}")
+        admin.command(f"DROP TABLE IF EXISTS {CH_DB}.{table}")
+
+    for table, mode in (("scores", "within_lang_group"), ("scores_rep", "rep_only")):
+        print(f"\n  Building {table} (dedup={mode})...")
+        df, score_cols = _build_arc_scores_df(mode)
+        if df.empty:
+            print(f"    no data for {table}; skipping")
+            continue
+        has_versions = "_n_versions" in df.columns
+        admin.command(_ddl_scores_table(table, score_cols, has_versions))
+
+        insert_cols = ["_id", "arc_corpus", "source_corpus"]
+        if has_versions:
+            insert_cols.append("_n_versions")
+        insert_cols.extend(score_cols)
+        for c in insert_cols:
+            if c not in df.columns:
+                df[c] = None
+        df = df[insert_cols]
+
+        CHUNK = 100_000
+        for i in range(0, len(df), CHUNK):
+            admin.insert_df(table, df.iloc[i:i + CHUNK])
+        n = admin.query(f"SELECT count() FROM {CH_DB}.{table}").result_rows[0][0]
+        print(f"    {table}: {n:,} rows, {len(score_cols)} score cols, has_versions={has_versions}")
+
+    # Strip cross-lang leakage: per-arc, delete reps whose texts.lang doesn't
+    # match the arc's declared language. This catches texts that CuratedCorpus
+    # picked before lang detection flipped without clobbering legitimately
+    # non-English arcs (arc_fiction_fr, arc_fiction_de).
+    for table in ("scores", "scores_rep"):
+        existing = admin.query(f"SHOW TABLES FROM {CH_DB}").result_rows
+        if table not in {r[0] for r in existing}:
+            continue
+        total_pruned = 0
+        for arc_name, cfg in NEW_PIPELINE_ARCS.items():  # raw corpora skip pruning — already lang-filtered
+            expected_lang = cfg["lang"]
+            before = admin.query(
+                f"SELECT count() FROM {CH_DB}.{table} WHERE arc_corpus = %(a)s",
+                parameters={"a": arc_name},
+            ).result_rows[0][0]
+            admin.command(f"""
+                DELETE FROM {CH_DB}.{table}
+                WHERE arc_corpus = %(arc)s
+                  AND _id IN (
+                    SELECT s._id FROM {CH_DB}.{table} s
+                    INNER JOIN (SELECT _id, lang FROM lltk.texts FINAL) t ON s._id = t._id
+                    WHERE s.arc_corpus = %(arc)s
+                      AND t.lang != %(lang)s
+                      AND t.lang IS NOT NULL
+                )
+            """, parameters={"arc": arc_name, "lang": expected_lang})
+            after = admin.query(
+                f"SELECT count() FROM {CH_DB}.{table} WHERE arc_corpus = %(a)s",
+                parameters={"a": arc_name},
+            ).result_rows[0][0]
+            if before != after:
+                total_pruned += (before - after)
+                print(f"    {table}/{arc_name}: pruned {before - after} lang-mismatch rows")
+        if total_pruned:
+            print(f"    {table}: total pruned {total_pruned}")
+
+    for scores_table, view_name in (("scores", "texts"), ("scores_rep", "texts_rep")):
+        existing = admin.query(f"SHOW TABLES FROM {CH_DB}").result_rows
+        if scores_table not in {r[0] for r in existing}:
+            continue
+        _create_texts_view(admin, view_name, scores_table)
+        sample = admin.query(f"SELECT count() FROM {CH_DB}.{view_name}").result_rows[0][0]
+        print(f"  VIEW {CH_DB}.{view_name}: {sample:,} rows")
+
+    # Reset any per-thread connections so the next get_connection() sees new views.
     _local.conn = None
-
-    print(f"\n[app] Scores database ready: {n_rows:,} texts from {n_arcs} arc corpora (both dedup modes)")
+    print("\n[app] CH scores tables + VIEWs ready.")
+    admin.close()

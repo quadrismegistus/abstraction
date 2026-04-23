@@ -70,6 +70,36 @@ def _snake_to_camel(name: str) -> str:
     return "".join(w.capitalize() for w in name.split("_"))
 
 
+# Corpora that are authoritatively non-English. Used when the per-text `lang`
+# metadata is missing (most corpora don't populate it — LLTK's canonical source
+# is `lltk.texts.lang`, populated by `lltk db-detect-langs`, but the abstraction
+# web app doesn't always have it on hand).
+_CORPUS_LANG_DEFAULTS = {
+    "german_fiction": "de",
+    "dta": "de",
+    "german_pd": "de",
+    "arc_fiction_de": "de",
+    "artfl": "fr",
+    "gallica_literary_fictions": "fr",
+    "french_pd_books": "fr",
+    "arc_fiction_fr": "fr",
+    "arc_fiction_es": "es",
+}
+
+_SUPPORTED_LANGS = {"en", "fr", "de", "es"}
+
+
+def resolve_lang(corpus: str, meta: dict | None = None, explicit: str | None = None) -> str:
+    """Pick the norm language for a text.
+
+    Priority: explicit query param > per-text `lang` metadata > corpus default > 'en'.
+    """
+    for candidate in (explicit, (meta or {}).get("lang")):
+        if candidate in _SUPPORTED_LANGS:
+            return candidate
+    return _CORPUS_LANG_DEFAULTS.get(corpus.lower(), "en")
+
+
 def _get_text_and_metadata(corpus_name: str, text_id: str):
     """Try LLTK first, fall back to abstraction Corpus."""
     camel = _snake_to_camel(corpus_name)
@@ -88,7 +118,7 @@ def _get_text_and_metadata(corpus_name: str, text_id: str):
             row = corpus.metadata[corpus.metadata["id"] == text_id]
         if len(row):
             full_id = str(row.iloc[0]["id"])
-            for k in ("title", "author", "year"):
+            for k in ("title", "author", "year", "lang"):
                 if k in row.columns:
                     v = row.iloc[0][k]
                     if v is not None and str(v) != "nan":
@@ -114,7 +144,7 @@ def _get_text_and_metadata(corpus_name: str, text_id: str):
                 txt = t.txt
                 if txt:
                     # Fill in metadata from LLTK if we didn't get it from corpus
-                    for k in ("title", "author", "year"):
+                    for k in ("title", "author", "year", "lang"):
                         if k not in meta:
                             v = t.get(k, None)
                             if v is not None:
@@ -154,14 +184,14 @@ def _get_text_and_metadata(corpus_name: str, text_id: str):
     return None, None, None
 
 
-def _score_via_lltk(lltk_text, chunk_size: int, col: str):
+def _score_via_lltk(lltk_text, chunk_size: int, col: str, lang: str = "en"):
     """Use LLTK passages API for sentence-boundary-respecting chunks."""
     chunks = []
     try:
         passages = lltk_text.passages(n=chunk_size)
         for i, psg in enumerate(passages.texts()):
             freqs = psg.freqs()
-            score = score_freqs(dict(freqs), col=col) if freqs else None
+            score = score_freqs(dict(freqs), col=col, lang=lang) if freqs else None
             n_words = psg.get("num_words", sum(freqs.values()) if freqs else 0)
             start = psg.get("word_start", i * chunk_size)
             chunks.append(TrajectoryChunk(
@@ -182,13 +212,20 @@ def get_trajectory(
     col: str = DEFAULT_COL,
     chunk_size: int = Query(default=500, ge=50, le=5000),
     period_matched: bool = False,
+    lang: str | None = None,
 ):
     """Compute abstractness trajectory for a single text."""
-    # Resolve period-matched column after loading metadata (need year)
-    # Done below after _get_text_and_metadata
 
-    # Check cache
-    cp = _cache_path(corpus, text_id, chunk_size, col if not period_matched else col + "_pm")
+    def _cp_for(resolved: str) -> str:
+        key = col if not period_matched else col + "_pm"
+        if resolved != "en":
+            key = f"{key}_{resolved}"
+        return _cache_path(corpus, text_id, chunk_size, key)
+
+    # Early lang guess from corpus default + explicit query param, used for the
+    # first cache lookup. Per-text `meta['lang']` may override later.
+    early_lang = resolve_lang(corpus, None, lang)
+    cp = _cp_for(early_lang)
     cached = _load_cached(cp)
     if cached is not None:
         return TrajectoryResponse(**cached)
@@ -204,6 +241,16 @@ def get_trajectory(
                float(v) if hasattr(v, 'item') else
                str(v) if not isinstance(v, (str, int, float, type(None))) else v
             for k, v in meta.items()}
+
+    resolved_lang = resolve_lang(corpus, meta, lang)
+    meta["lang"] = resolved_lang
+
+    # If meta yielded a different lang than our early guess, re-check cache.
+    if resolved_lang != early_lang:
+        cp = _cp_for(resolved_lang)
+        cached = _load_cached(cp)
+        if cached is not None:
+            return TrajectoryResponse(**cached)
 
     # Resolve period-matched column
     if period_matched:
@@ -224,14 +271,14 @@ def get_trajectory(
     # Try LLTK sentence-boundary chunking first
     chunks = None
     if lltk_text is not None:
-        chunks = _score_via_lltk(lltk_text, chunk_size, col)
+        chunks = _score_via_lltk(lltk_text, chunk_size, col, lang=resolved_lang)
 
     # Fallback: simple word-split chunking
     if chunks is None:
         raw_chunks = _chunk_text_simple(txt, chunk_size)
         chunks = []
         for i, rc in enumerate(raw_chunks):
-            score = score_psg(rc["text"], col=col)
+            score = score_psg(rc["text"], col=col, lang=resolved_lang)
             chunks.append(TrajectoryChunk(
                 index=i,
                 score=float(score) if score is not None and not np.isnan(score) else None,
