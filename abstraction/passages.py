@@ -56,14 +56,14 @@ def _word_style(z, max_z=3.0):
     return css, cls
 
 
-def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True, preserve_newlines=False):
+def _render_body(txt, col="Abs-Conc.Median.median", inline_styles=True, preserve_newlines=False, lang="en"):
     """Render passage text to styled HTML fragment (no wrapper).
 
     Paragraph breaks (blank lines) become indented new paragraphs
     rather than double line breaks.
     """
-    scores = get_norm_dict(col)
-    spelling_d = get_spelling_modernizer()
+    scores = get_norm_dict(col, lang=lang)
+    spelling_d = get_spelling_modernizer() if lang == "en" else {}
 
     # Split into paragraphs on blank lines, render each
     paragraphs = _split_paragraphs(txt, preserve_newlines=preserve_newlines)
@@ -176,7 +176,7 @@ def _word_color_style(z, max_z=3.0):
             f"border-radius:2px")
 
 
-def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color"):
+def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color", lang="en"):
     """Render passage text to an HTML fragment with data-z attributes.
 
     Parameters
@@ -190,13 +190,13 @@ def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color"):
     """
     style_mode = "color" if mode == "color" else True
     preserve = mode == "color"
-    body = _render_body(txt, col=col, inline_styles=style_mode, preserve_newlines=preserve)
+    body = _render_body(txt, col=col, inline_styles=style_mode, preserve_newlines=preserve, lang=lang)
     return f'<div class="passage">\n{body}\n</div>'
 
 
 def render_passage_html(txt, col="Abs-Conc.Median.median",
                         title="", show_title=True, show_legend=True, font_size=14,
-                        line_height=2.2, max_width=700):
+                        line_height=2.2, max_width=700, lang="en"):
     """Render a passage as an HTML string with per-word styling.
 
     Every scored word is styled on a continuous scale:
@@ -226,7 +226,7 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
     str
         Complete HTML document string.
     """
-    body = _render_body(txt, col=col)
+    body = _render_body(txt, col=col, lang=lang)
 
     legend_html = ""
     if show_legend:
