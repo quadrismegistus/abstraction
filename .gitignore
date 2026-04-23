@@ -28,3 +28,6 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+# Papermill / executed outputs (regenerable, often multi-MB)
+*-executed.ipynb
+data
