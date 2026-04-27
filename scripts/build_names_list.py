@@ -131,7 +131,11 @@ def load_edinburgh(path, max_year, top_n=100):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--max-year', type=int, default=1900)
+    ap.add_argument('--max-year', type=int, default=2100,
+                    help='Year cutoff on register data. Default 2100 = include all '
+                         'available names. The cutoff has small effect (deltas <2pt) '
+                         'on pre-1900 fiction but understates realistic-pct by 3-5pt '
+                         'for 20C texts when capped at 1900.')
     ap.add_argument('--out', default=os.path.join(NAMES_DIR, 'names.txt'))
     ap.add_argument('--names-dir', default=NAMES_DIR)
     args = ap.parse_args()
