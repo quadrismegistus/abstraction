@@ -14,8 +14,6 @@ Usage:
 """
 
 import argparse
-import json
-import glob
 import os
 import re
 import sys
@@ -26,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 import lltk
+from lltk.annotate import iter_task_results
 from largeliterarymodels.analysis.social_networks import (
     SocialNetwork, build_graph, build_directed_graph,
     build_dialogue_graph, build_event_graph,
@@ -49,36 +48,6 @@ def char_desc_text(chars):
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 LLTM_DATA_DIR = os.path.expanduser('~/github/largeliterarymodels/data')
-SN_GLOBS = [
-    os.path.expanduser('~/lltk_data/corpora/chadwyck/tasks/social_network/**/*.json'),
-    os.path.expanduser('~/lltk_data/corpora/markmark/tasks/social_network/**/*.json'),
-    os.path.expanduser('~/lltk_data/corpora/earlyprint/tasks/social_network/**/*.json'),
-    os.path.expanduser('~/lltk_data/corpora/ecco_tcp/tasks/social_network/**/*.json'),
-    os.path.expanduser('~/lltk_data/corpora/eebo_tcp/tasks/social_network/**/*.json'),
-]
-
-
-def canonical_text_id(src, json_path):
-    """Return the lltk-canonical ``_{corpus}/{text_id}`` form.
-
-    Newer SN runs already store the full path in ``metadata.source``; older
-    runs store just the bare text id (e.g. ``ee01010.01``). For the bare
-    case we reconstruct from the JSON file path, which is laid out as
-    ``…/corpora/{corpus}/tasks/social_network/{text_id_path}/{file}.json``.
-    Returns None if neither form yields a valid id.
-    """
-    if src.startswith('_') and '/' in src:
-        return src
-    parts = json_path.split(os.sep)
-    if 'corpora' not in parts or 'social_network' not in parts:
-        return None
-    corpus = parts[parts.index('corpora') + 1]
-    sn_idx = parts.index('social_network')
-    # text_id_path is between social_network and the final filename
-    text_path_parts = parts[sn_idx + 1: -1]
-    if not text_path_parts:
-        return None
-    return f"_{corpus}/{'/'.join(text_path_parts)}"
 
 
 def _default_parish_path():
@@ -264,29 +233,10 @@ def main():
     else:
         print(f"Parish data not found at {args.parish_data} — skipping realistic-name classification", file=sys.stderr)
 
-    files = sorted(f for g in SN_GLOBS for f in glob.glob(g, recursive=True))
-    print(f"Found {len(files)} social network files", file=sys.stderr)
-
-    # Pass 1: load all JSONs, keep ones with a real source + characters.
-    # Older runs store bare text ids in metadata.source — recover canonical
-    # ``_{corpus}/{text_id}`` from the file path in that case.
-    loaded = []
-    skipped_bad_id = 0
-    for path in files:
-        with open(path) as f:
-            d = json.load(f)
-        raw_src = d.get('metadata', {}).get('source', '')
-        if raw_src == 'list':
-            continue
-        if not d.get('characters'):
-            continue
-        src = canonical_text_id(raw_src, path)
-        if not src:
-            skipped_bad_id += 1
-            continue
-        loaded.append((src, d))
-    if skipped_bad_id:
-        print(f"Skipped {skipped_bad_id} files with unrecoverable text id", file=sys.stderr)
+    # Pass 1: stream task results via lltk iterator (canonical ids,
+    # latest-per-text by mtime). Filter to non-empty character lists.
+    loaded = [(src, d) for src, d in iter_task_results('social_network')
+              if d.get('characters')]
     print(f"Loaded {len(loaded)} non-empty social networks", file=sys.stderr)
 
     # Batch metadata + propagated genre tags via lltk.db primitives.
