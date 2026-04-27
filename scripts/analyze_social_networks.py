@@ -47,7 +47,50 @@ def char_desc_text(chars):
     return ' '.join(parts)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+SN_DIR = os.path.join(DATA_DIR, 'social_networks')
 LLTM_DATA_DIR = os.path.expanduser('~/github/largeliterarymodels/data')
+
+
+def load_relation_taxonomy(path):
+    """Load a YAML mapping relation buckets -> member relation strings.
+
+    Format: top-level keys are bucket names; each value is a dict with a
+    `members` list of raw relation strings. Returns (lookup, bucket_names),
+    where lookup maps raw string -> bucket and bucket_names is the ordered
+    list of buckets (excluding `excluded`, which is dropped).
+    """
+    import yaml
+    with open(path) as f:
+        spec = yaml.safe_load(f)
+    lookup = {}
+    bucket_names = []
+    for bucket, body in spec.items():
+        if bucket == 'excluded':
+            continue
+        bucket_names.append(bucket)
+        for raw in (body.get('members') or []):
+            lookup[raw.strip().lower()] = bucket
+    return lookup, bucket_names
+
+
+def relation_bucket_pcts(relations, lookup, bucket_names):
+    """Per-text % of relations falling into each bucket.
+
+    Denominator is the count of relations that map to a known bucket
+    (exclusions and unknown raw strings are dropped from the base).
+    Returns {f'rel_{bucket}_pct': value, ...} for every bucket name.
+    """
+    counts = Counter()
+    for r in relations:
+        v = (r.get('type') or '').strip().lower()
+        b = lookup.get(v)
+        if b is not None:
+            counts[b] += 1
+    total = sum(counts.values())
+    return {
+        f'rel_{b}_pct': round(counts[b] / total * 100, 1) if total else 0.0
+        for b in bucket_names
+    }
 
 
 def _default_parish_path():
@@ -223,7 +266,9 @@ def build_composite_graph(result):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--parish-data', default=_default_parish_path())
-    parser.add_argument('--out', default=os.path.join(DATA_DIR, 'social_network_analysis.csv'))
+    parser.add_argument('--relation-taxonomy',
+                        default=os.path.join(SN_DIR, 'sn_relation_metacategories.yml'))
+    parser.add_argument('--out', default=os.path.join(SN_DIR, 'social_network_analysis.csv'))
     args = parser.parse_args()
 
     parish_names = None
@@ -232,6 +277,16 @@ def main():
         print(f"Parish register: {len(parish_names)} names from {args.parish_data}", file=sys.stderr)
     else:
         print(f"Parish data not found at {args.parish_data} — skipping realistic-name classification", file=sys.stderr)
+
+    rel_lookup, rel_buckets = {}, []
+    if os.path.exists(args.relation_taxonomy):
+        rel_lookup, rel_buckets = load_relation_taxonomy(args.relation_taxonomy)
+        print(f"Relation taxonomy: {len(rel_buckets)} buckets, "
+              f"{len(rel_lookup)} mapped strings, from {args.relation_taxonomy}",
+              file=sys.stderr)
+    else:
+        print(f"Relation taxonomy not found at {args.relation_taxonomy} — "
+              f"skipping rel_*_pct columns", file=sys.stderr)
 
     # Pass 1: stream task results via lltk iterator (canonical ids,
     # latest-per-text by mtime). Filter to non-empty character lists.
@@ -269,6 +324,9 @@ def main():
         macros = event_macro_counts(d.get('events', []))
         macro_pcts = {f'{k}_pct': round(v / n_events * 100, 1) if n_events else 0
                       for k, v in macros.items()}
+
+        rel_pcts = relation_bucket_pcts(d.get('relations', []), rel_lookup, rel_buckets) \
+            if rel_buckets else {}
 
         desc_text = char_desc_text(chars)
         char_desc_conc = score_psg(desc_text) if desc_text.strip() else None
@@ -317,6 +375,7 @@ def main():
             'char_desc_conc': char_desc_conc,
             'n_desc_words': n_desc_words,
             **macro_pcts,
+            **rel_pcts,
             **all_stats,
         }
         rows.append(row)
