@@ -51,13 +51,16 @@ SN_DIR = os.path.join(DATA_DIR, 'social_networks')
 LLTM_DATA_DIR = os.path.expanduser('~/github/largeliterarymodels/data')
 
 
-def load_relation_taxonomy(path):
-    """Load a YAML mapping relation buckets -> member relation strings.
+_DEFAULT_DROP_BUCKETS = {'excluded', 'excluded_or_generic', 'unclassified'}
+
+
+def load_taxonomy(path, drop_buckets=_DEFAULT_DROP_BUCKETS):
+    """Load a YAML mapping bucket -> member strings.
 
     Format: top-level keys are bucket names; each value is a dict with a
-    `members` list of raw relation strings. Returns (lookup, bucket_names),
-    where lookup maps raw string -> bucket and bucket_names is the ordered
-    list of buckets (excluding `excluded`, which is dropped).
+    `members` list of raw strings. Returns (lookup, bucket_names) where
+    lookup maps raw string -> bucket and bucket_names is the ordered list
+    of buckets (with `drop_buckets` removed).
     """
     import yaml
     with open(path) as f:
@@ -65,7 +68,7 @@ def load_relation_taxonomy(path):
     lookup = {}
     bucket_names = []
     for bucket, body in spec.items():
-        if bucket == 'excluded':
+        if bucket in drop_buckets:
             continue
         bucket_names.append(bucket)
         for raw in (body.get('members') or []):
@@ -73,22 +76,24 @@ def load_relation_taxonomy(path):
     return lookup, bucket_names
 
 
-def relation_bucket_pcts(relations, lookup, bucket_names):
-    """Per-text % of relations falling into each bucket.
+def bucket_pcts(raw_values, lookup, bucket_names, prefix):
+    """Per-text % of items falling into each bucket.
 
-    Denominator is the count of relations that map to a known bucket
-    (exclusions and unknown raw strings are dropped from the base).
-    Returns {f'rel_{bucket}_pct': value, ...} for every bucket name.
+    Denominator is the count that maps to a known bucket (exclusions and
+    unknown raw strings are dropped from the base). Returns
+    {f'{prefix}_{bucket}_pct': value, ...} for every bucket name.
     """
     counts = Counter()
-    for r in relations:
-        v = (r.get('type') or '').strip().lower()
+    for v in raw_values:
+        v = (v or '').strip().lower()
+        if not v:
+            continue
         b = lookup.get(v)
         if b is not None:
             counts[b] += 1
     total = sum(counts.values())
     return {
-        f'rel_{b}_pct': round(counts[b] / total * 100, 1) if total else 0.0
+        f'{prefix}_{b}_pct': round(counts[b] / total * 100, 1) if total else 0.0
         for b in bucket_names
     }
 
@@ -268,6 +273,8 @@ def main():
     parser.add_argument('--parish-data', default=_default_parish_path())
     parser.add_argument('--relation-taxonomy',
                         default=os.path.join(SN_DIR, 'sn_relation_metacategories.yml'))
+    parser.add_argument('--class-taxonomy',
+                        default=os.path.join(SN_DIR, 'sn_class_metacategories.yml'))
     parser.add_argument('--out', default=os.path.join(SN_DIR, 'social_network_analysis.csv'))
     args = parser.parse_args()
 
@@ -280,13 +287,23 @@ def main():
 
     rel_lookup, rel_buckets = {}, []
     if os.path.exists(args.relation_taxonomy):
-        rel_lookup, rel_buckets = load_relation_taxonomy(args.relation_taxonomy)
+        rel_lookup, rel_buckets = load_taxonomy(args.relation_taxonomy)
         print(f"Relation taxonomy: {len(rel_buckets)} buckets, "
               f"{len(rel_lookup)} mapped strings, from {args.relation_taxonomy}",
               file=sys.stderr)
     else:
         print(f"Relation taxonomy not found at {args.relation_taxonomy} — "
               f"skipping rel_*_pct columns", file=sys.stderr)
+
+    class_lookup, class_buckets = {}, []
+    if os.path.exists(args.class_taxonomy):
+        class_lookup, class_buckets = load_taxonomy(args.class_taxonomy)
+        print(f"Class taxonomy: {len(class_buckets)} buckets, "
+              f"{len(class_lookup)} mapped strings, from {args.class_taxonomy}",
+              file=sys.stderr)
+    else:
+        print(f"Class taxonomy not found at {args.class_taxonomy} — "
+              f"skipping class_*_pct columns", file=sys.stderr)
 
     # Pass 1: stream task results via lltk iterator (canonical ids,
     # latest-per-text by mtime). Filter to non-empty character lists.
@@ -325,8 +342,13 @@ def main():
         macro_pcts = {f'{k}_pct': round(v / n_events * 100, 1) if n_events else 0
                       for k, v in macros.items()}
 
-        rel_pcts = relation_bucket_pcts(d.get('relations', []), rel_lookup, rel_buckets) \
-            if rel_buckets else {}
+        rel_pcts = bucket_pcts(
+            (r.get('type') for r in d.get('relations', [])),
+            rel_lookup, rel_buckets, prefix='rel') if rel_buckets else {}
+
+        class_pcts = bucket_pcts(
+            (c.get('class') for c in chars),
+            class_lookup, class_buckets, prefix='class') if class_buckets else {}
 
         desc_text = char_desc_text(chars)
         char_desc_conc = score_psg(desc_text) if desc_text.strip() else None
@@ -376,6 +398,7 @@ def main():
             'n_desc_words': n_desc_words,
             **macro_pcts,
             **rel_pcts,
+            **class_pcts,
             **all_stats,
         }
         rows.append(row)
