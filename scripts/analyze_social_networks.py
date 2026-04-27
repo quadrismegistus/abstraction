@@ -42,6 +42,29 @@ SN_GLOBS = [
 ]
 
 
+def canonical_text_id(src, json_path):
+    """Return the lltk-canonical ``_{corpus}/{text_id}`` form.
+
+    Newer SN runs already store the full path in ``metadata.source``; older
+    runs store just the bare text id (e.g. ``ee01010.01``). For the bare
+    case we reconstruct from the JSON file path, which is laid out as
+    ``…/corpora/{corpus}/tasks/social_network/{text_id_path}/{file}.json``.
+    Returns None if neither form yields a valid id.
+    """
+    if src.startswith('_') and '/' in src:
+        return src
+    parts = json_path.split(os.sep)
+    if 'corpora' not in parts or 'social_network' not in parts:
+        return None
+    corpus = parts[parts.index('corpora') + 1]
+    sn_idx = parts.index('social_network')
+    # text_id_path is between social_network and the final filename
+    text_path_parts = parts[sn_idx + 1: -1]
+    if not text_path_parts:
+        return None
+    return f"_{corpus}/{'/'.join(text_path_parts)}"
+
+
 def _default_parish_path():
     """Return ncumb.txt under abstraction/data if present, else fall back to lltm/data."""
     local = os.path.join(DATA_DIR, 'ncumb.txt')
@@ -206,16 +229,25 @@ def main():
     print(f"Found {len(files)} social network files", file=sys.stderr)
 
     # Pass 1: load all JSONs, keep ones with a real source + characters.
+    # Older runs store bare text ids in metadata.source — recover canonical
+    # ``_{corpus}/{text_id}`` from the file path in that case.
     loaded = []
+    skipped_bad_id = 0
     for path in files:
         with open(path) as f:
             d = json.load(f)
-        src = d.get('metadata', {}).get('source', '')
-        if src == 'list' or not src:
+        raw_src = d.get('metadata', {}).get('source', '')
+        if raw_src == 'list':
             continue
         if not d.get('characters'):
             continue
+        src = canonical_text_id(raw_src, path)
+        if not src:
+            skipped_bad_id += 1
+            continue
         loaded.append((src, d))
+    if skipped_bad_id:
+        print(f"Skipped {skipped_bad_id} files with unrecoverable text id", file=sys.stderr)
     print(f"Loaded {len(loaded)} non-empty social networks", file=sys.stderr)
 
     # Batch metadata + propagated genre tags via lltk.db primitives.
@@ -223,7 +255,7 @@ def main():
     meta_df = lltk.db.fetch_metadata(text_ids, columns=['title', 'year', 'author'])
     tags_df = lltk.db.genre_tags(text_ids, propagate=True)
 
-    meta_lookup = meta_df.to_dict('index')
+    meta_lookup = meta_df.set_index('_id').to_dict('index')
     tags_lookup: dict = defaultdict(lambda: defaultdict(list))
     for _, r in tags_df.iterrows():
         tags_lookup[r['_id']][r['facet']].append(r['tag'])
