@@ -66,23 +66,46 @@ def canonical_text_id(src, json_path):
 
 
 def _default_parish_path():
-    """Return ncumb.txt under abstraction/data if present, else fall back to lltm/data."""
-    local = os.path.join(DATA_DIR, 'ncumb.txt')
-    if os.path.exists(local):
-        return local
-    upstream = os.path.join(LLTM_DATA_DIR, 'ncumb.txt')
-    if os.path.exists(upstream):
-        return upstream
-    return local  # caller will report missing
+    """Return the compiled names list if present, else fall back to ncumb sources.
+
+    Preferred: data/names/names.txt (built by scripts/build_names_list.py from
+    NE England parish + Cambridge Group reconstitution + Edinburgh registers).
+    Falls back to data/names/ncumb.txt or lltm's copy.
+    """
+    candidates = [
+        os.path.join(DATA_DIR, 'names', 'names.txt'),
+        os.path.join(DATA_DIR, 'names', 'ncumb.txt'),
+        os.path.join(DATA_DIR, 'ncumb.txt'),
+        os.path.join(LLTM_DATA_DIR, 'ncumb.txt'),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return candidates[0]  # caller will report missing
 
 
 def load_parish_names(path):
+    """Load name set. Supports either the simple names.txt format
+    (one lowercase name per line) or the original ncumb.txt CSV format.
+    """
     names = set()
     with open(path) as f:
         for line in f:
-            if not line.strip() or not line[0].isdigit():
+            line = line.strip()
+            if not line:
                 continue
-            parts = line.strip().split(',')
+            # Simple list format: just a name per line
+            if not line[0].isdigit() and ',' not in line:
+                if not line.startswith('Names from') and not line.startswith('Created') \
+                        and not line.startswith('For source') and not line.startswith('http'):
+                    n = line.strip('"').strip().lower()
+                    if n and len(n) >= 3:
+                        names.add(n)
+                continue
+            # ncumb.txt CSV format
+            if not line[0].isdigit():
+                continue
+            parts = line.split(',')
             if len(parts) >= 5:
                 for idx in [3, 4]:
                     n = parts[idx].strip('"').strip()
