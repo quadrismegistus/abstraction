@@ -30,6 +30,22 @@ from largeliterarymodels.analysis.social_networks import (
     SocialNetwork, build_graph, build_directed_graph,
     build_dialogue_graph, build_event_graph,
 )
+from abstraction.scoring import score_psg
+
+
+def char_desc_text(chars):
+    """Pool every character's `descriptions` + `intro_text` into one string.
+
+    Used as a per-text proxy for "how abstract is the language used to
+    describe persons in this novel?" — distinct from text-level abstractness
+    (which averages over narrative + dialogue + description alike).
+    """
+    parts = []
+    for c in chars:
+        parts.extend(c.get('descriptions') or [])
+        if c.get('intro_text'):
+            parts.append(c['intro_text'])
+    return ' '.join(parts)
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 LLTM_DATA_DIR = os.path.expanduser('~/github/largeliterarymodels/data')
@@ -304,6 +320,10 @@ def main():
         macro_pcts = {f'{k}_pct': round(v / n_events * 100, 1) if n_events else 0
                       for k, v in macros.items()}
 
+        desc_text = char_desc_text(chars)
+        char_desc_conc = score_psg(desc_text) if desc_text.strip() else None
+        n_desc_words = len(desc_text.split())
+
         all_stats = {}
         try:
             all_stats.update(graph_stats(build_composite_graph(d), prefix='comp'))
@@ -344,6 +364,8 @@ def main():
             'realistic_pct': round(name_counts['realistic'] / n_chars * 100, 1),
             'classical_pct': round(name_counts['classical'] / n_chars * 100, 1),
             'type_pct': round(name_counts['type'] / n_chars * 100, 1),
+            'char_desc_conc': char_desc_conc,
+            'n_desc_words': n_desc_words,
             **macro_pcts,
             **all_stats,
         }
