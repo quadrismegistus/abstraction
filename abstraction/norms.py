@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from .config import (
     FIELD_DIR, SOURCE_DIR, ZCUT, PATH_NORMS, PATH_ALLNORMS, PATH_VECNORMS,
-    REMOVE_STOPWORDS, BAD_SOURCES,
+    PATH_ICNORMS, REMOVE_STOPWORDS, BAD_SOURCES,
 )
 from .tokenize import get_stopwords, get_stopwords_and_names
 from .utils import zfy, download_tqdm, read_df, save_df
@@ -261,6 +261,67 @@ def get_vecnorms(remove_stopwords=REMOVE_STOPWORDS):
     return df
 
 
+def gen_ic_norms(model_dir=None):
+    """Generate IC (information content) norms from word2vec vocab.txt files.
+
+    For each corpus-period vocab, computes IC = log2(total / count) in bits.
+    Aggregates: median across corpora within century, then cross-century median.
+    Saves to PATH_ICNORMS.
+    """
+    from .config import PATH_MODELS
+    if model_dir is None:
+        model_dir = PATH_MODELS
+
+    PERIOD_MAP = {
+        "1500-1600": "C16", "1600-1700": "C17", "1700-1800": "C18",
+        "1800-1900": "C19", "1900-2000": "C20", "2000-2100": "C21",
+    }
+
+    all_series = {}
+    for corpus_dir in sorted(os.listdir(model_dir)):
+        cp = os.path.join(model_dir, corpus_dir)
+        if not os.path.isdir(cp):
+            continue
+        for period_dir in sorted(os.listdir(cp)):
+            plabel = PERIOD_MAP.get(period_dir)
+            if not plabel:
+                continue
+            vpath = os.path.join(cp, period_dir, "run_01", "vocab.txt")
+            if not os.path.isfile(vpath):
+                continue
+            vocab, total = {}, 0
+            with open(vpath) as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) == 2:
+                        vocab[parts[0]] = int(parts[1])
+                        total += int(parts[1])
+            col = f"IC.{corpus_dir}.{plabel}"
+            ic = {w: np.log2(total / c) for w, c in vocab.items()}
+            all_series[col] = pd.Series(ic, dtype="float32")
+
+    ic_df = pd.DataFrame(all_series)
+    for plabel in sorted(set(PERIOD_MAP.values())):
+        cols = [c for c in ic_df.columns if c.endswith(f".{plabel}")]
+        if cols:
+            ic_df[f"IC.Median.{plabel}"] = ic_df[cols].median(axis=1)
+    med_cols = sorted(c for c in ic_df.columns if c.startswith("IC.Median.C"))
+    ic_df["IC.Median.median"] = ic_df[med_cols].median(axis=1)
+    save_df(ic_df, PATH_ICNORMS)
+    return ic_df
+
+
+def get_ic_norms(remove_stopwords=REMOVE_STOPWORDS, force=False):
+    if force or not os.path.exists(PATH_ICNORMS):
+        df = gen_ic_norms()
+    else:
+        df = read_df(PATH_ICNORMS)
+    if remove_stopwords:
+        exclude = get_stopwords_and_names()
+        df = df[~df.index.str.lower().isin(exclude)]
+    return df
+
+
 def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
     if not force and os.path.exists(PATH_ALLNORMS):
         df = read_df(PATH_ALLNORMS)
@@ -272,7 +333,8 @@ def get_allnorms(remove_stopwords=REMOVE_STOPWORDS, force=False):
     orig = get_orignorms(remove_stopwords=False)
     orig.columns = [c + ".orig" for c in orig.columns]
     vec = get_vecnorms(remove_stopwords=False)
-    combined = vec.join(orig, how="outer")
+    ic = get_ic_norms(remove_stopwords=False)
+    combined = vec.join(orig, how="outer").join(ic, how="outer")
     save_df(combined, PATH_ALLNORMS)
     if remove_stopwords:
         exclude = get_stopwords_and_names()

@@ -18,6 +18,7 @@ DIST_DIR = os.path.join(PATH_DATA, "dists")
 PATH_NORMS = os.path.join(FIELD_DIR, "data.wordnorms_orig.csv")
 PATH_ALLNORMS = os.path.join(FIELD_DIR, "data.allnorms.pkl.gz")
 PATH_VECNORMS = os.path.join(FIELD_DIR, "data.wordnorms_vec.pkl.gz")
+PATH_ICNORMS = os.path.join(FIELD_DIR, "data.ic_norms.pkl.gz")
 PATH_VECFIELDS = os.path.join(FIELD_DIR, "data.fields_vec.csv.gz")
 
 PATH_NORMS_FR = os.path.join(FIELD_DIR, "data.wordnorms_orig.fr.csv")

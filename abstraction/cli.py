@@ -864,6 +864,10 @@ def main():
     p.add_argument("--max-skipgrams", type=int, default=None, metavar="N",
                    help="Cap skipgrams per period at N (texts shuffled, writing stops at cap)")
 
+    # gen-icnorms: generate information-content word norms from vocab.txt files
+    p = sub.add_parser("gen-icnorms", help="Generate IC (information content) norms from model vocabs")
+    p.add_argument("--model-dir", default=None, help="Model directory (default: data/models/)")
+
     # gen-vecnorms: generate vector-based word norms from trained models
     p = sub.add_parser("gen-vecnorms", help="Generate vector norms from trained models")
     p.add_argument("--lang", default="en", choices=["en", "fr", "de", "es"], help="Language (default: en)")
@@ -972,6 +976,10 @@ def main():
         cmd_train_all(args)
     elif args.command == "train-skipgrams":
         cmd_train_skipgrams(args)
+    elif args.command == "gen-icnorms":
+        from .norms import gen_ic_norms
+        gen_ic_norms(model_dir=getattr(args, 'model_dir', None))
+        print("IC norms generated.")
     elif args.command == "gen-vecnorms":
         cmd_gen_vecnorms(args)
     elif args.command == "genre-tag-shift":
