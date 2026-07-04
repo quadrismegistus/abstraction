@@ -4,8 +4,7 @@
 __pycache__/
 *.pyc
 
-# Data (large, not tracked)
-data/
+# Data (large, not tracked; `data` is a symlink to an external volume)
 data
 .pytest_cache
 .claude
@@ -30,4 +29,17 @@ htmlcov/
 .ipynb_checkpoints/
 # Papermill / executed outputs (regenerable, often multi-MB)
 *-executed.ipynb
-data
+
+# ClickHouse server droppings (guard against accidental `clickhouse server` launch from repo root)
+cores/
+metadata/
+metadata_dropped/
+store/
+flags/
+format_schemas/
+user_files/
+preprocessed_configs/
+access/
+uuid
+status
+tmp/
