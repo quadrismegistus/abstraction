@@ -50,6 +50,18 @@ class TestGetContrasts:
         c = contrasts[0]
         assert "idea" in c["neg"]  # z=-0.5, below -0.3
 
+    def test_skips_columns_without_dash(self):
+        # IC.* (information-content) columns have no "-" in the contrast
+        # part (e.g. "IC.Median.median") and must not crash get_contrasts.
+        df = pd.DataFrame({
+            "Abs-Conc.Test": [2.0, -2.0, 0.0, 1.5, -0.5],
+            "IC.Median.median": [3.1, 4.2, 5.0, 2.7, 6.6],
+        }, index=["rock", "virtue", "table", "hammer", "idea"])
+        contrasts = get_contrasts(df)
+        assert len(contrasts) == 1
+        assert contrasts[0]["contrast"] == "Abs-Conc"
+        assert not any(c["contrast"] == "IC" for c in contrasts)
+
 
 class TestFormatNormsAsLong:
     def test_output_shape(self):

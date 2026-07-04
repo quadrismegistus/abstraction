@@ -156,6 +156,9 @@ def get_contrasts(dfnorms, zcut=ZCUT):
         parts = col.split(".")
         contrast, source = parts[0], parts[1]
         period = parts[2] if len(parts) > 2 else "orig"
+        if "-" not in contrast:
+            # not a contrast column (e.g. IC.* information-content norms)
+            continue
         neg, pos = contrast.split("-")
         series = dfnorms[col]
         pos_words = set(series[series >= zcut].index)
