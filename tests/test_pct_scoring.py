@@ -2,18 +2,12 @@
 
 import numpy as np
 import pandas as pd
-import pytest
 
-import abstraction.scoring as _scoring_mod
 from abstraction.scoring import _score_freqs_dict_allnorms
 from abstraction.analysis import assign_period_score, CENTURY_BINS
 
-
-@pytest.fixture(autouse=True)
-def _clear_cache():
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
-    yield
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
+# Norm caches (_NORM_DICTS, _NORMS_ARRAYS_CACHE) are cleared per-test by the
+# autouse fixture in tests/conftest.py.
 
 
 # ---------------------------------------------------------------------------

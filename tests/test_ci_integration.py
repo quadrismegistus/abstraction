@@ -8,23 +8,26 @@ into the repo under tests/fixtures/.
 
 import os
 
+import importlib
+
 import numpy as np
 import pandas as pd
 import pytest
 
-import abstraction.scoring as _scoring_mod
+# The real module object (package attribute is shadowed by the tokenize()
+# function re-exported in abstraction/__init__.py — see tests/conftest.py).
+_tokenize_mod = importlib.import_module("abstraction.tokenize")
 
 
 @pytest.fixture(autouse=True)
-def _clear_norms_cache():
-    """Clear the global norms arrays cache and mock spelling modernizer."""
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
-    # Mock get_spelling_modernizer to avoid file access in CI
-    orig = _scoring_mod.get_spelling_modernizer
-    _scoring_mod.get_spelling_modernizer = lambda: {}
-    yield
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
-    _scoring_mod.get_spelling_modernizer = orig
+def _no_spelling(monkeypatch):
+    """Keep spelling modernization off for every test in this module.
+
+    Patches tokenize's _SPELLING_D cache (what get_spelling_modernizer
+    consults) so all callers get {} without touching the real spelling file,
+    which is absent in CI. Norm caches are cleared by tests/conftest.py.
+    """
+    monkeypatch.setattr(_tokenize_mod, "_SPELLING_D", {})
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 CORPUS_DIR = os.path.join(FIXTURES, "test_corpus")
@@ -90,7 +93,7 @@ class TestTokenizeCIIntegration:
             txt = f.read()
         tokens = tokenize_agnostic(txt)
         assert len(tokens) > 20
-        assert "truth" in tokens or "Truth" in tokens.lower() if hasattr(tokens, 'lower') else True
+        assert "truth" in [t.lower() for t in tokens]
 
     def test_tokenize_all_fixture_texts(self):
         from abstraction.tokenize import tokenize_agnostic
@@ -106,11 +109,9 @@ class TestTokenizeCIIntegration:
 # ---------------------------------------------------------------------------
 
 class TestScoringCIIntegration:
-    def test_score_psg_with_fixture_norms(self, fixture_norms, monkeypatch):
+    def test_score_psg_with_fixture_norms(self, fixture_norms, install_fake_norms):
         """Score a passage using fixture norms."""
-        from abstraction import scoring
-        norm_dict = fixture_norms["Abs-Conc.Median"].dropna().to_dict()
-        monkeypatch.setattr(scoring, "_NORM_DICTS", {"Abs-Conc.Median.median": norm_dict})
+        install_fake_norms(fixture_norms["Abs-Conc.Median"].dropna().to_dict())
         from abstraction.scoring import score_psg
         # concrete passage
         score = score_psg("The rock and stone fell on the table")
@@ -119,10 +120,8 @@ class TestScoringCIIntegration:
         score = score_psg("Truth and justice demand virtue and freedom")
         assert score < 0
 
-    def test_score_words_with_fixture_norms(self, fixture_norms, monkeypatch):
-        from abstraction import scoring
-        norm_dict = fixture_norms["Abs-Conc.Median"].dropna().to_dict()
-        monkeypatch.setattr(scoring, "_NORM_DICTS", {"Abs-Conc.Median.median": norm_dict})
+    def test_score_words_with_fixture_norms(self, fixture_norms, install_fake_norms):
+        install_fake_norms(fixture_norms["Abs-Conc.Median"].dropna().to_dict())
         from abstraction.scoring import score_words
         df = score_words("The rock of virtue stands in the world of justice")
         assert len(df) > 0
@@ -135,10 +134,8 @@ class TestScoringCIIntegration:
         assert virtue.iloc[0]["score"] < 0
         assert virtue.iloc[0]["is_abstract"]
 
-    def test_score_freqs_file_with_fixture_norms(self, fixture_norms, monkeypatch):
-        from abstraction import scoring
-        norm_dict = fixture_norms["Abs-Conc.Median"].dropna().to_dict()
-        monkeypatch.setattr(scoring, "_NORM_DICTS", {"Abs-Conc.Median.median": norm_dict})
+    def test_score_freqs_file_with_fixture_norms(self, fixture_norms, install_fake_norms):
+        install_fake_norms(fixture_norms["Abs-Conc.Median"].dropna().to_dict())
         from abstraction.scoring import score_freqs_file
         score = score_freqs_file(os.path.join(CORPUS_DIR, "freqs", "text1.json"))
         assert isinstance(score, float)

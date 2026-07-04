@@ -32,12 +32,10 @@ FAKE_NORMS = {
 
 
 @pytest.fixture(autouse=True)
-def patch_norms(monkeypatch):
-    """Patch get_norm_dict to return a small known dictionary."""
-    monkeypatch.setattr(
-        "abstraction.scoring._NORM_DICTS",
-        {"Abs-Conc.Median.median": FAKE_NORMS},
-    )
+def patch_norms(install_fake_norms):
+    """Install FAKE_NORMS via the shared conftest contract (tuple-keyed
+    _NORM_DICTS cache), so passages.py's from-imported get_norm_dict sees it."""
+    install_fake_norms(FAKE_NORMS)
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +240,7 @@ class TestSavePassageHtml:
 # save_passage_image (integration — only if playwright available)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestSavePassageImage:
     @pytest.fixture
     def has_playwright(self):

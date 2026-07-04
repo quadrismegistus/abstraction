@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from abstraction.cli import main
+from tests.conftest import make_fake_allnorms as _make_fake_allnorms
 
 
 # ---------------------------------------------------------------------------
@@ -15,16 +16,6 @@ from abstraction.cli import main
 FIXTURE_CORPUS = os.path.join(
     os.path.dirname(__file__), "fixtures", "test_corpus"
 )
-
-
-def _make_fake_allnorms():
-    """Return a small allnorms DataFrame indexed by word."""
-    return pd.DataFrame(
-        {
-            "Abs-Conc.Median.median": {"rock": 1.5, "virtue": -1.8, "face": 0.3, "truth": -1.2, "man": 0.5},
-            "Abs-Conc.Median.orig": {"rock": 1.4, "virtue": -1.7, "face": 0.2, "truth": -1.1, "man": 0.4},
-        }
-    )
 
 
 def _patch_scoring(monkeypatch, tmp_path):

@@ -3,7 +3,6 @@ import os
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from abstraction.scoring import (
     score_freqs,
@@ -17,65 +16,50 @@ from abstraction.scoring import (
     _load_done_ids,
     score_corpus_freqs,
 )
-import abstraction.scoring as _scoring_mod
-
-
-@pytest.fixture(autouse=True)
-def _clear_norms_cache():
-    """Clear the global norms arrays cache between tests."""
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
-    yield
-    _scoring_mod._NORMS_ARRAYS_CACHE = None
+from tests.conftest import make_fake_allnorms as _make_fake_allnorms
 
 
 class TestScoreFreqs:
-    def _patch_norms(self, monkeypatch):
-        """Patch get_norm_dict and spelling modernizer."""
-        fake = {"rock": 1.5, "virtue": -1.8, "justice": -1.3, "face": 0.2}
-        monkeypatch.setattr(
-            "abstraction.scoring._NORM_DICTS",
-            {"Abs-Conc.Median.median": fake},
+    def _patch_norms(self, install_fake_norms):
+        """Install fake norms via the shared conftest contract."""
+        return install_fake_norms(
+            {"rock": 1.5, "virtue": -1.8, "justice": -1.3, "face": 0.2}
         )
-        monkeypatch.setattr("abstraction.scoring.get_spelling_modernizer", lambda: {})
-        return fake
 
-    def test_basic(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_basic(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         score = score_freqs({"rock": 2, "virtue": 2})
         expected = (1.5 * 2 + -1.8 * 2) / 4
         assert abs(score - expected) < 1e-6
 
-    def test_unknown_words_ignored(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_unknown_words_ignored(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         score = score_freqs({"rock": 1, "xyzzy": 100})
         assert abs(score - 1.5) < 1e-6
 
-    def test_empty_freqs(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_empty_freqs(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         assert np.isnan(score_freqs({}))
 
-    def test_all_unknown(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_all_unknown(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         assert np.isnan(score_freqs({"xyzzy": 5, "qqq": 3}))
 
-    def test_case_insensitive(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_case_insensitive(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         score = score_freqs({"Rock": 1, "VIRTUE": 1})
         expected = (1.5 + -1.8) / 2
         assert abs(score - expected) < 1e-6
 
 
 class TestScoreWords:
-    def _patch_norms(self, monkeypatch):
-        fake = {"rock": 1.5, "virtue": -1.8, "justice": -1.3, "face": 0.2}
-        monkeypatch.setattr(
-            "abstraction.scoring._NORM_DICTS",
-            {"Abs-Conc.Median.median": fake},
+    def _patch_norms(self, install_fake_norms):
+        install_fake_norms(
+            {"rock": 1.5, "virtue": -1.8, "justice": -1.3, "face": 0.2}
         )
-        monkeypatch.setattr("abstraction.scoring.get_spelling_modernizer", lambda: {})
 
-    def test_returns_dataframe(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_returns_dataframe(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         df = score_words("the rock of virtue")
         assert isinstance(df, pd.DataFrame)
         assert "word" in df.columns
@@ -84,8 +68,8 @@ class TestScoreWords:
         assert "is_abstract" in df.columns
         assert "is_concrete" in df.columns
 
-    def test_known_words_scored(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_known_words_scored(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         df = score_words("rock and virtue")
         rock = df[df["word"] == "rock"].iloc[0]
         assert rock["score"] == 1.5
@@ -95,40 +79,27 @@ class TestScoreWords:
         assert virtue["score"] == -1.8
         assert virtue["is_abstract"] == True
 
-    def test_unknown_words_nan(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_unknown_words_nan(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         df = score_words("the rock")
         the_row = df[df["word"] == "the"].iloc[0]
         assert np.isnan(the_row["score"])
 
-    def test_empty_text(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_empty_text(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         df = score_words("")
         assert len(df) == 0
 
-    def test_positions_sequential(self, monkeypatch):
-        self._patch_norms(monkeypatch)
+    def test_positions_sequential(self, install_fake_norms):
+        self._patch_norms(install_fake_norms)
         df = score_words("rock face virtue justice")
         assert list(df["position"]) == sorted(df["position"].tolist())
 
 
 # ---------------------------------------------------------------------------
 # Helpers for corpus-level scoring tests
+# (_make_fake_allnorms is shared via tests/conftest.py)
 # ---------------------------------------------------------------------------
-
-def _make_fake_allnorms():
-    """Return a small allnorms DataFrame indexed by word.
-
-    Uses Abs-Conc.Median.* column naming to match production code,
-    which generates _pct_ columns from this pattern.
-    """
-    return pd.DataFrame(
-        {
-            "Abs-Conc.Median.median": {"rock": 1.5, "virtue": -1.8, "face": 0.3},
-            "Abs-Conc.Median.orig": {"rock": 1.4, "virtue": -1.7, "face": 0.2},
-        }
-    )
-
 
 def _write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -366,19 +337,11 @@ class TestScoreAllCorpora:
         assert len(df) == 1
         assert os.path.exists(out_path)
 
-    def test_force_flag(self, tmp_path):
-        corpus_dir = self._setup_corpus(tmp_path)
-        allnorms = _make_fake_allnorms()
-        out_path = str(tmp_path / "scores.csv")
-        # first run
-        score_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out_path)
-        mtime1 = os.path.getmtime(out_path)
-        # second run (resumable — should skip existing)
-        import time; time.sleep(0.05)
-        score_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out_path)
-        # file unchanged since all IDs already scored
-        df = pd.read_csv(out_path)
-        assert len(df) == 1  # no duplicates
+    # NOTE: a former test_force_flag lived here but never exercised --force:
+    # score_corpus_freqs has no force parameter (force semantics are
+    # implemented at the CLI layer, covered by
+    # tests/test_cli.py::TestScoreCorpus::test_force_deletes_and_rescores),
+    # and its body duplicated TestScoreCorpusFreqs::test_resumability_no_duplicates.
 
     def test_no_freqs_dir_empty(self, tmp_path):
         corpus_dir = str(tmp_path / "empty_corpus")
@@ -453,33 +416,26 @@ class TestModernizeWordList:
 class TestModernizeIntegration:
     """Test that scoring functions use modernization end-to-end."""
 
-    def _patch(self, monkeypatch):
-        fake_norms = {"virtue": -1.8, "rock": 1.5}
-        fake_spelling = {"vertue": "virtue", "rocke": "rock"}
-        monkeypatch.setattr(
-            "abstraction.scoring._NORM_DICTS",
-            {"Abs-Conc.Median.median": fake_norms},
+    def _patch(self, install_fake_norms):
+        return install_fake_norms(
+            {"virtue": -1.8, "rock": 1.5},
+            spelling={"vertue": "virtue", "rocke": "rock"},
         )
-        monkeypatch.setattr(
-            "abstraction.scoring.get_spelling_modernizer",
-            lambda: fake_spelling,
-        )
-        return fake_norms
 
-    def test_score_psg_modernizes(self, monkeypatch):
-        self._patch(monkeypatch)
+    def test_score_psg_modernizes(self, install_fake_norms):
+        self._patch(install_fake_norms)
         score = score_psg("vertue and rocke")
         expected = (-1.8 + 1.5) / 2
         assert abs(score - expected) < 1e-6
 
-    def test_score_freqs_modernizes(self, monkeypatch):
-        self._patch(monkeypatch)
+    def test_score_freqs_modernizes(self, install_fake_norms):
+        self._patch(install_fake_norms)
         score = score_freqs({"vertue": 1, "rocke": 1})
         expected = (-1.8 + 1.5) / 2
         assert abs(score - expected) < 1e-6
 
-    def test_score_words_modernizes(self, monkeypatch):
-        self._patch(monkeypatch)
+    def test_score_words_modernizes(self, install_fake_norms):
+        self._patch(install_fake_norms)
         df = score_words("vertue and rocke")
         vertue_row = df[df["word"] == "vertue"].iloc[0]
         assert vertue_row["score"] == -1.8
@@ -495,17 +451,11 @@ class TestModernizeIntegration:
         scores = _score_freqs_allnorms(str(path), allnorms, spelling_d)
         assert abs(scores["Abs-Conc.Median.median"] - (-1.8)) < 1e-6
 
-    def test_modern_form_preferred_over_raw(self, monkeypatch):
+    def test_modern_form_preferred_over_raw(self, install_fake_norms):
         """When both raw and modern forms exist in norms, modern wins."""
-        fake_norms = {"vertue": -0.72, "virtue": -1.59}
-        fake_spelling = {"vertue": "virtue"}
-        monkeypatch.setattr(
-            "abstraction.scoring._NORM_DICTS",
-            {"Abs-Conc.Median.median": fake_norms},
-        )
-        monkeypatch.setattr(
-            "abstraction.scoring.get_spelling_modernizer",
-            lambda: fake_spelling,
+        install_fake_norms(
+            {"vertue": -0.72, "virtue": -1.59},
+            spelling={"vertue": "virtue"},
         )
         score = score_psg("vertue")
         assert abs(score - (-1.59)) < 1e-6

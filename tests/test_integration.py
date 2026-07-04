@@ -5,11 +5,15 @@ These tests verify that modules work together end-to-end with actual
 psycholinguistic norms, corpus texts, and pre-computed data.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from abstraction.config import PATH_NORMS, PATH_VECNORMS, PATH_ALLNORMS, ZCUT
+from abstraction.config import (
+    PATH_NORMS, PATH_VECNORMS, PATH_ALLNORMS, PATH_CORPORA, ZCUT,
+)
 from abstraction.corpus import load_corpus
 from abstraction.tokenize import tokenize, tokenize_agnostic, get_stopwords
 from abstraction.norms import (
@@ -20,6 +24,23 @@ from abstraction.norms import (
 )
 from abstraction.counting import count_absconc, count_absconc_psg
 from abstraction.scoring import score_psg, score_freqs, score_words
+
+
+# These tests need the real norm data files (behind the data/ symlink, which
+# may point at an unmounted external volume) and the canon_fiction corpus
+# under ~/lltk_data/corpora. Skip the whole module when any are absent
+# instead of error-storming.
+_CANON_FICTION_DIR = os.path.join(PATH_CORPORA, "canon_fiction")
+_REQUIRED_DATA = (PATH_NORMS, PATH_VECNORMS, PATH_ALLNORMS, _CANON_FICTION_DIR)
+_MISSING_DATA = [p for p in _REQUIRED_DATA if not os.path.exists(p)]
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        bool(_MISSING_DATA),
+        reason=f"integration data absent: {', '.join(_MISSING_DATA)}",
+    ),
+]
 
 
 # ---------------------------------------------------------------------------
