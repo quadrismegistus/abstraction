@@ -8,7 +8,11 @@ nltk>=3.8
 gensim>=4.0
 tqdm>=4.64
 requests
-ftfy
 fastapi>=0.100
 uvicorn[standard]>=0.22
 duckdb>=1.0
+clickhouse-connect>=0.7
+openpyxl
+xlrd
+matplotlib>=3.6
+statsmodels
