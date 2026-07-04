@@ -586,7 +586,6 @@ def cmd_score_passages(args):
     tokenize_agnostic (regex word-boundary splitter, not str.split).
     """
     import time
-    import numpy as np
     import clickhouse_connect
     from .aggregate import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD
     from .scoring import score_text_allcols, build_allnorms_index
@@ -842,7 +841,7 @@ def main():
 
     # train-all: train models for all skipgram files under a directory
     p = sub.add_parser("train-all", help="Train Word2Vec models for all skipgram files under a directory")
-    p.add_argument("model_dir", help="Root model directory (e.g. /Volumes/diderot/DH/data/models_century5)")
+    p.add_argument("model_dir", help="Root model directory (e.g. data/models_century5)")
     p.add_argument("--runs", type=int, default=5, help="Number of training runs (default: 5)")
     p.add_argument("--workers", type=int, default=8, help="Number of threads (default: 8)")
     p.add_argument("--dims", type=int, default=100, help="Embedding dimensions (default: 100)")
@@ -909,9 +908,8 @@ def main():
                    help="Score column (default: Abs-Conc.Median.median)")
     p.add_argument("--facet", default="form", choices=["form", "mode", "register", "flat", "all"],
                    help="Genre tag facet (default: form); 'flat' pools all tags across facets; 'all' runs all four")
-    p.add_argument("--invert", action="store_true", default=True,
-                   help="Negate scores so positive = more abstract (default: True)")
-    p.add_argument("--no-invert", dest="invert", action="store_false")
+    p.add_argument("--invert", action=argparse.BooleanOptionalAction, default=True,
+                   help="Negate scores so positive = more abstract")
     p.add_argument("--min-count", type=int, default=5,
                    help="Min texts per tag to include (default: 5)")
     p.add_argument("--csv", default=None, help="Save results to CSV")

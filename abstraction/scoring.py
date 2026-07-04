@@ -816,10 +816,7 @@ def score_all_missing(
         score_cols = list(allnorms.columns)
 
         def _fetch(batch_ids):
-            return lltk_conn.query_df(  # lltk.db.adapter.client.query_df equivalent
-                f"SELECT _id, corpus, freqs FROM lltk.text_freqs FINAL "
-                f"WHERE _id IN ({','.join(repr(i) for i in batch_ids)})"
-            ) if False else lltk.db.read_freqs(ids=batch_ids, as_df=True)
+            return lltk.db.read_freqs(ids=batch_ids, as_df=True)
 
         def _score(freqs_df):
             if freqs_df is None or len(freqs_df) == 0:

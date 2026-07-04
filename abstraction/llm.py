@@ -4,10 +4,10 @@ LLM text generation with caching via litellm + hashstash.
 Requires optional dependencies: pip install abstraction[llm]
 """
 
-import json
 import os
 
 from .config import PATH_STASH
+from .utils import parse_json_str
 
 DEFAULT_MODEL = "gemini/gemini-2.5-pro"
 
@@ -75,11 +75,4 @@ def generate_json(user_prompt, model=DEFAULT_MODEL, system_prompt="", **options)
         user_prompt=user_prompt, model=model,
         system_prompt=system_prompt, **options,
     )
-    try:
-        response = response.split("```json", 1)[-1]
-        parts = response.split("```")
-        response = parts[1] if len(parts) > 1 and parts[1] else parts[0]
-        return json.loads(response.strip())
-    except Exception as e:
-        print(f"Error parsing JSON: {e}")
-        return None
+    return parse_json_str(response)

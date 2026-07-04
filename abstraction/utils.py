@@ -17,17 +17,17 @@ def zfy(series):
 
 
 def read_df(fn):
-    if ".feather" in fn or fn.endswith(".ft"):
+    if fn.endswith(".feather") or fn.endswith(".ft"):
         return pd.read_feather(fn)
-    elif ".csv" in fn:
-        return pd.read_csv(fn)
-    elif ".pkl" in fn:
+    elif fn.endswith(".pkl.gz") or fn.endswith(".pkl"):
         return pd.read_pickle(fn)
-    elif ".xls" in fn:
+    elif fn.endswith(".csv.gz") or fn.endswith(".csv"):
+        return pd.read_csv(fn)
+    elif fn.endswith(".xls") or fn.endswith(".xlsx"):
         return pd.read_excel(fn)
-    elif ".jsonl" in fn:
+    elif fn.endswith(".jsonl"):
         return pd.read_json(fn, lines=True)
-    elif ".json" in fn:
+    elif fn.endswith(".json"):
         return pd.read_json(fn)
     else:
         raise ValueError(f"Unknown file type: {fn}")
@@ -81,10 +81,11 @@ def download_tqdm(url, save_to):
     import requests
     r = requests.get(url, stream=True)
     total_size = int(r.headers.get("content-length", 0))
-    with open(save_to, "wb") as f:
-        for chunk in tqdm(r.iter_content(32 * 1024), total=total_size, unit="B", unit_scale=True):
+    with open(save_to, "wb") as f, tqdm(total=total_size, unit="B", unit_scale=True) as pbar:
+        for chunk in r.iter_content(32 * 1024):
             if chunk:
                 f.write(chunk)
+                pbar.update(len(chunk))
     return save_to
 
 
