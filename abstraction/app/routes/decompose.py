@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from ..db import get_connection
+from ..validation import validate_col
 
 router = APIRouter()
 
@@ -261,15 +262,18 @@ def shift_share(
     import numpy as np
     from ...analysis import assign_period_score
 
+    col = validate_col(col)
     conn = get_connection()
 
     is_arc = genre.startswith("arc_")
     filter_col = "arc_corpus" if is_arc else "genre"
 
     corpus_filter = ""
+    corpus_params: list = []
     if corpus and len(corpus) > 0:
-        cl = ", ".join(f"'{c}'" for c in corpus)
-        corpus_filter = f" AND corpus_name IN ({cl})"
+        placeholders = ",".join("?" for _ in corpus)
+        corpus_filter = f" AND corpus_name IN ({placeholders})"
+        corpus_params = list(corpus)
 
     translated_filter = ""
     if is_translated == "true":
@@ -288,11 +292,11 @@ def shift_share(
             SELECT _id, year, genre_raw, corpus_name, is_translated, n_words,
                    genre_enriched_source, author_norm, title, {col_sql}
             FROM texts
-            WHERE {filter_col} = '{genre}' AND year IS NOT NULL
+            WHERE {filter_col} = ? AND year IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
                 OR (year >= {year_late_min} AND year <= {year_late_max}))
               {corpus_filter}{translated_filter}
-        """).fetchdf()
+        """, [genre, *corpus_params]).fetchdf()
 
         if len(df) == 0:
             from fastapi import HTTPException
@@ -306,11 +310,11 @@ def shift_share(
             SELECT _id, year, genre_raw, corpus_name, is_translated, n_words,
                    genre_enriched_source, author_norm, title, "{col}" as _score
             FROM texts
-            WHERE {filter_col} = '{genre}' AND year IS NOT NULL AND "{col}" IS NOT NULL
+            WHERE {filter_col} = ? AND year IS NOT NULL AND "{col}" IS NOT NULL
               AND ((year >= {year_early_min} AND year <= {year_early_max})
                 OR (year >= {year_late_min} AND year <= {year_late_max}))
               {corpus_filter}{translated_filter}
-        """).fetchdf()
+        """, [genre, *corpus_params]).fetchdf()
 
     if len(df) == 0:
         from fastapi import HTTPException

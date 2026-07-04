@@ -28,9 +28,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Abstraction Explorer", lifespan=lifespan)
 
+# Default CORS origins: the SvelteKit frontend dev server (default port 1784,
+# see `abstraction app --frontend-port`) plus Vite's own dev/preview defaults
+# (5173/4173). Override with ABSTRACTION_CORS_ORIGINS=origin1,origin2 when
+# serving the frontend from elsewhere (e.g. another host on the LAN).
+_DEFAULT_CORS_ORIGINS = [
+    "http://localhost:1784",
+    "http://127.0.0.1:1784",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+_cors_env = os.environ.get("ABSTRACTION_CORS_ORIGINS", "")
+_cors_origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env.strip()
+    else _DEFAULT_CORS_ORIGINS
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

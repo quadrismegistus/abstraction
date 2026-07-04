@@ -138,6 +138,12 @@ def _raw_client(database: str = CH_DB):
         host=CH_HOST, port=CH_PORT,
         username=CH_USER, password=CH_PASSWORD,
         database=database,
+        # Bound how long a slow/heavy query can hold a FastAPI worker thread:
+        # client-side connect + send/receive timeouts, plus a server-side
+        # execution cap slightly below the receive timeout.
+        connect_timeout=10,
+        send_receive_timeout=120,
+        settings={"max_execution_time": 110},
     )
 
 

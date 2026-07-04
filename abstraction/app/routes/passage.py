@@ -6,10 +6,12 @@ from ...passages import render_passage_body, render_passage_html
 from ...scoring import get_norm_dict, _modernize_score
 from ...tokenize import tokenize_agnostic, get_spelling_modernizer
 from ..models import PassageResponse, ScoreRequest
+from ..validation import validate_col, validate_corpus_name, validate_text_id
 
 router = APIRouter()
 
 DEFAULT_COL = "Abs-Conc.Median.median"
+MAX_SCORE_TEXT_CHARS = 200_000
 
 
 def _resolve_col(col: str, period_matched: bool, year: float | None) -> str:
@@ -78,6 +80,10 @@ def get_passage(
     """Get a specific passage chunk with word-level scoring."""
     from .trajectory import _get_text_and_metadata, _chunk_text_simple, resolve_lang
 
+    corpus = validate_corpus_name(corpus)
+    text_id = validate_text_id(text_id)
+    col = validate_col(col)
+
     txt, _meta, lltk_text = _get_text_and_metadata(corpus, text_id)
     # Use text's year for period matching if not explicitly provided
     if period_matched and year is None and _meta:
@@ -117,5 +123,11 @@ def get_passage(
 @router.post("/score", response_model=PassageResponse)
 def score_arbitrary_text(req: ScoreRequest):
     """Score arbitrary user-provided text."""
+    if len(req.text) > MAX_SCORE_TEXT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Text too long (max {MAX_SCORE_TEXT_CHARS} characters)",
+        )
+    col = validate_col(req.col)
     lang = getattr(req, "lang", None) or "en"
-    return _score_text(req.text, req.col, lang=lang)
+    return _score_text(req.text, col, lang=lang)

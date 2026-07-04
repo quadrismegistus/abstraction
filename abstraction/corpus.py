@@ -26,6 +26,7 @@ class Corpus:
         self.id = _camel_to_snake(name)
         self.path = os.path.join(root, self.id)
         self._metadata = None
+        self._txt_base_real = None
 
     @property
     def metadata(self):
@@ -40,12 +41,32 @@ class Corpus:
                 raise FileNotFoundError(f"No metadata found at {self.path}")
         return self._metadata
 
+    def _txt_base(self):
+        """Resolved (symlink-free) path of this corpus's txt/ directory."""
+        if self._txt_base_real is None:
+            self._txt_base_real = os.path.realpath(os.path.join(self.path, "txt"))
+        return self._txt_base_real
+
     def text_path(self, text_id):
-        plain = os.path.join(self.path, "txt", f"{text_id}.txt")
-        gz = plain + ".gz"
-        if not os.path.exists(plain) and os.path.exists(gz):
-            return gz
-        return plain
+        """Path of a text file. text_ids may contain subdirectories
+        (e.g. 'Eighteenth-Century_Fiction/richards.01') but must resolve
+        inside the corpus txt/ directory; raises FileNotFoundError on any
+        id that escapes it (path traversal)."""
+        try:
+            plain = os.path.join(self.path, "txt", f"{text_id}.txt")
+            gz = plain + ".gz"
+            path = plain
+            if not os.path.exists(plain) and os.path.exists(gz):
+                path = gz
+            real = os.path.realpath(path)
+        except ValueError:
+            # e.g. embedded null byte
+            raise FileNotFoundError(f"Invalid text_id: {text_id!r}")
+        if not real.startswith(self._txt_base() + os.sep):
+            raise FileNotFoundError(
+                f"text_id {text_id!r} resolves outside corpus txt directory"
+            )
+        return path
 
     def text_paths(self):
         return [

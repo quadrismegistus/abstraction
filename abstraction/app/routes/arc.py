@@ -1,8 +1,9 @@
 """Arc endpoints: aggregated decade bins and paginated raw texts."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from ..db import get_connection, RAW_CORPORA
+from ..validation import validate_col
 from ..models import (
     ArcAggregated, ArcBin, ArcText, ArcTexts,
     CorpusArc, CorpusArcBin,
@@ -76,6 +77,7 @@ def arc_aggregated(
     dedup: str = "within_lang_group",
 ):
     """Return decade-binned summary statistics for the arc plot."""
+    col = validate_col(col)
     view, _ = _resolve_dedup(dedup)
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
@@ -123,6 +125,7 @@ def arc_by_corpus(
     dedup: str = "within_lang_group",
 ):
     """Return per-corpus decade-binned means for the macro arc plot."""
+    col = validate_col(col)
     view, _ = _resolve_dedup(dedup)
     where, params = _build_where(genre, corpus, year_min, year_max, col)
     conn = get_connection()
@@ -193,6 +196,7 @@ def arc_texts(
     import pandas as pd
     from ...analysis import assign_period_score, CENTURY_BINS
 
+    col = validate_col(col)
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
@@ -319,6 +323,7 @@ def arc_aggregate(
     from ...analysis import assign_period_score, CENTURY_BINS
     from ..models import AggGenreArc, AggBinPoint
 
+    col = validate_col(col)
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
@@ -332,9 +337,11 @@ def arc_aggregate(
     conn = get_connection()
 
     corpus_filter = ""
+    corpus_params: list = []
     if corpus and len(corpus) > 0:
-        cl = ", ".join(f"'{c}'" for c in corpus)
-        corpus_filter = f" AND corpus_name IN ({cl})"
+        placeholders = ",".join("?" for _ in corpus)
+        corpus_filter = f" AND corpus_name IN ({placeholders})"
+        corpus_params = list(corpus)
 
     # is_translated filter — CH stores as Nullable(UInt8) (0/1)
     translated_filter = ""
@@ -368,9 +375,9 @@ def arc_aggregate(
             df = conn.execute(f"""
                 SELECT year{extra_cols}, {col_sql}
                 FROM {view}
-                WHERE {filter_col} = '{g}' AND year IS NOT NULL
+                WHERE {filter_col} = ? AND year IS NOT NULL
                   AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
-            """).fetchdf()
+            """, [g, *corpus_params]).fetchdf()
 
             if len(df) < 30:
                 continue
@@ -382,9 +389,9 @@ def arc_aggregate(
             df = conn.execute(f"""
                 SELECT year{extra_cols}, "{col}" as _score
                 FROM {view}
-                WHERE {filter_col} = '{g}' AND year IS NOT NULL AND "{col}" IS NOT NULL
+                WHERE {filter_col} = ? AND year IS NOT NULL AND "{col}" IS NOT NULL
                   AND year >= {year_min} AND year <= {year_max}{corpus_filter}{translated_filter}
-            """).fetchdf()
+            """, [g, *corpus_params]).fetchdf()
 
             if len(df) < 30:
                 continue
@@ -535,6 +542,7 @@ def arc_by_genre(
     import pandas as pd
     from ...analysis import adjust_scores, assign_period_score
 
+    col = validate_col(col)
     col_parts = col.split(".")
     source = col_parts[1] if len(col_parts) >= 2 else "Median"
 
@@ -543,9 +551,11 @@ def arc_by_genre(
 
     # Build source corpus filter
     corpus_sql = ""
+    corpus_params: list = []
     if corpus and len(corpus) > 0:
-        corpus_list = ", ".join(f"'{c}'" for c in corpus)
-        corpus_sql = f" AND corpus_name IN ({corpus_list})"
+        placeholders = ",".join("?" for _ in corpus)
+        corpus_sql = f" AND corpus_name IN ({placeholders})"
+        corpus_params = list(corpus)
 
     # Build translation filter — CH stores as Nullable(UInt8) (0/1)
     translated_sql = ""
@@ -568,35 +578,35 @@ def arc_by_genre(
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, arc_corpus, {col_sql}
                     FROM {view}
-                    WHERE arc_corpus = '{g}'
+                    WHERE arc_corpus = ?
                       AND year IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
-                """).fetchdf()
+                """, [g, *corpus_params]).fetchdf()
             else:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, genre, {col_sql}
                     FROM {view}
-                    WHERE genre = '{g}'
+                    WHERE genre = ?
                       AND year IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
-                """).fetchdf()
+                """, [g, *corpus_params]).fetchdf()
         else:
             if is_arc:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, arc_corpus, "{col}"
                     FROM {view}
-                    WHERE arc_corpus = '{g}'
+                    WHERE arc_corpus = ?
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
-                """).fetchdf()
+                """, [g, *corpus_params]).fetchdf()
             else:
                 gdf = conn.execute(f"""
                     SELECT _id, corpus_name, year, genre, "{col}"
                     FROM {view}
-                    WHERE genre = '{g}'
+                    WHERE genre = ?
                       AND year IS NOT NULL AND "{col}" IS NOT NULL
                       AND year >= {year_min} AND year <= {year_max}{corpus_sql}{translated_sql}
-                """).fetchdf()
+                """, [g, *corpus_params]).fetchdf()
 
         if len(gdf) > 0:
             gdf["_genre_label"] = g
@@ -702,17 +712,30 @@ def arc_by_genre(
     return results
 
 
+MAX_PRINT_ARCS = 400
+MAX_PRINT_POINTS = 500_000
+
+
 @router.post("/print")
 def arc_print(arcs: list[GenreArc]):
     """Render a print-quality PNG from the same data the frontend displays."""
     import os
+    import tempfile
     import matplotlib
     matplotlib.use("Agg")
     import plotnine as p9
     import pandas as pd
     import numpy as np
     from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
     from ...config import PATH_DATA
+
+    # Bound the accepted payload: this endpoint renders whatever it is sent.
+    if len(arcs) > MAX_PRINT_ARCS:
+        raise HTTPException(400, f"Too many arcs (max {MAX_PRINT_ARCS})")
+    n_points = sum(len(a.points) + len(a.loess_aggregate) for a in arcs)
+    if n_points > MAX_PRINT_POINTS:
+        raise HTTPException(400, f"Too many points (max {MAX_PRINT_POINTS})")
 
     genre_labels = {
         "arc_fiction": "Fiction", 
@@ -755,7 +778,6 @@ def arc_print(arcs: list[GenreArc]):
             })
 
     if not all_points:
-        from fastapi import HTTPException
         raise HTTPException(404, "No data")
 
     agg_df = pd.DataFrame(all_points)
@@ -817,12 +839,34 @@ def arc_print(arcs: list[GenreArc]):
         + fill_scale
     )
 
-    fig_dir = os.path.join(PATH_DATA, "figures")
-    os.makedirs(fig_dir, exist_ok=True)
-    out_path = os.path.join(fig_dir, "arc_print.png")
-    fig.save(out_path, dpi=300)
+    # Render to a unique temp file (concurrent requests must not share a
+    # path) and delete it after the response is sent. Prefer the figures
+    # dir; fall back to the system temp dir if it isn't writable.
+    def _mkstemp():
+        try:
+            fig_dir = os.path.join(PATH_DATA, "figures")
+            os.makedirs(fig_dir, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix="arc_print_", suffix=".png", dir=fig_dir)
+        except OSError:
+            fd, path = tempfile.mkstemp(prefix="arc_print_", suffix=".png")
+        os.close(fd)
+        return path
 
-    return FileResponse(out_path, media_type="image/png")
+    out_path = _mkstemp()
+    try:
+        fig.save(out_path, dpi=300)
+    except Exception:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        raise
+
+    return FileResponse(
+        out_path,
+        media_type="image/png",
+        background=BackgroundTask(os.remove, out_path),
+    )
 
 
 def _compute_arc_stats(adj, sign, loess_points):

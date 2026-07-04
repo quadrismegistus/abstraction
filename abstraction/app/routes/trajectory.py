@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from ...config import PATH_DATA
 from ...scoring import score_freqs, score_psg
 from ..models import TrajectoryChunk, TrajectoryResponse
+from ..validation import validate_col, validate_corpus_name, validate_text_id
 
 router = APIRouter()
 
@@ -167,11 +168,16 @@ def _get_text_and_metadata(corpus_name: str, text_id: str):
             except FileNotFoundError:
                 continue
 
-        # Last resort: glob search
+        # Last resort: glob search (containment-checked: every candidate
+        # must resolve inside the corpus txt/ directory)
         if not txt:
             txt_dir = os.path.join(corpus.path, "txt")
+            base = os.path.realpath(txt_dir)
             pattern = os.path.join(txt_dir, f"*{text_id}*")
-            matches = glob.glob(pattern)
+            matches = [
+                m for m in glob.glob(pattern)
+                if os.path.realpath(m).startswith(base + os.sep)
+            ]
             if matches:
                 with open(matches[0], encoding="utf-8", errors="ignore") as f:
                     txt = f.read()
@@ -215,6 +221,9 @@ def get_trajectory(
     lang: str | None = None,
 ):
     """Compute abstractness trajectory for a single text."""
+    corpus = validate_corpus_name(corpus)
+    text_id = validate_text_id(text_id)
+    col = validate_col(col)
 
     def _cp_for(resolved: str) -> str:
         key = col if not period_matched else col + "_pm"
