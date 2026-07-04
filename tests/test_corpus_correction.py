@@ -92,25 +92,49 @@ class TestEstimateCorpusBias:
                                        min_group_overlap=5)
         assert result["coefficients"]["ref"] == 0.0
 
-    def test_positive_bias_detected(self):
-        """biased_high should have positive coefficient (direction correct)."""
+    def test_positive_bias_recovered_exactly(self):
+        """The within-estimator recovers the true bias on noise-free data.
+
+        The synthetic biases are exactly additive (no per-observation noise),
+        so the fixed-effects fit should recover them near-exactly. This is
+        the regression test for the y-demeaned-but-X-raw estimator bug,
+        which attenuated coefficients by ~(k-1)/k (audit 2026-07-04 §1.2).
+        """
         df = self._make_match_data()
         result = estimate_corpus_bias(df, reference_corpus="ref",
                                        min_group_overlap=5)
         coef = result["coefficients"]["biased_high"]
-        # Within-group demeaning attenuates estimates with unbalanced panels,
-        # but direction and rough magnitude should hold
-        assert coef > 0.04
-        assert coef < 0.15
+        assert abs(coef - 0.1) < 1e-8
 
-    def test_negative_bias_detected(self):
-        """biased_low should have negative coefficient (direction correct)."""
+    def test_negative_bias_recovered_exactly(self):
+        """biased_low's true -0.05 bias is recovered near-exactly."""
         df = self._make_match_data()
         result = estimate_corpus_bias(df, reference_corpus="ref",
                                        min_group_overlap=5)
         coef = result["coefficients"]["biased_low"]
-        assert coef < -0.02
-        assert coef > -0.10
+        assert abs(coef - (-0.05)) < 1e-8
+
+    def test_disconnected_corpora_get_no_coefficient(self):
+        """Corpora with no comparison path to the reference are reported
+        as uncalibrated and excluded from coefficients (no arbitrary values)."""
+        df = self._make_match_data()
+        rng = np.random.RandomState(7)
+        extra = []
+        for g in range(100, 112):
+            base = rng.normal(0.3, 0.1)
+            extra.append({"group_id": g, "corpus": "island_a", "score": base,
+                          "path_freqs": f"ia/{g}.json"})
+            extra.append({"group_id": g, "corpus": "island_b", "score": base + 0.2,
+                          "path_freqs": f"ib/{g}.json"})
+        df = pd.concat([df, pd.DataFrame(extra)], ignore_index=True)
+        result = estimate_corpus_bias(df, reference_corpus="ref",
+                                       min_group_overlap=5)
+        assert "island_a" in result["uncalibrated"]
+        assert "island_b" in result["uncalibrated"]
+        assert "island_a" not in result["coefficients"]
+        assert "island_b" not in result["coefficients"]
+        # And the connected component's estimates are unaffected
+        assert abs(result["coefficients"]["biased_high"] - 0.1) < 1e-8
 
     def test_standard_errors_positive(self):
         df = self._make_match_data()

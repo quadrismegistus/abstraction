@@ -6,7 +6,8 @@ Different corpora have systematic score biases from transcription quality
 This module estimates those biases from texts that appear in multiple
 corpora via LLTK's match groups — the same work, different transcriptions.
 
-Method: within-group demeaning + OLS on corpus dummies.
+Method: fixed-effects (within) estimator — demean scores AND corpus dummies
+within match groups, then OLS. Equivalent to score ~ C(group) + C(corpus).
 """
 
 import json
@@ -141,10 +142,20 @@ def estimate_corpus_bias(
         if comp is not ref_component:
             uncalibrated.extend(sorted(comp))
 
+    # Restrict to the reference-connected component: corpora in other
+    # components have no comparison path to the reference, so any
+    # coefficient for them would be arbitrary (they are reported in
+    # `uncalibrated` and get no correction downstream).
+    df = df[df["corpus"].isin(ref_component)]
+
     # Mean score per (group, corpus) — average if multiple freqs per corpus per group
     gm = df.groupby(["group_id", "corpus"])["score"].mean().reset_index()
 
-    # Within-group demeaning
+    # Fixed-effects (within) estimator: demean BOTH the scores and the
+    # corpus dummies within match groups. By Frisch-Waugh-Lovell this is
+    # equivalent to OLS of score on corpus dummies + group fixed effects.
+    # Demeaning y alone (against raw dummies) attenuates coefficients
+    # toward zero by ~(k-1)/k for groups of size k.
     group_means = gm.groupby("group_id")["score"].transform("mean")
     gm["demeaned"] = gm["score"] - group_means
 
@@ -157,30 +168,36 @@ def estimate_corpus_bias(
         if c in corpus_to_idx:
             X[i, corpus_to_idx[c]] = 1.0
 
+    # Demean the dummy columns within groups too
+    X_df = pd.DataFrame(X, index=gm["group_id"].values)
+    X = (X_df - X_df.groupby(level=0).transform("mean")).values
+
     y = gm["demeaned"].values
 
     # OLS: y = X @ beta + eps
     beta, residuals, rank, sv = np.linalg.lstsq(X, y, rcond=None)
 
-    # Standard errors
+    # Standard errors (dof accounts for the absorbed group means)
     n, p = X.shape
+    n_groups_total = gm["group_id"].nunique()
     resid = y - X @ beta
-    mse = (resid ** 2).sum() / max(n - p, 1)
+    mse = (resid ** 2).sum() / max(n - n_groups_total - p, 1)
     try:
         XtX_inv = np.linalg.inv(X.T @ X)
     except np.linalg.LinAlgError:
         XtX_inv = np.linalg.pinv(X.T @ X)
     se = np.sqrt(np.diag(XtX_inv) * mse)
 
-    # Build result
+    # Build result (group counts from the data actually used in the fit)
+    final_group_counts = gm.groupby("corpus")["group_id"].nunique()
     coefficients = {reference_corpus: 0.0}
     se_dict = {reference_corpus: 0.0}
-    n_groups = {reference_corpus: int(corpus_group_counts.get(reference_corpus, 0))}
+    n_groups = {reference_corpus: int(final_group_counts.get(reference_corpus, 0))}
 
     for c, b, s in zip(corpora, beta, se):
         coefficients[c] = float(b)
         se_dict[c] = float(s)
-        n_groups[c] = int(corpus_group_counts.get(c, 0))
+        n_groups[c] = int(final_group_counts.get(c, 0))
 
     result = {
         "coefficients": coefficients,
