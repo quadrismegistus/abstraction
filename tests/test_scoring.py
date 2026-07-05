@@ -27,6 +27,7 @@ from abstraction.scoring import (
     _check_resume_header,
     get_norm_dict,
     score_corpus_freqs,
+    count_corpus_freqs,
 )
 from tests.conftest import make_fake_allnorms as _make_fake_allnorms
 
@@ -752,3 +753,168 @@ class TestGetNormDictFallback:
         self._patch_lang_loader(monkeypatch)
         with pytest.raises(KeyError):
             get_norm_dict("No.Such.Column", lang="en")
+
+
+# ---------------------------------------------------------------------------
+# _biny (audit backlog #1: NaN years must not bin as pre-1500)
+# ---------------------------------------------------------------------------
+
+
+class TestBiny:
+    def test_nan_returns_nan(self):
+        assert np.isnan(scoring._biny(np.nan))
+
+    def test_python_float_nan_returns_nan(self):
+        assert np.isnan(scoring._biny(float("nan")))
+
+    def test_below_miny_bins_to_offy(self):
+        # Real (non-NaN) undated-adjacent years still fall through to offy.
+        assert scoring._biny(1450) == 1400
+
+    def test_at_miny(self):
+        assert scoring._biny(1500) == 1500
+
+    def test_mid_bin(self):
+        assert scoring._biny(1750) == 1700
+
+    def test_custom_offy_still_used_for_real_early_years(self):
+        assert scoring._biny(1200, offy=999) == 999
+
+    def test_series_apply_matches_get_all_passages_usage(self):
+        """Mirrors the `df["year"].apply(_biny)` line inside get_all_passages:
+        undated (NaN) texts must come out NaN, not lumped into the 1400 bin
+        with genuinely early texts."""
+        years = pd.Series([1450.0, np.nan, 1750.0, np.nan])
+        ybins = years.apply(scoring._biny)
+        assert ybins.iloc[0] == 1400
+        assert pd.isna(ybins.iloc[1])
+        assert ybins.iloc[2] == 1700
+        assert pd.isna(ybins.iloc[3])
+        # Undated texts must not silently join the pre-1500 bin.
+        assert (ybins[years.isna()] == 1400).sum() == 0
+
+
+# ---------------------------------------------------------------------------
+# save_bookpassages (audit backlog #2: index labels used as positions)
+# ---------------------------------------------------------------------------
+
+
+class TestSaveBookpassages:
+    def test_sorted_noncontiguous_index_all_rows_land_in_stacks(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(scoring, "PSGS_DIR", str(tmp_path))
+        n = 7
+        df = pd.DataFrame({
+            "passage": [f"passage number {i}" for i in range(n)],
+            "num_abs": [1] * n,
+            "num_conc": [0] * n,
+        })
+        # Simulate the output of a sort/filter (e.g. count_absconc_psg, which
+        # sorts): a non-contiguous, non-monotonic index whose last label is
+        # nowhere near len(df) - 1.
+        df.index = [40, 3, 21, 0, 99, 7, 12]
+        scoring.save_bookpassages(df, "mybook", stacklen=3)
+        odir = tmp_path / "psgs_mybook"
+        files = sorted(odir.glob("*.md"))
+        # 7 passages at stacklen 3 -> stacks of (3, 3, 1); the final partial
+        # stack must be flushed, not dropped.
+        assert len(files) == 3
+        contents = "\n".join(f.read_text() for f in files)
+        for i in range(n):
+            assert f"passage number {i}" in contents
+
+    def test_no_spurious_empty_file_on_exact_multiple(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(scoring, "PSGS_DIR", str(tmp_path))
+        n = 4
+        df = pd.DataFrame({
+            "passage": [f"psg {i}" for i in range(n)],
+            "num_abs": [1] * n,
+            "num_conc": [0] * n,
+        })
+        df.index = [9, 4, 1, 6]
+        scoring.save_bookpassages(df, "exactbook", stacklen=2)
+        odir = tmp_path / "psgs_exactbook"
+        files = sorted(odir.glob("*.md"))
+        assert len(files) == 2
+
+    def test_single_row_index_label_not_zero(self, tmp_path, monkeypatch):
+        """A single-row df whose index label isn't 0 used to be silently
+        dropped: `i == len(df) - 1` (i.e. `label == 0`) never matched."""
+        monkeypatch.setattr(scoring, "PSGS_DIR", str(tmp_path))
+        df = pd.DataFrame({"passage": ["only passage"], "num_abs": [1], "num_conc": [0]})
+        df.index = [77]
+        scoring.save_bookpassages(df, "onebook", stacklen=100)
+        odir = tmp_path / "psgs_onebook"
+        files = sorted(odir.glob("*.md"))
+        assert len(files) == 1
+        assert "only passage" in files[0].read_text()
+
+
+# ---------------------------------------------------------------------------
+# count_corpus_freqs needs_update (audit backlog #3: O(n^2) set rebuild +
+# dead `needs_update is not None` check)
+# ---------------------------------------------------------------------------
+
+
+class TestCountCorpusFreqsNeedsUpdate:
+    def _setup_corpus(self, tmp_path):
+        corpus = tmp_path / "corpus"
+        freqs = corpus / "freqs"
+        freqs.mkdir(parents=True)
+        _write_json(str(freqs / "text1.json"), {"rock": 2, "virtue": 3})
+        _write_json(str(freqs / "text2.json"), {"face": 4})
+        return str(corpus)
+
+    def test_merges_new_norm_column_into_existing_records(self, tmp_path):
+        corpus_dir = self._setup_corpus(tmp_path)
+        out = str(tmp_path / "counts.jsonl")
+        allnorms_full = _make_fake_allnorms()
+        allnorms_v1 = allnorms_full[["Abs-Conc.Median.median"]]
+
+        count_corpus_freqs(corpus_dir, allnorms=allnorms_v1, output_path=out)
+        recs_v1 = [json.loads(line) for line in open(out)]
+        assert {r["id"] for r in recs_v1} == {"text1", "text2"}
+        for r in recs_v1:
+            assert "Abs-Conc.Median.orig" not in r
+
+        # Re-run requesting an ADDITIONAL norm column: existing records are
+        # incomplete relative to what's requested, so this must trigger a
+        # merge (rewrite) rather than being treated as already-done.
+        result = count_corpus_freqs(corpus_dir, allnorms=allnorms_full, output_path=out)
+        recs_v2 = [json.loads(line) for line in open(out)]
+        ids_v2 = [r["id"] for r in recs_v2]
+        assert set(ids_v2) == {"text1", "text2"}
+        assert len(ids_v2) == len(set(ids_v2))  # no duplicate rows after rewrite
+        for r in recs_v2:
+            assert "Abs-Conc.Median.median" in r
+            assert "Abs-Conc.Median.orig" in r
+        assert {r["id"] for r in result} == {"text1", "text2"}
+
+    def test_stale_existing_record_without_freqs_file_survives_rewrite(self, tmp_path):
+        """A record for an id with no corresponding freqs/*.json this run
+        (e.g. its file was deleted) can never be re-touched by the walk, but
+        must still be carried through unchanged when a rewrite is triggered
+        by *other* incomplete records."""
+        corpus_dir = self._setup_corpus(tmp_path)
+        out = tmp_path / "counts.jsonl"
+        ghost_rec = {"id": "ghost", "Abs-Conc.Median.median": {"1.0": 5}}
+        out.write_text(json.dumps(ghost_rec) + "\n")
+
+        allnorms_full = _make_fake_allnorms()  # 2 columns; ghost only has 1
+        count_corpus_freqs(corpus_dir, allnorms=allnorms_full, output_path=str(out))
+        recs = [json.loads(line) for line in open(out)]
+        by_id = {r["id"]: r for r in recs}
+        assert set(by_id) == {"ghost", "text1", "text2"}
+        assert by_id["ghost"] == ghost_rec  # untouched, carried through as-is
+
+    def test_no_rewrite_needed_when_fully_done(self, tmp_path):
+        """Second run with identical norms: nothing to merge, existing rows
+        preserved exactly, no duplicates appended."""
+        corpus_dir = self._setup_corpus(tmp_path)
+        out = str(tmp_path / "counts.jsonl")
+        allnorms = _make_fake_allnorms()
+        count_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out)
+        first = sorted((json.loads(line) for line in open(out)), key=lambda r: r["id"])
+        count_corpus_freqs(corpus_dir, allnorms=allnorms, output_path=out)
+        second = sorted((json.loads(line) for line in open(out)), key=lambda r: r["id"])
+        assert first == second
+        assert len(second) == 2

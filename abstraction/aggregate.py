@@ -68,18 +68,30 @@ def _resolve_score_cols(ch, table: str, score_cols) -> list[str]:
     return score_cols
 
 
-def _insert_temp_reps(ch, rep_ids: list[str]) -> str:
-    """Create a short-lived Memory table of rep _ids and return its fully-qualified name.
+def _new_temp_reps_name() -> str:
+    """Generate a fully-qualified name for a short-lived Memory table of rep _ids.
 
-    Memory tables are session-local to the CH server (not thread-local on client) so
-    we include a unique suffix per call to avoid collision across concurrent workers.
+    Split out from the create+insert step (below) so the caller can hold the
+    name — and therefore always clean up via `_drop_table` in a `finally` —
+    even if table creation or insertion fails partway through (audit backlog
+    #5: previously the name was only returned *after* a successful insert, so
+    an insert failure after a successful CREATE TABLE leaked the table since
+    the caller's `try/finally` hadn't started yet).
     """
     import uuid
-    name = f"abstraction._arc_reps_{uuid.uuid4().hex[:12]}"
-    ch.command(f"CREATE TABLE {name} (`_id` String) ENGINE = Memory")
-    ch.insert(name.split(".", 1)[1], [[rid] for rid in rep_ids],
+    return f"abstraction._arc_reps_{uuid.uuid4().hex[:12]}"
+
+
+def _create_temp_reps(ch, fq_name: str, rep_ids: list[str]) -> None:
+    """Create and populate the Memory table at `fq_name` with rep _ids.
+
+    Memory tables are session-local to the CH server (not thread-local on client) so
+    callers use a unique suffix per call (`_new_temp_reps_name`) to avoid collision
+    across concurrent workers.
+    """
+    ch.command(f"CREATE TABLE {fq_name} (`_id` String) ENGINE = Memory")
+    ch.insert(fq_name.split(".", 1)[1], [[rid] for rid in rep_ids],
               column_names=["_id"], database="abstraction")
-    return name
 
 
 def _drop_table(ch, fq_name: str):
@@ -87,6 +99,26 @@ def _drop_table(ch, fq_name: str):
         ch.command(f"DROP TABLE IF EXISTS {fq_name}")
     except Exception:
         pass
+
+
+def _report_rep_coverage(rep_ids: list[str], df: pd.DataFrame) -> None:
+    """Print an accounting line when the INNER JOIN drops requested reps.
+
+    `get_arc_scores` joins the requested reps against the scores table (and,
+    for within_lang_group, against match_groups too); a rep with no scored
+    group member simply vanishes from the result — no error, no row (audit
+    backlog #6). We don't change that join semantics (a rep_only pass over
+    unscored texts is a legitimate, common case), just surface the count so
+    callers can notice silent drops.
+    """
+    n_requested = len(rep_ids)
+    n_returned = df["_id"].nunique() if len(df) else 0
+    if n_returned != n_requested:
+        print(
+            f"  get_arc_scores: {n_requested} reps requested, {n_returned} "
+            f"returned ({n_requested - n_returned} dropped by INNER JOIN — "
+            "no scored group members)"
+        )
 
 
 def get_arc_scores(
@@ -134,8 +166,10 @@ def get_arc_scores(
 
     score_cols = _resolve_score_cols(ch, table, score_cols)
 
-    reps_table = _insert_temp_reps(ch, rep_ids)
+    reps_table = _new_temp_reps_name()
     try:
+        _create_temp_reps(ch, reps_table, rep_ids)
+
         if dedup == "rep_only":
             cols_sql = ", ".join(f"s.{_backtick(c)} AS {_backtick(c)}" for c in score_cols)
             df = ch.query_df(f"""
@@ -143,6 +177,7 @@ def get_arc_scores(
                 FROM {fq_table} s
                 INNER JOIN {reps_table} r ON s._id = r._id
             """)
+            _report_rep_coverage(rep_ids, df)
             return df
 
         if dedup != "within_lang_group":
@@ -181,6 +216,7 @@ def get_arc_scores(
             INNER JOIN {fq_table} s ON m.member_id = s._id
             GROUP BY m.rep_id
         """)
+        _report_rep_coverage(rep_ids, df)
         return df
     finally:
         _drop_table(ch, reps_table)
@@ -210,13 +246,20 @@ def get_corpus_scores(
     try:
         score_cols = _resolve_score_cols(ch, table, score_cols)
         cols_sql = ", ".join(f"s.{_backtick(c)}" for c in score_cols)
+        # startsWith, not LIKE: `_id` values look like `_{corpus}/{textid}`
+        # (a literal leading underscore), and LIKE's `_` is a single-char
+        # wildcard — `LIKE '_{corpus}/%'` would also match any other single
+        # leading character, and any `_` inside `corpus` (e.g. "ecco_tcp",
+        # "eebo_tcp") would match any character there too, since corpus
+        # names aren't LIKE-escaped (audit backlog #4). startsWith does a
+        # literal prefix match, no escaping needed.
         df = ch.query_df(f"""
             SELECT s._id AS _id, {cols_sql}
             FROM {fq_table} s
             INNER JOIN (SELECT _id, lang FROM lltk.texts FINAL) t ON s._id = t._id
-            WHERE s._id LIKE %(prefix)s
+            WHERE startsWith(s._id, %(prefix)s)
               AND (t.lang IS NULL OR t.lang = %(lang)s)
-        """, parameters={"prefix": f"_{corpus}/%", "lang": lang})
+        """, parameters={"prefix": f"_{corpus}/", "lang": lang})
         return df
     finally:
         if owns_client:

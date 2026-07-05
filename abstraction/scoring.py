@@ -346,6 +346,15 @@ def _binz(z, zcut=1):
 
 
 def _biny(y, by=100, miny=1500, offy=1400):
+    """Bin a year into a period-start bucket.
+
+    NaN input (undated texts) returns NaN rather than falling through the
+    ``y >= miny`` comparison (always False for NaN) into the ``offy``
+    branch, which used to silently mislabel undated texts as pre-1500
+    (audit backlog #1).
+    """
+    if pd.isna(y):
+        return np.nan
     return y // by * by if y >= miny else offy
 
 
@@ -360,6 +369,9 @@ def get_all_passages(corpus_name="CanonFiction"):
     id2year = dict(zip(meta["id"], meta["year"]))
     df["year"] = df["id"].map(id2year)
     df["ybin"] = df["year"].apply(_biny)
+    n_undated = df["ybin"].isna().sum()
+    if n_undated:
+        print(f"  {n_undated} undated texts (no year) excluded from year bins")
     return df
 
 
@@ -400,24 +412,39 @@ def gen_bookpassages(corpus_name, text_id, sources=None, periods=None, save=Fals
 
 
 def save_bookpassages(df, fname, stacklen=100):
-    """Save passages as markdown files for reading/annotation."""
+    """Save passages as markdown files for reading/annotation.
+
+    Iterates positionally via ``enumerate`` rather than comparing the
+    DataFrame's index label to ``len(df) - 1`` — on a sorted/filtered df
+    (e.g. the output of ``count_absconc_psg``, which sorts) the index label
+    of the last row is rarely ``len(df) - 1``, so that comparison used to
+    drop the final partial stack (never flushed) or flush early on some
+    unrelated row whose label happened to match (audit backlog #2). Any
+    remaining units are flushed unconditionally after the loop instead.
+    """
     odir = os.path.join(PSGS_DIR, f"psgs_{fname}")
     os.makedirs(odir, exist_ok=True)
     units = []
     done = 0
-    for i, row in df.iterrows():
-        psg = row["passage"].replace("\\\\", "\n").strip()
+
+    def _flush():
+        nonlocal done
+        done += 1
+        ofn = os.path.join(odir, f"psgs_{fname}_{str(done).zfill(4)}.md")
+        with open(ofn, "w") as f:
+            f.write("\n\n".join(units))
+        units.clear()
+
+    for _i, row in enumerate(df.itertuples()):
+        psg = row.passage.replace("\\\\", "\n").strip()
         while "\n\n" in psg:
             psg = psg.replace("\n\n", "\n")
         psg = psg.replace("\n", "\n>\t")
-        abs_conc = row["num_abs"] - row["num_conc"]
         units.append(f"\n\n\n> {psg}\n")
-        if len(units) >= stacklen or i == len(df) - 1:
-            done += 1
-            ofn = os.path.join(odir, f"psgs_{fname}_{str(done).zfill(4)}.md")
-            with open(ofn, "w") as f:
-                f.write("\n\n".join(units))
-            units = []
+        if len(units) >= stacklen:
+            _flush()
+    if units:
+        _flush()
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +658,13 @@ def score_ids_ch(ids, allnorms, shard_size=5000, verbose=False):
     40M matched rows against 9.6M allnorms took 70s; the numpy per-text
     fancy-index + nansum approach took 48s. Similar throughput at smaller
     batches, better for big ones. No explode to long format.
+
+    Precision note: accumulates in float32 (`an_vals`/`vals_0nan`/
+    `val_mask_f` above), unlike `score_ids_duckdb`'s float64 path (validated
+    to ~1e-14 against the legacy JSON-walking scorer). This CH path agrees
+    with that float64 path to only ~1e-7 — plenty for the z-scored/binned
+    downstream uses, but not bit-for-bit identical, so don't diff raw scores
+    across the two paths expecting exact equality.
     """
     import sys
     sys.path.insert(0, os.path.expanduser("~/github/lltk"))
@@ -708,7 +742,9 @@ def score_ids_duckdb(
     (e.g. group dedup, within-language averaging) when needed.
 
     Validated against the JSON-walking pipeline to floating-point equality
-    (max diff ~1e-14 across 13K French texts).
+    (max diff ~1e-14 across 13K French texts) — this is the float64 path.
+    `score_ids_ch`, the live scorer, accumulates in float32 and agrees with
+    this path to only ~1e-7 (see its docstring).
 
     Parameters
     ----------
@@ -1621,11 +1657,17 @@ def count_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
         if fh:
             fh.close()
 
-    # If we had to update existing records, rewrite the whole file
-    if needs_update is not None and any(
-        tid not in done_ids and tid not in {r["id"] for r in new_records}
+    # If we had to update existing records, rewrite the whole file.
+    # (`needs_update is not None` was always true — it's a dict, never None —
+    # and the set comprehension below used to get rebuilt on every iteration
+    # of the `any(...)` generator, i.e. O(n_existing x n_new); hoist it once.)
+    new_record_ids = {r["id"] for r in new_records}
+    some_existing_unaccounted = any(
+        tid not in done_ids and tid not in new_record_ids
         for tid in existing
-    ) or any(r["id"] in existing for r in new_records):
+    )
+    some_new_overwrites_existing = any(r["id"] in existing for r in new_records)
+    if some_existing_unaccounted or some_new_overwrites_existing:
         if output_path and new_records:
             # Rebuild: existing (unchanged) + updated/new
             final = {}
