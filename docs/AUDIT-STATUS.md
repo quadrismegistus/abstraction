@@ -37,13 +37,17 @@ All three coefficient files regenerated with the corrected FE estimator (disk fr
 Fixed: report_full decade mislabeling; per_feature_r2 centering; norm_period median-fallback labeling (+`period_score_source` column); DE Schmidtke single-population z-scoring (**changes 18/6,682 DE words, 7 flip classification — regenerate `get_orignorms_de(force=True)` → `get_allnorms_de(force=True)` when convenient; vecnorm retraining not warranted**); FR/DE/ES stopword case-handling (zero effect on current stored data — forward-looking); lossless passage rendering (`:"()` survive; scoring byte-identical); seeded plot_norms; ±1.0 boundary inclusive + legend generated from `_word_style`; pct_abstract boundary-bin fold-in; report_arc corpus-balanced magnitudes; post-selection caveat lines.
 **Still open — §2.10**: CH/DuckDB scorers omit the `_pct_abs/_pct_conc` frequency-proportion columns the legacy path computed; adding them means a CH schema migration for `scores_{en,fr,de,es}` (new columns + re-score or backfill).
 
-### 5. Remaining audit backlog
-- §5 bugs still unfixed: `pmap` pickling crash (`train-skipgrams --workers N`, `counting.py incl_psg` path), `gen-vecnorms --workers` silent no-op, `words.py` NaN/cosine issues, `_biny` NaN→1400 binning, `save_bookpassages` index-as-position, gzip-as-text counting (`counting.py:126-131`), `aggregate.py:219` LIKE `_` wildcard.
-- New (found 2026-07-05 during fixes): `adjust_scores` does not forward its `search_range`/`search_step` args to the internal `fit_piecewise` call (analysis.py) — callers passing a custom range silently get the default (1650, 1850).
-- §10 structure: `analysis.py` split proposal (arcfit/reports/loading_legacy/embeddings); consolidate the 4 numpy scorer copies in scoring.py; delete confirmed-dead functions (inventory in audit §10); one `ruff` pass for unused imports.
-- §11 performance: push app aggregation into CH `GROUP BY`; fix `list_corpora` N+1; frontend texts-page pagination.
-- Legacy `ESTCCounts*`/`ESTCMatch` notebooks import a `book_history` module that no longer exists (flagged in README) — port or archive.
-- `llm.py` was removed 2026-07-05 (commit `c97eb17`, zero callers; LLM work lives in largeliterarymodels). §9 README refresh done (`d17c8ce`).
+### 5. ~~Backlog round (§5/§10/§11 leftovers)~~ DONE 2026-07-05 (commits `89b5a35`..`94ccc3a`)
+Fixed: gzip-as-text counting; both `--workers` pickling crashes (module-level workers); `gen-vecnorms --workers` parallelized for real; `periodize` (crashed <1000 AND silently read the wrong digit for 3-digit years); `pmap` input-order results; `_biny` NaN years; `save_bookpassages` partial-stack drop; `aggregate` LIKE `_` wildcard (matched inside names like `ecco_tcp`) → `startsWith`; Memory temp-table leak; INNER-JOIN rep accounting (live: 42/86,469 arc reps have no scored group members); `words.py` cosine centered (an anti-correlated word previously scored +0.97), NaN-poisoned z-scores, `freq_change_pct` NaN for absent-early words, duplicate-index crashes; `adjust_scores`/`report_arc` now accept AND forward `search_range`/`search_step`; dead `report_piecewise`/`pct_in_range`/`RawCorpusInfo` deleted; ratio/star helpers consolidated (isfinite-guarded); dead app endpoints (`/arc/aggregated`, `/arc/by-corpus`) removed; `list_corpora` N+1 → one GROUP BY (output verified identical); frontend: API base centralized + env-overridable, adapter-static, real texts-page pagination, keyboard/ARIA on clickable rows; package-wide pyflakes clean; CI installs `[analysis]` extra.
+
+### 6. Remaining (optional tier)
+- **§2.10**: CH/DuckDB scorers omit `_pct_abs/_pct_conc` columns — needs a CH schema migration for `scores_{en,fr,de,es}` + backfill decision.
+- **DE norms regeneration** (Schmidtke fix): `get_orignorms_de(force=True)` → `get_allnorms_de(force=True)` — cheap, changes 18 words; then optionally re-score DE.
+- **`analysis.py` file split** (arcfit/reports/loading_legacy/embeddings) — deferred for notebook import compatibility; if done, keep re-exports in `analysis.py`.
+- **Consolidate the 4 numpy scorer copies** in scoring.py (audit §10) — the audit's §4 cache-keying fix removed the sharpest risk; remaining value is maintainability.
+- Legacy notebooks importing vanished modules: `ESTCCounts*`/`ESTCMatch` (`book_history`), `LLMPsgs2-Analyze-Pamela` (`abstraction.llm`, removed `c97eb17`) — port or archive.
+- Possible dead-weight functions kept only because `__init__.py` re-exports them (no other callers): `fit_arc_corpus`, `fit_arc_by_genre`, `display_passage`, `aggregate_freqs_by_decade`, `load_aggregate_freqs`.
+- Frontend pre-existing `npm run check` errors (14, all in untouched code: plotly typings, route param strictness).
 
 ## Operational notes (things not obvious from the code)
 
