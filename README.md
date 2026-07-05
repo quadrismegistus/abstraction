@@ -237,11 +237,6 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-For LLM features (text generation with caching):
-```bash
-pip install -e ".[llm]"
-```
-
 For passage image export:
 ```bash
 pip install playwright
@@ -307,7 +302,6 @@ data/
 | `words.py` | Word-trend analysis: frequency correlation, contribution decomposition, score shifts |
 | `passages.py` | Per-word HTML/PNG passage visualization for print |
 | `plotting.py` | plotnine-based visualization (norm plots, arc plots, LOESS) |
-| `llm.py` | LLM text generation with litellm + hashstash caching |
 | `app/` | FastAPI backend: `db.py` (ClickHouse client + `init_db()` + `CHConn` compat shim), `validation.py` (SQL/path param checks), `routes/{arc,decompose,meta,passage,trajectory}.py`; paired with the `frontend/` SvelteKit UI, served via `abstraction app` |
 | `cli.py` | CLI entrypoint (20 subcommands — see CLI section below) |
 | `utils.py` | DataFrame I/O, streaming CSV writer, z-scoring, HTML cleaning |

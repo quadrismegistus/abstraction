@@ -14,10 +14,9 @@ dynamic = ["dependencies"]
 dependencies = {file = ["requirements.txt"]}
 
 [project.optional-dependencies]
-llm = ["litellm", "hashstash[rec]"]
 viz = ["playwright", "nest_asyncio"]
 analysis = ["scikit-learn", "umap-learn"]
-all = ["litellm", "hashstash[rec]", "playwright", "nest_asyncio", "scikit-learn", "umap-learn", "tabula-py"]
+all = ["playwright", "nest_asyncio", "scikit-learn", "umap-learn", "tabula-py"]
 
 [project.scripts]
 abstraction = "abstraction.cli:main"
