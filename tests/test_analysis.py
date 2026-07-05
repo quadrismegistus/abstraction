@@ -30,7 +30,13 @@ from abstraction.analysis import (
 class TestPerFeatureR2Centering:
     """A no-intercept regression on uncentered v understates R^2 for
     high-prevalence binary features; per_feature_r2 must center v first.
+
+    per_feature_r2 imports sklearn (the [analysis] extra) — skip where absent (CI).
     """
+
+    @pytest.fixture(autouse=True)
+    def _needs_sklearn(self):
+        pytest.importorskip("sklearn")
 
     def _make_feat(self, seed=0, n=400):
         rng = np.random.default_rng(seed)
