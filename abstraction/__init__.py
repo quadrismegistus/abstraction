@@ -15,7 +15,6 @@ from .norms import (
 from .models import gen_vecnorms
 from .counting import count_absconc, count_absconc_psg, count_absconc_corpus
 from .scoring import score_psg, score_freqs, score_words, get_all_passages, gen_bookpassages, score_corpus_freqs, score_all_corpora, score_ids_duckdb
-from .scores_db import init_db as init_scores_db, write_scores, read_scores, db_stats
 from .aggregate import get_arc_scores
 from .analysis import (
     load_scores, load_all_scored, adjust_scores, assign_period_score,
@@ -56,11 +55,12 @@ __all__ = [
     # scoring
     "score_psg", "score_freqs", "score_words", "get_all_passages",
     "gen_bookpassages", "score_corpus_freqs", "score_all_corpora", "score_ids_duckdb",
-    "init_scores_db", "write_scores", "read_scores", "db_stats", "get_arc_scores",
+    "get_arc_scores",
     # analysis
-    "load_scores", "load_all_scored", "adjust_scores",
+    "load_scores", "load_all_scored", "adjust_scores", "assign_period_score",
     "fit_arc", "fit_arc_corpus", "fit_arc_all_corpora",
     "fit_arc_by_genre", "fit_arc_all_by_genre", "harmonize_genre", "summarize_arc",
+    "ARC_CORPORA", "EXCLUDE_CORPORA",
     # passages
     "render_passage_html", "display_passage", "save_passage_html", "save_passage_image",
     "render_comparison_html", "display_comparison", "save_comparison_image",

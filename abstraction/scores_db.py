@@ -1,23 +1,30 @@
 """
-Unified per-text scores database.
+DEPRECATED — legacy pre-ClickHouse scores store.
 
-Stores raw 1:1 scores (text_id → norm columns) per language. Aggregation
-(match-group averaging, dedup, etc.) is deferred to query time so different
-consumers can pick different policies — see `aggregate.py` for the readers.
+Scores moved to ClickHouse on 2026-04-19 (see `app/db.py`, `aggregate.py`).
+This DuckDB-backed store (`scores.duckdb`) is a dead shadow: nothing in the
+pipeline reads from it anymore, and it is no longer kept up to date. It is
+kept ONLY so old `scores.duckdb` files can still be read for archaeology
+(e.g. `read_scores()`, `db_stats()`). Do NOT write new data here — writing
+via `write_scores()`/`init_db()` populates a store nothing downstream
+consults, which is exactly the footgun this deprecation exists to flag.
 
-Tables:
-  scores_en  — English per-text scores. Columns: _id PK + all English norm cols.
-  scores_fr  — French per-text scores. Columns: _id PK + all French norm cols.
-  scores_de  — German per-text scores. Same pattern.
-  scoring_meta — bookkeeping: (table_name, n_rows, last_updated, notes).
+Historical docstring (for context on what this used to be for):
 
-Schema is built dynamically from the columns of whatever DataFrame is being
-written, so adding a new norm column doesn't require a migration — just
-re-run scoring with the updated allnorms and the table grows columns
-automatically (new rows get the new column; old rows are NULL there).
+  Unified per-text scores database. Stores raw 1:1 scores (text_id → norm
+  columns) per language. Aggregation (match-group averaging, dedup, etc.) was
+  deferred to query time so different consumers could pick different
+  policies — see `aggregate.py` for the (now-CH-backed) readers.
+
+  Tables:
+    scores_en  — English per-text scores. Columns: _id PK + all English norm cols.
+    scores_fr  — French per-text scores. Columns: _id PK + all French norm cols.
+    scores_de  — German per-text scores. Same pattern.
+    scoring_meta — bookkeeping: (table_name, n_rows, last_updated, notes).
 """
 
 import os
+import warnings
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -25,6 +32,15 @@ import duckdb
 import pandas as pd
 
 from .config import PATH_SCORES_DB
+
+warnings.warn(
+    "abstraction.scores_db is deprecated: scores moved to ClickHouse on "
+    "2026-04-19 and this DuckDB store is a dead shadow that nothing reads. "
+    "Only read_scores()/db_stats() remain useful, for archaeology on old "
+    "scores.duckdb files. Do not write new data via write_scores()/init_db().",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 LANG_TABLES = {"en": "scores_en", "fr": "scores_fr", "de": "scores_de"}
 
@@ -37,7 +53,19 @@ def _connect(db_path=None, read_only=False):
 
 def init_db(db_path=None):
     """Create empty scores DB with bookkeeping table. Per-language tables
-    are created lazily on first write so the schema can mirror allnorms."""
+    are created lazily on first write so the schema can mirror allnorms.
+
+    DEPRECATED write path: scores.duckdb is a dead shadow nothing reads
+    (scores live in ClickHouse since 2026-04-19). Calling this initializes
+    a store nothing downstream consults.
+    """
+    warnings.warn(
+        "init_db()/init_scores_db() writes to scores.duckdb, a dead shadow "
+        "that nothing reads — scores live in ClickHouse since 2026-04-19. "
+        "This write is very likely a mistake.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     con = _connect(db_path)
     con.execute(
         """
@@ -105,6 +133,13 @@ def write_scores(
         If True (default), replace existing rows for the same _id. If False,
         skip ids already present.
     """
+    warnings.warn(
+        "write_scores() writes to scores.duckdb, a dead shadow that nothing "
+        "reads — scores live in ClickHouse since 2026-04-19. This write is "
+        "very likely a mistake.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
     if lang not in LANG_TABLES:
         raise ValueError(f"lang must be one of {list(LANG_TABLES)}, got {lang!r}")
     if "_id" not in df.columns:

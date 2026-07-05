@@ -148,24 +148,6 @@ def cmd_score_ids(args):
     print(f"  wrote {out_path}")
 
 
-def cmd_score_missing(args):
-    """Score every text-with-freqs that isn't yet in scores.duckdb, routing
-    per-text by LLTK's `texts.lang`. Idempotent."""
-    from .scoring import score_all_missing
-    results = score_all_missing(
-        lang=args.lang,
-        batch_size=args.batch_size,
-        limit=args.limit,
-        dry_run=args.dry_run,
-    )
-    print("\nSummary:")
-    for lg, info in results.items():
-        print(
-            f"  scores_{lg}: added {info['added']:,}, "
-            f"total {info['total']:,} (candidates: {info['candidates']:,})"
-        )
-
-
 def cmd_check_freqs(args):
     from .corpus import check_freqs_coverage
     df = check_freqs_coverage(corpus_name=args.corpus)
@@ -796,20 +778,6 @@ def main():
     p.add_argument("--output", "-o", default=None, help="Output CSV path (default: data/scores/v8-raw/{corpus}.csv)")
     p.add_argument("--shard-size", type=int, default=20000, help="Texts per DuckDB query (default: 20000)")
 
-    # score-missing: unified "score everything not yet in scores.duckdb"
-    p = sub.add_parser(
-        "score-missing",
-        help="Score all texts with freqs that aren't in scores.duckdb yet, routed per-text by LLTK texts.lang",
-    )
-    p.add_argument("--lang", choices=["all", "en", "fr", "de"], default="all",
-                   help="Language to score (default: all)")
-    p.add_argument("--batch-size", type=int, default=10000,
-                   help="Texts per scoring batch (default: 10000)")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Cap total texts scored per lang (for smoke tests)")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Report what would be scored without running")
-
     # check-freqs: check metadata-to-freqs coverage
     p = sub.add_parser("check-freqs", help="Check freqs coverage for corpora")
     p.add_argument("corpus", nargs="?", default=None, help="Corpus name (default: all)")
@@ -971,8 +939,6 @@ def main():
         cmd_score_arcs(args)
     elif args.command == "score-ids":
         cmd_score_ids(args)
-    elif args.command == "score-missing":
-        cmd_score_missing(args)
     elif args.command == "check-freqs":
         cmd_check_freqs(args)
     elif args.command == "fix-hathi-englit":
