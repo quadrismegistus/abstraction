@@ -10,10 +10,9 @@ import pandas as pd
 from scipy import stats
 
 import json
-from .config import COUNT_DIR, SCORES_DIR, PATH_CORPORA
+from .config import COUNT_DIR, SCORES_DIR
 from .corpus import load_corpus, _camel_to_snake
 from .tokenize import tokenize_agnostic
-from .utils import read_df
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +181,14 @@ def harmonize_genre(df, corpus_name=None):
 # Loading and merging scores with metadata
 # ---------------------------------------------------------------------------
 
+def _snake_name(corpus_name):
+    """CamelCase corpus name -> snake_case; passes through names that are
+    already snake_case (and tolerates empty strings without indexing)."""
+    if corpus_name and corpus_name[0].isupper():
+        return _camel_to_snake(corpus_name)
+    return corpus_name
+
+
 def _find_id_col(meta):
     """Find the ID column in metadata, preferring 'id' then 'htid'."""
     for col in ["id", "htid"]:
@@ -196,7 +203,7 @@ def _merge_with_metadata(df, corpus_name, harmonize=True):
     Handles ID format mismatches (slash→dot, zero-padding, htid→path, etc.)
     and applies genre harmonization, year fixes, and year-range filtering.
     """
-    snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
+    snake = _snake_name(corpus_name)
     corpus = load_corpus(corpus_name)
     meta = corpus.metadata
 
@@ -276,7 +283,7 @@ def load_scores(corpus_name, scores_dir=None, version="v8-raw", harmonize=True):
     """
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
-    snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
+    snake = _snake_name(corpus_name)
     path = os.path.join(scores_dir, f"{snake}.csv")
 
     # If no corpus-specific scores, try falling back to parent hathi scores
@@ -563,92 +570,61 @@ def _empty_piecewise():
     ]}
 
 
-def report_piecewise(combined_df, genres=None,
-                     score_col="Abs-Conc.Median.median",
-                     corpus_col="corpus_name",
-                     min_year=1600, max_year=2020,
-                     agg_bin=10, min_texts_per_bin=3,
-                     search_range=(1650, 1850), search_step=10,
-                     invert=True):
-    """Report piecewise regression statistics per genre.
+# ---------------------------------------------------------------------------
+# Shared report helpers (single definitions; formerly duplicated per-report
+# with subtly different NaN handling -- these use the safest variants)
+# ---------------------------------------------------------------------------
 
-    Returns a DataFrame with one row per genre: breakpoint, slopes,
-    slope SEs, p-values, R², and sample sizes.
+def _p_stars(p):
+    """Significance stars for a p-value; '' when p is missing/non-finite."""
+    if p is None or not np.isfinite(p):
+        return ""
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "n.s."
+
+
+def _safe_ratio(a, b):
+    """Return a / b when both are finite and b > 0; NaN otherwise.
+
+    For non-negative quantities (percentages, counts) where a ratio is
+    meaningful only over a positive denominator.
     """
-    if genres is None:
-        gcounts = combined_df["genre_harmonized"].value_counts()
-        genres = gcounts[gcounts >= 30].index.tolist()
+    if a is None or b is None:
+        return np.nan
+    if not (np.isfinite(a) and np.isfinite(b)) or b <= 0:
+        return np.nan
+    return a / b
 
-    rows = []
-    for genre in genres:
-        gdf = combined_df[combined_df["genre_harmonized"] == genre]
-        # Aggregate by (decade, corpus)
-        sub = gdf[[score_col, "year", corpus_col]].copy()
-        sub["year"] = pd.to_numeric(sub["year"], errors="coerce")
-        sub = sub.dropna(subset=["year", score_col])
-        sub = sub[(sub["year"] >= min_year) & (sub["year"] <= max_year)]
-        if len(sub) < 30:
-            continue
-        sub["_bin"] = (sub["year"] // agg_bin) * agg_bin
-        agg = sub.groupby(["_bin", corpus_col]).agg(
-            score=(score_col, "mean"),
-            n_texts=(score_col, "count"),
-        ).reset_index()
-        agg = agg[agg.n_texts >= min_texts_per_bin]
-        if len(agg) < 20:
-            continue
 
-        y = agg["_bin"].values.astype(float)
-        s = agg["score"].values
-        if invert:
-            s = -s
-        g = agg[corpus_col].values
+def _same_sign_ratio(a, b):
+    """Return a / b only when both are finite, nonzero, and share a sign;
+    NaN otherwise.
 
-        pw = fit_piecewise(y, s, groups=g,
-                           search_range=search_range,
-                           search_step=search_step)
+    For signed score magnitudes (e.g. raw abstractness), where a ratio
+    across a sign change is meaningless.
+    """
+    if a is None or b is None:
+        return np.nan
+    if not (np.isfinite(a) and np.isfinite(b)) or a * b <= 0:
+        return np.nan
+    return a / b
 
-        # Also compute slope SEs from the full fit for reporting
-        break_year = pw.get("pw_break_year", np.nan)
-        se_before = np.nan
-        se_after = np.nan
-        if np.isfinite(break_year):
-            before = y <= break_year
-            after = y > break_year
-            yb = np.where(before, y - break_year, 0.0)
-            ya = np.where(after, y - break_year, 0.0)
-            X = np.column_stack([np.ones(len(y)), yb, ya])
-            dummies = _make_dummies(g)
-            if dummies.shape[1] > 0:
-                X = np.column_stack([X, dummies])
-            try:
-                beta, _, _, _ = np.linalg.lstsq(X, s, rcond=None)
-                resid = s - X @ beta
-                n, p = X.shape
-                mse = (resid ** 2).sum() / max(n - p, 1)
-                cov = mse * np.linalg.inv(X.T @ X)
-                se_before = np.sqrt(cov[1, 1])
-                se_after = np.sqrt(cov[2, 2])
-            except np.linalg.LinAlgError:
-                pass
 
-        rows.append({
-            "genre": genre,
-            "breakpoint": pw["pw_break_year"],
-            "slope_before": pw["pw_slope_before"],
-            "slope_before_se": se_before,
-            "slope_before_p": pw["pw_slope_before_p"],
-            "slope_after": pw["pw_slope_after"],
-            "slope_after_se": se_after,
-            "slope_after_p": pw["pw_slope_after_p"],
-            "r2": pw["pw_r2"],
-            "n_total": pw["pw_n"],
-            "n_before": pw["pw_n_before"],
-            "n_after": pw["pw_n_after"],
-            "n_texts_total": int(sub["n_texts"].sum()) if "n_texts" in sub.columns else len(sub),
-        })
+def _fmt_ratio(r):
+    """Format an abs/conc ratio, showing the inverse when < 1.
 
-    return pd.DataFrame(rows)
+    Non-finite ratios render as an em-dash instead of 'nan:1'.
+    """
+    if r is None or not np.isfinite(r):
+        return "—"
+    if 0 < r < 1:
+        return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
+    return f"{r:.1f}:1"
 
 
 def report_arc(combined_df=None, genres=None,
@@ -706,7 +682,8 @@ def report_arc(combined_df=None, genres=None,
         adj = adjust_scores(gdf, score_col=score_col, corpus_col=corpus_col,
                             min_year=min_year, max_year=max_year,
                             agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
-                            model="piecewise")
+                            model="piecewise",
+                            search_range=search_range, search_step=search_step)
         if adj.empty:
             continue
         adj_dec = -adj.groupby("year")["adjusted"].mean()
@@ -778,12 +755,6 @@ def report_arc(combined_df=None, genres=None,
         rise_sd = (raw_peak - raw_start) / text_sd
         fall_sd = (raw_peak - raw_end) / text_sd
 
-        def _safe_ratio(a, b):
-            """Return a/b only when both have the same sign; NaN otherwise."""
-            if a * b > 0:
-                return a / b
-            return np.nan
-
         rows.append({
             "genre": genre,
             "breakpoint": pw["pw_break_year"],
@@ -798,9 +769,9 @@ def report_arc(combined_df=None, genres=None,
             "raw_end_pooled": raw_end_pooled,
             "rise_sd": rise_sd,
             "fall_sd": fall_sd,
-            "peak_vs_start": _safe_ratio(raw_peak, raw_start),
-            "peak_vs_end": _safe_ratio(raw_peak, raw_end),
-            "start_vs_end": _safe_ratio(raw_start, raw_end),
+            "peak_vs_start": _same_sign_ratio(raw_peak, raw_start),
+            "peak_vs_end": _same_sign_ratio(raw_peak, raw_end),
+            "start_vs_end": _same_sign_ratio(raw_start, raw_end),
             "slope_before": pw["pw_slope_before"],
             "slope_before_se": se_before,
             "slope_before_p": pw["pw_slope_before_p"],
@@ -816,8 +787,8 @@ def report_arc(combined_df=None, genres=None,
         })
 
         if print_result:
-            ratio_peak_start = _safe_ratio(raw_peak, raw_start)
-            ratio_peak_end = _safe_ratio(raw_peak, raw_end)
+            ratio_peak_start = _same_sign_ratio(raw_peak, raw_start)
+            ratio_peak_end = _same_sign_ratio(raw_peak, raw_end)
             ratio_str_rise = f"{ratio_peak_start:.2f}x" if np.isfinite(ratio_peak_start) else "N/A (sign change)"
             ratio_str_fall = f"{ratio_peak_end:.2f}x" if np.isfinite(ratio_peak_end) else "N/A (sign change)"
             bp_str = (f"{int(pw['pw_break_year'])}"
@@ -844,10 +815,10 @@ def report_arc(combined_df=None, genres=None,
         for line in prose_lines:
             print(line)
             print()
-        print(f"(Ratios use raw abstractness scores from the corpus-balanced "
-              f"(decade, corpus) aggregation used to select the key decades "
-              f"[see raw_*_pooled columns for text-pooled magnitudes]; "
-              f"reported only when both values have the same sign.)")
+        print("(Ratios use raw abstractness scores from the corpus-balanced "
+              "(decade, corpus) aggregation used to select the key decades "
+              "[see raw_*_pooled columns for text-pooled magnitudes]; "
+              "reported only when both values have the same sign.)")
         print("(Breakpoint selected by grid search over search_range/"
               "search_step; slope p-values do not account for this "
               "selection.)")
@@ -1112,7 +1083,7 @@ def fit_arc_all_corpora(score_col="Abs-Conc.Median.median",
             continue
         try:
             df = load_scores(corpus_name, scores_dir=scores_dir, version=version)
-        except (FileNotFoundError, Exception) as e:
+        except Exception as e:
             print(f"  Skipping {corpus_name}: {e}")
             continue
         result = fit_arc(df, score_col=score_col, **kw)
@@ -1225,7 +1196,8 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
                   corpus_bias=None,
                   min_year=DEFAULT_MIN_YEAR,
                   max_year=DEFAULT_MAX_YEAR, agg_bin=DEFAULT_AGG_BIN,
-                  min_texts_per_bin=3, model="quadratic"):
+                  min_texts_per_bin=3, model="quadratic",
+                  search_range=(1650, 1850), search_step=10):
     """Fit a regression with fixed effects and return adjusted scores.
 
     Returns a DataFrame with columns:
@@ -1248,6 +1220,9 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
         fitting, replacing corpus fixed-effect dummies.
     model : str
         "quadratic", "cubic", "quartic", or "piecewise".
+    search_range, search_step : tuple, int
+        Breakpoint grid-search parameters, forwarded to fit_piecewise when
+        model="piecewise" (ignored for polynomial models).
     """
     # Resolve all fixed-effect columns
     fe_cols = []
@@ -1372,7 +1347,8 @@ def adjust_scores(df, score_col="Abs-Conc.Median.median", year_col="year",
 
     elif model == "piecewise":
         pw_result = fit_piecewise(y, s,
-            groups=agg_masked[fe_cols[0]].values if fe_cols else None)
+            groups=agg_masked[fe_cols[0]].values if fe_cols else None,
+            search_range=search_range, search_step=search_step)
         break_year = pw_result.get("pw_break_year", np.nan)
         if not np.isfinite(break_year):
             return pd.DataFrame()
@@ -1432,7 +1408,7 @@ def summarize_arc(result):
         arc_dir = "abstractness falls then rises (inverse of expected)"
     else:
         arc_dir = "flat"
-    sig = "***" if p2 < 0.001 else "**" if p2 < 0.01 else "*" if p2 < 0.05 else "n.s."
+    sig = _p_stars(p2)
     lines.append(f"  Quadratic: {arc_dir} {sig}, peak abstractness ~{peak:.0f}, R²={r2q:.3f}" if np.isfinite(peak) else "  Quadratic: insufficient data")
 
     # piecewise
@@ -1443,8 +1419,8 @@ def summarize_arc(result):
     pa = result.get("pw_slope_after_p", np.nan)
     r2p = result.get("pw_r2", np.nan)
     if np.isfinite(by):
-        sb_sig = "***" if pb < 0.001 else "**" if pb < 0.01 else "*" if pb < 0.05 else "n.s."
-        sa_sig = "***" if pa < 0.001 else "**" if pa < 0.01 else "*" if pa < 0.05 else "n.s."
+        sb_sig = _p_stars(pb)
+        sa_sig = _p_stars(pa)
         # slopes per century (negative slope = growing abstractness, positive = growing concreteness)
         sb_dir = "abstracting" if sb < 0 else "concretizing"
         sa_dir = "abstracting" if sa < 0 else "concretizing"
@@ -1471,48 +1447,6 @@ def _load_counts_jsonl(path):
                 except json.JSONDecodeError:
                     continue
     return records
-
-
-def pct_in_range(rec, norm="Abs-Conc.Median.median", lo=None, hi=None):
-    """Compute the proportion of words in a z-score range for one text.
-
-    Parameters
-    ----------
-    rec : dict
-        A single JSONL record with norm -> {bin_edge: count} structure.
-    norm : str
-        Norm column name.
-    lo, hi : float, optional
-        Z-score bounds (inclusive). If lo is None, no lower bound.
-        If hi is None, no upper bound.
-
-    Returns
-    -------
-    float or NaN — proportion of words in [lo, hi].
-    """
-    bins = rec.get(norm)
-    if not bins:
-        return np.nan
-    total = 0
-    in_range = 0
-    for edge_str, count in bins.items():
-        edge = float(edge_str)
-        total += count
-        if (lo is None or edge <= lo) if hi is None else \
-           (hi is None or edge > hi) if lo is None else \
-           False:
-            pass
-        # Simpler logic:
-        include = True
-        if hi is not None and edge > hi:
-            include = False
-        if lo is not None and edge <= lo:
-            include = False
-        if include:
-            in_range += count
-    if total == 0:
-        return np.nan
-    return in_range / total
 
 
 # Histograms from count_corpus_freqs (scoring.py:_count_freqs_allnorms) key
@@ -1586,7 +1520,7 @@ def load_counts(corpus_name, counts_dir=None, version="v2-raw",
     """
     if counts_dir is None:
         counts_dir = os.path.join(COUNT_DIR, version)
-    snake = _camel_to_snake(corpus_name) if corpus_name[0].isupper() else corpus_name
+    snake = _snake_name(corpus_name)
     path = os.path.join(counts_dir, f"{snake}.jsonl")
     if not os.path.exists(path):
         raise FileNotFoundError(f"No counts file: {path}")
@@ -1666,7 +1600,8 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
     adj = adjust_scores(sub_gdf, score_col=score_col, corpus_col=corpus_col,
                         min_year=min_year, max_year=max_year,
                         agg_bin=agg_bin, min_texts_per_bin=min_texts_per_bin,
-                        model="piecewise")
+                        model="piecewise",
+                        search_range=search_range, search_step=search_step)
     if adj.empty:
         return None, None
 
@@ -1696,12 +1631,9 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
     pct_peak = dec_mean.get(peak_yr, np.nan) * 100
     pct_end = dec_mean.get(end_yr, np.nan) * 100
 
-    def _ratio(a, b):
-        return a / b if b > 0 else np.nan
-
-    peak_vs_start = _ratio(pct_peak, pct_start)
-    peak_vs_end = _ratio(pct_peak, pct_end)
-    start_vs_end = _ratio(pct_start, pct_end)
+    peak_vs_start = _safe_ratio(pct_peak, pct_start)
+    peak_vs_end = _safe_ratio(pct_peak, pct_end)
+    start_vs_end = _safe_ratio(pct_start, pct_end)
 
     row = {
         f"{label}_breakpoint": pw["pw_break_year"],
@@ -1819,11 +1751,9 @@ def report_arc_counts(combined_df=None, genres=None,
             row["conc_at_abs_end"] = conc_at_abs_end
 
             # Abstract-to-concrete ratio at key decades
-            def _ratio(a, c):
-                return a / c if c > 0 else np.nan
-            row["abs_conc_ratio_start"] = _ratio(abs_row["abstract_pct_start"], conc_at_abs_start)
-            row["abs_conc_ratio_peak"] = _ratio(abs_row["abstract_pct_peak"], conc_at_abs_peak)
-            row["abs_conc_ratio_end"] = _ratio(abs_row["abstract_pct_end"], conc_at_abs_end)
+            row["abs_conc_ratio_start"] = _safe_ratio(abs_row["abstract_pct_start"], conc_at_abs_start)
+            row["abs_conc_ratio_peak"] = _safe_ratio(abs_row["abstract_pct_peak"], conc_at_abs_peak)
+            row["abs_conc_ratio_end"] = _safe_ratio(abs_row["abstract_pct_end"], conc_at_abs_end)
 
         if print_result and abs_row:
             a_s = abs_row["abstract_pct_start"]
@@ -1836,37 +1766,28 @@ def report_arc_counts(combined_df=None, genres=None,
             r_p = row["abs_conc_ratio_peak"]
             r_e = row["abs_conc_ratio_end"]
 
-            def _r(a, b):
-                return a / b if b > 0 else np.nan
-
-            def _fmt_ratio(r):
-                """Format abs/conc ratio, showing inverse when < 1."""
-                if r < 1:
-                    return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
-                return f"{r:.1f}:1"
-
             bp_str = (f"{int(abs_row['abstract_breakpoint'])}"
                       if np.isfinite(abs_row["abstract_breakpoint"]) else "insufficient data")
 
             genre_prose = [
                 f"{genre} (n = {len(gdf):,}):",
                 f"  Rise ({abs_start}s → {abs_peak}s):",
-                f"    Abstract: {a_s:.1f}% → {a_p:.1f}% ({_r(a_p, a_s):.1f}x)",
-                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_s, c_p):.1f}x decline)" if c_p < c_s else
-                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_r(c_p, c_s):.1f}x increase)",
-                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_p)} ({_r(r_p, r_s):.1f}x)",
+                f"    Abstract: {a_s:.1f}% → {a_p:.1f}% ({_safe_ratio(a_p, a_s):.1f}x)",
+                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_safe_ratio(c_s, c_p):.1f}x decline)" if c_p < c_s else
+                f"    Concrete: {c_s:.1f}% → {c_p:.1f}% ({_safe_ratio(c_p, c_s):.1f}x increase)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_p)} ({_safe_ratio(r_p, r_s):.1f}x)",
                 f"  Fall ({abs_peak}s → {abs_end}s):",
-                f"    Abstract: {a_p:.1f}% → {a_e:.1f}% ({_r(a_p, a_e):.1f}x decline)",
-                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_e, c_p):.1f}x increase)" if c_e > c_p else
-                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_r(c_p, c_e):.1f}x decline)",
-                f"    Abs/Conc ratio: {_fmt_ratio(r_p)} → {_fmt_ratio(r_e)} ({_r(r_p, r_e):.1f}x decline)",
+                f"    Abstract: {a_p:.1f}% → {a_e:.1f}% ({_safe_ratio(a_p, a_e):.1f}x decline)",
+                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_safe_ratio(c_e, c_p):.1f}x increase)" if c_e > c_p else
+                f"    Concrete: {c_p:.1f}% → {c_e:.1f}% ({_safe_ratio(c_p, c_e):.1f}x decline)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_p)} → {_fmt_ratio(r_e)} ({_safe_ratio(r_p, r_e):.1f}x decline)",
                 f"  Net ({abs_start}s → {abs_end}s):",
-                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_s, a_e):.1f}x decline)" if a_e < a_s else
-                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_r(a_e, a_s):.1f}x increase)",
-                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_e, c_s):.1f}x increase)" if c_e > c_s else
-                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_s, c_e):.1f}x decline)",
-                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_s, r_e):.1f}x decline)" if r_e < r_s else
-                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_e, r_s):.1f}x increase)",
+                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_safe_ratio(a_s, a_e):.1f}x decline)" if a_e < a_s else
+                f"    Abstract: {a_s:.1f}% → {a_e:.1f}% ({_safe_ratio(a_e, a_s):.1f}x increase)",
+                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_safe_ratio(c_e, c_s):.1f}x increase)" if c_e > c_s else
+                f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_safe_ratio(c_s, c_e):.1f}x decline)",
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_safe_ratio(r_s, r_e):.1f}x decline)" if r_e < r_s else
+                f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_safe_ratio(r_e, r_s):.1f}x increase)",
                 f"  Breakpoint {bp_str}; "
                 f"R² abstract = {abs_row['abstract_r2']:.3f}"
                 + (f", R² concrete = {conc_row['concrete_r2']:.3f}" if conc_row else ""),
@@ -1949,25 +1870,6 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff,
         print_result=False, **fit_kw,
     )
-
-    def _p_stars(p):
-        if not np.isfinite(p):
-            return ""
-        if p < 0.001:
-            return "***"
-        if p < 0.01:
-            return "**"
-        if p < 0.05:
-            return "*"
-        return "n.s."
-
-    def _fmt_ratio(r):
-        if r < 1:
-            return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
-        return f"{r:.1f}:1"
-
-    def _safe_ratio(a, b):
-        return a / b if b > 0 else np.nan
 
     lines = []
 
@@ -2236,27 +2138,6 @@ def report_compare(genres=None,
             abs_cutoff=abs_cutoff, conc_cutoff=conc_cutoff,
             print_result=False, **fit_kw)
 
-    def _p_stars(p):
-        if not np.isfinite(p):
-            return ""
-        if p < 0.001:
-            return "***"
-        if p < 0.01:
-            return "**"
-        if p < 0.05:
-            return "*"
-        return "n.s."
-
-    def _fmt_ratio(r):
-        if not np.isfinite(r):
-            return "—"
-        if r < 1:
-            return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
-        return f"{r:.1f}:1"
-
-    def _safe_ratio(a, b):
-        return a / b if b > 0 else np.nan
-
     def _get_row(df, genre):
         if df is None:
             return None
@@ -2286,11 +2167,6 @@ def report_compare(genres=None,
         lines.append("")
         lines.append("| | Raw | Modernized |")
         lines.append("|---|---|---|")
-
-        def _score_row(label, key, sr):
-            if sr is None:
-                return "—"
-            return f"{sr[key]}"
 
         if sr_raw is not None or sr_mod is not None:
             for label, key, fmt in [
@@ -2339,15 +2215,6 @@ def report_compare(genres=None,
                 raw_val = fmt(cr_raw[key]) if cr_raw is not None else "—"
                 mod_val = fmt(cr_mod[key]) if cr_mod is not None else "—"
                 lines.append(f"| {label} | {raw_val} | {mod_val} |")
-
-            # Add ratio changes
-            for cr_label, cr in [("Raw", cr_raw), ("Modernized", cr_mod)]:
-                if cr is None:
-                    continue
-                r_s = cr["abs_conc_ratio_start"]
-                r_p = cr["abs_conc_ratio_peak"]
-                r_e = cr["abs_conc_ratio_end"]
-                # We'll add these as summary rows below
 
         lines.append("")
 
@@ -2436,9 +2303,9 @@ def attach_extras(features, groups, client, *, include_lang=False,
         groups["language"] = ["lang_en"]
 
     scores = client.query_df(
-        f"SELECT _id, seq, scores[%(col)s] AS abstractness "
-        f"FROM abstraction.passage_scores "
-        f"WHERE scheme=%(scheme)s AND _id IN %(ids)s",
+        "SELECT _id, seq, scores[%(col)s] AS abstractness "
+        "FROM abstraction.passage_scores "
+        "WHERE scheme=%(scheme)s AND _id IN %(ids)s",
         parameters={"col": score_col, "scheme": scheme, "ids": ids},
     )
     feat = feat.merge(scores, on=["_id", "seq"], how="left")

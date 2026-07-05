@@ -269,13 +269,14 @@ def _make_arc_counts_df(genre="Fiction", corpus="c1", n_per_decade=5, seed=1):
 
 class TestNaNBreakpointGuards:
     """fit_piecewise returns NaN for pw_break_year when no candidate
-    breakpoint in the search grid has >=10 points on each side. Because
-    adjust_scores' own internal piecewise fit always uses fit_piecewise's
-    hardcoded default search_range (it doesn't forward the caller's
-    search_range/search_step), a caller-supplied narrow search_range can
-    make the row-level fit_piecewise call fail (NaN breakpoint) even while
-    adjust_scores' default-range fit still succeeds -- so a report row can
-    genuinely reach the int()-conversion sites with a NaN breakpoint.
+    breakpoint in the search grid has >=10 points on each side. Since
+    adjust_scores now forwards the caller's search_range/search_step to
+    its internal fit_piecewise call, an unfittable custom range makes
+    adjust_scores itself return an empty frame -- so report_arc skips the
+    genre wholesale and report_arc_counts emits a stub row without fit
+    columns, rather than reaching the int(NaN)-conversion sites (which
+    remain as guards; report_full's own guards are exercised directly
+    below via monkeypatched inputs).
     """
 
     def test_report_arc_narrow_search_range_does_not_crash(self, capsys):
@@ -285,10 +286,12 @@ class TestNaNBreakpointGuards:
             search_range=(1652, 1658), search_step=10,
             print_result=True,
         )
-        assert len(result) == 1
-        assert np.isnan(result.iloc[0]["breakpoint"])
+        # The narrow range is forwarded into adjust_scores' internal
+        # breakpoint search too, so the genre is skipped consistently
+        # (previously adjust_scores silently used the default range,
+        # yielding a row whose own fit had a NaN breakpoint).
+        assert len(result) == 0
         out = capsys.readouterr().out
-        assert "insufficient data" in out
         assert "Traceback" not in out
 
     def test_report_arc_counts_narrow_search_range_does_not_crash(self, capsys):
@@ -298,10 +301,14 @@ class TestNaNBreakpointGuards:
             search_range=(1652, 1658), search_step=10,
             print_result=True,
         )
+        # The genre row survives with its identity columns, but neither
+        # measure could be fit in the narrow forwarded range, so no
+        # abstract_*/concrete_* fit columns are produced (and no int(NaN)
+        # crash occurs building them).
         assert len(result) == 1
-        assert np.isnan(result.iloc[0]["abstract_breakpoint"])
+        assert result.iloc[0]["genre"] == "Fiction"
+        assert "abstract_breakpoint" not in result.columns
         out = capsys.readouterr().out
-        assert "insufficient data" in out
         assert "Traceback" not in out
 
     def test_report_full_handles_nan_breakpoint_and_mismatched_decades(self, monkeypatch):
@@ -424,3 +431,60 @@ class TestReportArcCorpusBalancedMagnitudes:
         result = report_arc(combined_df=df, genres=["Fiction"], print_result=False)
         for col in ("raw_start_pooled", "raw_peak_pooled", "raw_end_pooled"):
             assert col in result.columns
+
+
+# ---------------------------------------------------------------------------
+# adjust_scores search_range forwarding (AUDIT-STATUS.md §5)
+# ---------------------------------------------------------------------------
+
+class TestAdjustScoresSearchRangeForwarding:
+    """adjust_scores(model="piecewise") must forward the caller's
+    search_range/search_step to its internal fit_piecewise breakpoint
+    search. Previously the internal call used fit_piecewise's hardcoded
+    default (1650, 1850), so callers passing a custom range silently got
+    a breakpoint pinned inside the default window.
+    """
+
+    def _make_late_break_df(self, break_year=1900, n_per_decade=5):
+        """Exactly piecewise-linear data (no noise) with a kink at
+        break_year -- deliberately OUTSIDE the default (1650, 1850)
+        search range. The score depends only on the decade, so the
+        (decade, corpus) bin means are exactly V-shaped and the
+        max-R^2 breakpoint is unambiguous (R^2 = 1 only at the kink).
+        """
+        rows = []
+        for dec in range(1600, 2001, 10):
+            score = -0.01 * abs(dec - break_year)
+            for j in range(n_per_decade):
+                rows.append({
+                    "year": dec + j,
+                    "Abs-Conc.Median.median": score,
+                    "corpus_name": "c1",
+                })
+        return pd.DataFrame(rows)
+
+    def test_custom_search_range_is_honored(self):
+        df = self._make_late_break_df(break_year=1900)
+        res = analysis.adjust_scores(
+            df, model="piecewise",
+            min_year=1600, max_year=2010,
+            search_range=(1860, 1950), search_step=10,
+        )
+        assert not res.empty
+        # 'fitted' is the piecewise trend; its maximum sits at the kink,
+        # i.e. at the selected breakpoint.
+        peak_year = res.loc[res["fitted"].idxmax(), "year"]
+        assert 1860 <= peak_year <= 1950  # breakpoint lands in the custom range
+        assert peak_year == 1900          # ... exactly at the true break
+
+    def test_default_range_pins_breakpoint_inside_default_window(self):
+        """Contrast case documenting why forwarding matters: on the same
+        data, the default grid cannot see the 1900 kink and pins the
+        breakpoint at/inside the (1650, 1850) window."""
+        df = self._make_late_break_df(break_year=1900)
+        res = analysis.adjust_scores(
+            df, model="piecewise", min_year=1600, max_year=2010,
+        )
+        assert not res.empty
+        peak_year = res.loc[res["fitted"].idxmax(), "year"]
+        assert peak_year <= 1850
