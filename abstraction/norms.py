@@ -21,6 +21,76 @@ from .utils import zfy, download_tqdm, read_df, save_df
 
 _NLTK_STOPWORDS = None
 
+# ---------------------------------------------------------------------------
+# Allnorms artifact fingerprint (cache invalidation; audit §4.1-4.4)
+# ---------------------------------------------------------------------------
+
+# Fingerprints cached by (path, mtime_ns, size) so a stat() is the only cost
+# per call — the 425MB pickle is never loaded just to fingerprint.
+_NORMS_VERSION_CACHE = {}
+
+
+def _allnorms_path(lang="en"):
+    """Path to the allnorms artifact for a language code ('en'/'fr'/'de'/'es')."""
+    if lang == "en":
+        return PATH_ALLNORMS
+    from .config import PATH_ALLNORMS_FR, PATH_ALLNORMS_DE, PATH_ALLNORMS_ES
+    paths = {"fr": PATH_ALLNORMS_FR, "de": PATH_ALLNORMS_DE, "es": PATH_ALLNORMS_ES}
+    if lang not in paths:
+        raise ValueError(f"Unknown allnorms language {lang!r} (expected en/fr/de/es)")
+    return paths[lang]
+
+
+def _cheap_allnorms_columns(path):
+    """Column names of the artifact, but only when readable without a full load.
+
+    Feather/parquet expose their schema cheaply via pyarrow; pickle (the
+    current .pkl.gz format) does not, so we return None rather than load it.
+    """
+    try:
+        if path.endswith(".parquet"):
+            import pyarrow.parquet as pq
+            return list(pq.read_schema(path).names)
+        if path.endswith(".feather"):
+            import pyarrow as pa
+            with pa.memory_map(path) as source:
+                return list(pa.ipc.open_file(source).schema.names)
+    except Exception:
+        return None
+    return None
+
+
+def norms_version(lang="en"):
+    """Short stable fingerprint (12 hex chars) of the current allnorms artifact.
+
+    Built from the allnorms file's (path, mtime, size) — plus its column
+    names when they are cheaply readable (feather/parquet schema; never a
+    full pickle load). Regenerating the allnorms file changes its mtime/size
+    and therefore the fingerprint, letting downstream caches (freqs_cache.db,
+    trajectory cache, etc.) self-invalidate.
+
+    A missing file yields a deterministic fingerprint of the path alone, so
+    callers on data-less machines (e.g. CI) never crash here.
+    """
+    import hashlib
+    path = _allnorms_path(lang)
+    try:
+        st = os.stat(path)
+        stat_key = (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        stat_key = (path, None, None)
+    cached = _NORMS_VERSION_CACHE.get(stat_key)
+    if cached is not None:
+        return cached
+    payload = f"{stat_key[0]}|{stat_key[1]}|{stat_key[2]}"
+    cols = _cheap_allnorms_columns(path) if stat_key[1] is not None else None
+    if cols is not None:
+        payload += "|" + ",".join(map(str, cols))
+    version = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    _NORMS_VERSION_CACHE[stat_key] = version
+    return version
+
+
 def get_nltk_stopwords():
     """Return NLTK English stopwords as a frozenset. Cached after first call."""
     global _NLTK_STOPWORDS

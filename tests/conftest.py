@@ -16,10 +16,12 @@ import time; patching the function attribute on ``abstraction.scoring``
 would not reach those already-bound references, whereas every caller
 routes through the one real function that consults ``_NORM_DICTS``.
 
-``scoring._NORMS_ARRAYS_CACHE`` memoizes numpy arrays for whichever
-allnorms DataFrame was scored FIRST, with no key at all, so it must be
-cleared between tests or fake and real frames cross-contaminate. Both
-caches are reset by the autouse ``_reset_norm_caches`` fixture.
+``scoring._NORMS_ARRAYS_CACHE`` memoizes numpy arrays in a dict keyed by
+the IDENTITY of the allnorms DataFrame (``id(frame)`` guarded by a
+weakref), so distinct frames — fake or real, English or French — get
+distinct entries and cannot cross-contaminate. It is still cleared
+between tests (fresh empty dict) so no arrays built by one test outlive
+it. Both caches are reset by the autouse ``_reset_norm_caches`` fixture.
 """
 
 import importlib
@@ -60,8 +62,8 @@ def _reset_norm_caches(request):
 
     Clears BOTH ``_NORM_DICTS`` (the {(col, lang): {word: score}} cache that
     ``get_norm_dict`` actually consults) and ``_NORMS_ARRAYS_CACHE`` (the
-    unkeyed numpy-array memo), before and after each test, so no test can
-    observe entries — fake or real — left behind by another test.
+    frame-identity-keyed numpy-array memo), before and after each test, so
+    no test can observe entries — fake or real — left behind by another test.
     """
     if request.node.get_closest_marker("integration"):
         # Integration tests intentionally run against the real allnorms and
@@ -71,10 +73,10 @@ def _reset_norm_caches(request):
         yield
         return
     scoring._NORM_DICTS = {}
-    scoring._NORMS_ARRAYS_CACHE = None
+    scoring._NORMS_ARRAYS_CACHE = {}
     yield
     scoring._NORM_DICTS = {}
-    scoring._NORMS_ARRAYS_CACHE = None
+    scoring._NORMS_ARRAYS_CACHE = {}
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@ Text scoring and passage analysis utilities.
 
 import json
 import os
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -14,14 +15,15 @@ import sqlite3
 
 from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA, PATH_FREQS_DB
 from .corpus import load_corpus
-from .norms import get_allnorms
+from .norms import get_allnorms, norms_version
 from .tokenize import tokenize_agnostic, get_spelling_modernizer
 from .counting import count_absconc, count_absconc_path
 from .utils import read_df, save_df
 
 
 # ---------------------------------------------------------------------------
-# Freqs score cache (sqlite-backed, keyed by relative path + modernize flag)
+# Freqs score cache (sqlite-backed, keyed by relative path + modernize flag
+# + allnorms fingerprint; audit §4.1)
 # ---------------------------------------------------------------------------
 
 FREQS_CACHE_PATH = os.path.join(SCORES_DIR, "freqs_cache.db")
@@ -35,16 +37,67 @@ def _freqs_relpath(abspath):
     return abspath
 
 
-def _load_freqs_cache(modernize=False):
-    """Load all cached scores into a dict: relpath -> scores_dict."""
+def _ensure_freqs_cache_schema(conn):
+    """Create/migrate the freqs_scores table to the norms-versioned schema.
+
+    Migration choice (audit §4.1): rows written before versioning existed are
+    stamped with the norms version CURRENT at migration time — they were
+    computed with the allnorms artifact on disk when this code first runs, so
+    treating them as current-version rows preserves the cache instead of
+    discarding it. If norms regenerate later, the fingerprint changes and
+    those rows become misses (then get overwritten on re-score).
+
+    The (freqs_key, modernized) PRIMARY KEY is deliberately kept: INSERT OR
+    REPLACE means at most one row per key, so the newest norms version always
+    dominates — which keeps corpus_correction.load_match_group_scores's
+    unversioned `SELECT freqs_key, scores_json ... WHERE modernized = ?`
+    read contract intact (unique keys, freshest scores).
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS freqs_scores (
+            freqs_key TEXT NOT NULL,
+            modernized INTEGER NOT NULL,
+            scores_json TEXT NOT NULL,
+            norms_version TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (freqs_key, modernized)
+        )
+    """)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(freqs_scores)").fetchall()]
+    if "norms_version" not in cols:
+        conn.execute(
+            "ALTER TABLE freqs_scores ADD COLUMN norms_version TEXT NOT NULL DEFAULT ''"
+        )
+    n_legacy = conn.execute(
+        "SELECT COUNT(*) FROM freqs_scores WHERE norms_version = ''"
+    ).fetchone()[0]
+    if n_legacy:
+        # This cache only ever stores English-allnorms scores (score_arc_corpora).
+        conn.execute(
+            "UPDATE freqs_scores SET norms_version = ? WHERE norms_version = ''",
+            (norms_version("en"),),
+        )
+        conn.commit()
+
+
+def _load_freqs_cache(modernize=False, norms_ver=None):
+    """Load cached scores for the given norms version: relpath -> scores_dict.
+
+    Only rows stamped with `norms_ver` (default: the current English allnorms
+    fingerprint) are returned, so scores computed under regenerated norms are
+    never silently served.
+    """
     if not os.path.exists(FREQS_CACHE_PATH):
         return {}
+    if norms_ver is None:
+        norms_ver = norms_version("en")
     mod_int = 1 if modernize else 0
     conn = sqlite3.connect(FREQS_CACHE_PATH)
     try:
+        _ensure_freqs_cache_schema(conn)
         rows = conn.execute(
-            "SELECT freqs_key, scores_json FROM freqs_scores WHERE modernized = ?",
-            (mod_int,),
+            "SELECT freqs_key, scores_json FROM freqs_scores "
+            "WHERE modernized = ? AND norms_version = ?",
+            (mod_int, norms_ver),
         ).fetchall()
     except sqlite3.OperationalError:
         return {}
@@ -56,27 +109,29 @@ def _load_freqs_cache(modernize=False):
     return cache
 
 
-def _save_freqs_cache(new_entries, modernize=False):
-    """Write new cache entries to sqlite. new_entries: list of (relpath, scores_dict)."""
+def _save_freqs_cache(new_entries, modernize=False, norms_ver=None):
+    """Write new cache entries to sqlite, stamped with the norms version.
+
+    new_entries: list of (relpath, scores_dict). norms_ver defaults to the
+    current English allnorms fingerprint.
+    """
     if not new_entries:
         return
     os.makedirs(os.path.dirname(FREQS_CACHE_PATH), exist_ok=True)
+    if norms_ver is None:
+        norms_ver = norms_version("en")
     mod_int = 1 if modernize else 0
     conn = sqlite3.connect(FREQS_CACHE_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS freqs_scores (
-            freqs_key TEXT NOT NULL,
-            modernized INTEGER NOT NULL,
-            scores_json TEXT NOT NULL,
-            PRIMARY KEY (freqs_key, modernized)
+    try:
+        _ensure_freqs_cache_schema(conn)
+        conn.executemany(
+            "INSERT OR REPLACE INTO freqs_scores "
+            "(freqs_key, modernized, scores_json, norms_version) VALUES (?, ?, ?, ?)",
+            [(k, mod_int, json.dumps(v), norms_ver) for k, v in new_entries],
         )
-    """)
-    conn.executemany(
-        "INSERT OR REPLACE INTO freqs_scores (freqs_key, modernized, scores_json) VALUES (?, ?, ?)",
-        [(k, mod_int, json.dumps(v)) for k, v in new_entries],
-    )
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +161,10 @@ def get_norm_dict(col="Abs-Conc.Median.median", lang="en"):
     Cached per (col, lang). Non-English languages dispatch to `get_allnorms_fr`
     / `get_allnorms_de`. Falls back to English if the column is missing from
     the requested language's allnorms (e.g. asking for a vecnorm that only
-    exists in the English table).
+    exists in the English table). The fallback result is cached under the
+    REQUESTED (col, lang) key — so the non-English pickle is not re-read on
+    every call — and a UserWarning is emitted the first time a (col, lang)
+    combination falls back (audit §4.3).
     """
     key = (col, lang)
     if key not in _NORM_DICTS:
@@ -114,7 +172,14 @@ def get_norm_dict(col="Abs-Conc.Median.median", lang="en"):
         if col not in allnorms.columns:
             if lang != "en":
                 # Column absent from non-English norms — fall back to English.
-                return get_norm_dict(col, lang="en")
+                warnings.warn(
+                    f"Norm column {col!r} not found for lang={lang!r}; "
+                    f"falling back to ENGLISH norms. Scores for this column "
+                    f"will be computed against English word ratings.",
+                    stacklevel=2,
+                )
+                _NORM_DICTS[key] = get_norm_dict(col, lang="en")
+                return _NORM_DICTS[key]
             raise KeyError(f"Norm column {col!r} not found for lang={lang!r}")
         _NORM_DICTS[key] = allnorms[col].dropna().to_dict()
     return _NORM_DICTS[key]
@@ -381,25 +446,44 @@ def _modernize_word_list(words_lower, norm_index, spelling_d):
     return result
 
 
-_NORMS_ARRAYS_CACHE = None
+# Keyed by id(allnorms), with a weakref identity check so a recycled id can
+# never serve another frame's arrays. Entries: id -> (weakref, arrays_tuple).
+_NORMS_ARRAYS_CACHE = {}
 
 
 def _get_norms_arrays(allnorms):
     """Precompute numpy arrays + word→index dict for fast scoring.
+
+    Cached per allnorms DataFrame IDENTITY (audit §4.2): scoring English then
+    French (`score_corpus_freqs(dir, allnorms=get_allnorms_fr())`) builds a
+    separate entry per frame instead of silently serving the first frame's
+    arrays. Evicted automatically when the frame is garbage-collected.
 
     Returns (word2idx, values, columns) where:
     - word2idx: dict mapping word → row index
     - values: numpy float64 array (n_words × n_cols)
     - columns: list of column names
     """
+    import weakref
     global _NORMS_ARRAYS_CACHE
-    if _NORMS_ARRAYS_CACHE is not None:
-        return _NORMS_ARRAYS_CACHE
+    if not isinstance(_NORMS_ARRAYS_CACHE, dict):
+        # Defensive: pre-versioning code (and old test fixtures) reset this
+        # global to None.
+        _NORMS_ARRAYS_CACHE = {}
+    key = id(allnorms)
+    entry = _NORMS_ARRAYS_CACHE.get(key)
+    if entry is not None:
+        ref, arrays = entry
+        if ref() is allnorms:
+            return arrays
     word2idx = {w: i for i, w in enumerate(allnorms.index)}
     values = allnorms.values.astype(np.float64)
     columns = allnorms.columns.tolist()
-    _NORMS_ARRAYS_CACHE = (word2idx, values, columns)
-    return _NORMS_ARRAYS_CACHE
+    arrays = (word2idx, values, columns)
+    cache = _NORMS_ARRAYS_CACHE
+    ref = weakref.ref(allnorms, lambda _r, _cache=cache, _key=key: _cache.pop(_key, None))
+    cache[key] = (ref, arrays)
+    return arrays
 
 
 def _score_freqs_dict_allnorms(freqs, allnorms, spelling_d=None):
@@ -506,6 +590,35 @@ def _load_done_ids(csv_path):
         return set(pd.read_csv(csv_path, usecols=["id"], dtype={"id": str})["id"])
     except Exception:
         return set()
+
+
+def _check_resume_header(csv_path, columns):
+    """Refuse to resume a score CSV whose header doesn't match `columns`.
+
+    The resumable writers append rows built from the CURRENT column set; if
+    the norms changed since the file was created (e.g. IC columns added),
+    appended rows would be silently misaligned under the old header (audit
+    §4.4). Raises ValueError telling the user to re-score with --force.
+    """
+    import csv
+    with open(csv_path, newline="") as f:
+        try:
+            existing = next(csv.reader(f))
+        except StopIteration:
+            return  # empty file — nothing to misalign
+    columns = list(columns)
+    if existing == columns:
+        return
+    existing_set, current_set = set(existing), set(columns)
+    missing = [c for c in columns if c not in existing_set][:5]
+    extra = [c for c in existing if c not in current_set][:5]
+    raise ValueError(
+        f"Cannot resume {csv_path}: its header ({len(existing)} columns) does "
+        f"not match the current column set ({len(columns)} columns) — the "
+        f"norms have likely changed since the file was created. "
+        f"Sample columns only in current set: {missing}; only in file: {extra}. "
+        f"Re-run with --force (or delete the file) to re-score from scratch."
+    )
 
 
 def score_ids_ch(ids, allnorms, shard_size=5000, verbose=False):
@@ -704,188 +817,6 @@ def score_ids_duckdb(
     return pd.concat(shards, ignore_index=True)
 
 
-def score_all_missing(
-    lang="all",
-    batch_size=10000,
-    threads=8,
-    memory_limit="32GB",
-    limit=None,
-    dry_run=False,
-):
-    """Score every text with freqs that isn't yet in scores.duckdb.
-
-    Routes each text to the correct language's norms using LLTK's
-    `texts.lang` (populated by LLTK's `detect-langs` + conservative apply
-    rule). Writes into per-language tables in scores.duckdb via
-    `write_scores()`. Idempotent — safe to rerun; only scores what's missing.
-
-    Parameters
-    ----------
-    lang : 'all' | 'en' | 'fr' | 'de'
-        Which language(s) to score. 'all' iterates en/fr/de in order.
-    batch_size : int
-        Score and flush this many texts per loop iteration. Smaller = more
-        frequent progress + memory relief; larger = less DuckDB overhead.
-    limit : int, optional
-        Cap the total number of texts scored per language (for smoke tests).
-    dry_run : bool
-        Print what would be scored without doing it.
-
-    Returns
-    -------
-    dict mapping lang → {'added': n, 'total': n_total_in_table}.
-    """
-    from .scores_db import _connect as _scores_connect, init_db as _init_scores_db, write_scores
-
-    if lang not in ("all", "en", "fr", "de"):
-        raise ValueError(f"lang must be one of 'all'|'en'|'fr'|'de', got {lang!r}")
-    langs = ["en", "fr", "de"] if lang == "all" else [lang]
-
-    import duckdb
-    import sys
-    import time
-
-    # LLTK is on ClickHouse now — no ATTACH needed, text_freqs lives at lltk.text_freqs.
-    sys.path.insert(0, os.path.expanduser("~/github/lltk"))
-    import lltk
-    lltk_conn = lltk.db.conn
-
-    _init_scores_db()
-    results = {}
-
-    for lg in langs:
-        print(f"\n=== lang={lg} ===", flush=True)
-        t0 = time.time()
-
-        # Candidate ids: texts with freqs, routed to this lang via LLTK metadb
-        candidates = [
-            r[0] for r in lltk_conn.execute(
-                f"""
-                SELECT f._id
-                FROM lltk.text_freqs f
-                JOIN lltk.texts t ON f._id = t._id
-                WHERE t.lang = '{lg}'
-                """
-            ).fetchall()
-        ]
-        print(f"  {len(candidates):,} candidate ids (lang={lg}, has freqs)", flush=True)
-
-        # Already-scored ids: query scores.duckdb on a SEPARATE conn (LLTK holds
-        # the lock on metadb; scores.duckdb is a different file so this is fine).
-        scores_con = _scores_connect(read_only=True)
-        try:
-            existing = set(
-                scores_con.execute(f"SELECT _id FROM scores_{lg}").fetchdf()["_id"]
-            )
-        except duckdb.CatalogException:
-            existing = set()
-        finally:
-            scores_con.close()
-        print(f"  {len(existing):,} already scored in scores_{lg}", flush=True)
-
-        todo = [i for i in candidates if i not in existing]
-        if limit is not None:
-            todo = todo[:limit]
-        print(f"  {len(todo):,} to score", flush=True)
-
-        if dry_run or not todo:
-            results[lg] = {"added": 0, "total": len(existing), "candidates": len(candidates)}
-            continue
-
-        # Load allnorms for this lang
-        print(f"  loading allnorms ({lg})...", flush=True)
-        if lg == "fr":
-            from .norms_fr import get_allnorms_fr as _get_allnorms
-        elif lg == "de":
-            from .norms_de import get_allnorms_de as _get_allnorms
-        else:
-            from .norms import get_allnorms as _get_allnorms
-        allnorms = _get_allnorms(remove_stopwords=True)
-        allnorms = allnorms[allnorms.index.notna() & ~allnorms.index.duplicated()]
-        print(f"  allnorms: {allnorms.shape[0]:,} words x {allnorms.shape[1]} cols", flush=True)
-
-        # Pipeline CH read + scoring: fetch next batch's freqs while scoring
-        # the current one. Hides ~30s CH roundtrip on top of ~50s numpy work.
-        from concurrent.futures import ThreadPoolExecutor
-
-        # Pre-materialize allnorms for the numpy scorer (done once).
-        an_vals = allnorms.values.astype(np.float32)
-        an_index_map = {w: i for i, w in enumerate(allnorms.index)}
-        vals_0nan = np.nan_to_num(an_vals, nan=0.0)
-        val_mask_f = (~np.isnan(an_vals)).astype(np.float32)
-        score_cols = list(allnorms.columns)
-
-        def _fetch(batch_ids):
-            return lltk.db.read_freqs(ids=batch_ids, as_df=True)
-
-        def _score(freqs_df):
-            if freqs_df is None or len(freqs_df) == 0:
-                return pd.DataFrame(columns=["_id"] + score_cols)
-            n = len(freqs_df)
-            rows = np.full((n, len(score_cols)), np.nan, dtype=np.float32)
-            out_ids = [None] * n
-            for ti, (_id, freqs) in enumerate(zip(freqs_df["_id"], freqs_df["freqs"])):
-                out_ids[ti] = _id
-                if not freqs:
-                    continue
-                idxs = np.fromiter(
-                    (an_index_map.get(w, -1) for w in freqs.keys()),
-                    dtype=np.int64, count=len(freqs))
-                cnts = np.fromiter(freqs.values(), dtype=np.float32, count=len(freqs))
-                mask = idxs >= 0
-                if not mask.any():
-                    continue
-                idxs, cnts = idxs[mask], cnts[mask]
-                num = (vals_0nan[idxs] * cnts[:, None]).sum(axis=0)
-                den = (val_mask_f[idxs] * cnts[:, None]).sum(axis=0)
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    rows[ti] = np.where(den > 0, num / den, np.nan)
-            df = pd.DataFrame(rows, columns=score_cols)
-            df.insert(0, "_id", out_ids)
-            return df
-
-        added = 0
-        t_score = time.time()
-        n_batches = (len(todo) + batch_size - 1) // batch_size
-        with ThreadPoolExecutor(max_workers=1) as fetcher:
-            # Prime the pipeline by fetching batch 0
-            prefetch = fetcher.submit(
-                _fetch, todo[0 : batch_size]
-            ) if todo else None
-
-            for bi in range(0, len(todo), batch_size):
-                batch_ids = todo[bi : bi + batch_size]
-                ts = time.time()
-                # Grab currently-prefetching batch
-                freqs_df = prefetch.result() if prefetch is not None else None
-                # Kick off next prefetch (in parallel with our scoring below)
-                next_start = bi + batch_size
-                if next_start < len(todo):
-                    next_ids = todo[next_start : next_start + batch_size]
-                    prefetch = fetcher.submit(_fetch, next_ids)
-                else:
-                    prefetch = None
-                # Score this batch
-                df = _score(freqs_df)
-                if len(df):
-                    write_scores(df, lang=lg, upsert=False)
-                    added += len(df)
-                rate = (bi + len(batch_ids)) / max(time.time() - t_score, 0.01)
-                remaining = len(todo) - (bi + len(batch_ids))
-                eta_min = remaining / max(rate, 1.0) / 60
-                print(
-                    f"  batch {bi // batch_size + 1}/{n_batches}: "
-                    f"scored {len(df)}/{len(batch_ids)} in {time.time() - ts:.1f}s "
-                    f"[added={added:,}, rate={rate:.0f}/s, ETA={eta_min:.1f} min]",
-                    flush=True,
-                )
-
-        print(f"  done: added {added:,} rows for lang={lg} in {time.time() - t0:.0f}s", flush=True)
-        results[lg] = {"added": added, "total": len(existing) + added, "candidates": len(candidates)}
-
-    return results
-
-
 def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
                        modernize=False):
     """Score all freqs/*.json files in a corpus directory against all norms.
@@ -927,6 +858,8 @@ def score_corpus_freqs(corpus_dir, allnorms=None, output_path=None,
     writer = None
     if output_path:
         file_exists = os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        if file_exists:
+            _check_resume_header(output_path, columns)
         csv_file = open(output_path, "a", newline="")
         import csv
         writer = csv.DictWriter(csv_file, fieldnames=columns, extrasaction="ignore", restval="")
@@ -1116,6 +1049,8 @@ def score_all_corpora(
         print(f"  {cid}: {len(done_ids)} done, {len(work_items)} to score")
 
         file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        if file_exists:
+            _check_resume_header(out_path, columns)
         fh = open(out_path, "a", newline="")
         writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
         if not file_exists:
@@ -1490,6 +1425,8 @@ def score_arc_corpora(
             continue
 
         file_exists = os.path.exists(out_path) and os.path.getsize(out_path) > 0
+        if file_exists:
+            _check_resume_header(out_path, columns)
         fh = open(out_path, "a", newline="")
         writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
         if not file_exists:

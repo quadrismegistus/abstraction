@@ -7,6 +7,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 
 from ...config import PATH_DATA
+from ...norms import norms_version
 from ...scoring import score_freqs, score_psg
 from ..models import TrajectoryChunk, TrajectoryResponse
 from ..validation import validate_col, validate_corpus_name, validate_text_id
@@ -17,12 +18,20 @@ DEFAULT_COL = "Abs-Conc.Median.median"
 CACHE_DIR = os.path.join(PATH_DATA, "stash", "trajectories")
 
 
-def _cache_path(corpus: str, text_id: str, chunk_size: int, col: str):
+def _cache_path(corpus: str, text_id: str, chunk_size: int, col: str,
+                norms_ver: str = ""):
+    """On-disk cache path for a trajectory.
+
+    The allnorms fingerprint is baked into the filename (audit §4.1) so that
+    regenerating the norms self-invalidates the cache: files written under
+    old norms simply stop matching and become orphans.
+    """
     safe_col = col.replace(".", "_")
     safe_id = text_id.replace("/", "__")
     d = os.path.join(CACHE_DIR, corpus)
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"{safe_id}_n{chunk_size}_{safe_col}.json")
+    suffix = f"_{norms_ver}" if norms_ver else ""
+    return os.path.join(d, f"{safe_id}_n{chunk_size}_{safe_col}{suffix}.json")
 
 
 def _load_cached(path):
@@ -229,7 +238,13 @@ def get_trajectory(
         key = col if not period_matched else col + "_pm"
         if resolved != "en":
             key = f"{key}_{resolved}"
-        return _cache_path(corpus, text_id, chunk_size, key)
+        # Non-English scoring can fall back to English norms for columns
+        # missing from the language's allnorms (scoring.get_norm_dict), so
+        # stamp non-English caches with BOTH fingerprints.
+        ver = norms_version(resolved)
+        if resolved != "en":
+            ver = f"{ver}-{norms_version('en')}"
+        return _cache_path(corpus, text_id, chunk_size, key, norms_ver=ver)
 
     # Early lang guess from corpus default + explicit query param, used for the
     # first cache lookup. Per-text `meta['lang']` may override later.
