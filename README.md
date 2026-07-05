@@ -293,70 +293,170 @@ data/
 | `config.py` | Path constants and hyperparameters (`ZCUT`, `COUNT_WINDOW_LEN`, etc.) |
 | `corpus.py` | `Corpus` class, `load_corpus()`, `pmap()`/`pmap_iter()` for parallelism |
 | `tokenize.py` | Tokenization, spelling modernization, stopword filtering |
-| `norms.py` | Load/combine psycholinguistic norms, classify words, z-score, semantic fields |
+| `norms.py` | English psycholinguistic norms: load/combine, classify words, z-score, semantic fields |
+| `norms_fr.py` | French word norms (Bonin 2018 concreteness + Desrochers 2009 imageability); mirrors `norms.py`'s schema |
+| `norms_de.py` | German word norms (7 human-rated sources; Kanske reverse-coded) |
+| `norms_es.py` | Spanish word norms (Guasch 2015 + optional EsPal) |
 | `counting.py` | Sliding-window abstract/concrete word counting |
-| `scoring.py` | Text/passage scoring, corpus-level frequency scoring, passage sampling |
+| `scoring.py` | Text/passage scoring; current CH/DuckDB scorers (`score_ids_ch`, `score_ids_duckdb`) plus the legacy CSV-walking scorers |
+| `aggregate.py` | Aggregates per-text ClickHouse scores into arc-level DataFrames; `get_arc_scores(dedup="within_lang_group"|"rep_only")` |
+| `corpus_correction.py` | Corpus bias estimation from within-match-group comparisons (fixed-effects estimator) |
+| `scores_db.py` | DEPRECATED — legacy pre-ClickHouse DuckDB scores store (`scores.duckdb`); read-only archaeology, nothing writes to it anymore |
 | `models.py` | Word2Vec training, vector field computation, historical vector norms |
-| `analysis.py` | Score loading, corpus adjustment, piecewise/polynomial arc fitting |
+| `analysis.py` | Arc detection/quantification: piecewise/LOESS fitting, decade reports, shift-share decomposition helpers |
 | `words.py` | Word-trend analysis: frequency correlation, contribution decomposition, score shifts |
 | `passages.py` | Per-word HTML/PNG passage visualization for print |
 | `plotting.py` | plotnine-based visualization (norm plots, arc plots, LOESS) |
 | `llm.py` | LLM text generation with litellm + hashstash caching |
-| `cli.py` | CLI entrypoint (`abstraction score-corpora`, `score-corpus`, etc.) |
+| `app/` | FastAPI backend: `db.py` (ClickHouse client + `init_db()` + `CHConn` compat shim), `validation.py` (SQL/path param checks), `routes/{arc,decompose,meta,passage,trajectory}.py`; paired with the `frontend/` SvelteKit UI, served via `abstraction app` |
+| `cli.py` | CLI entrypoint (20 subcommands — see CLI section below) |
 | `utils.py` | DataFrame I/O, streaming CSV writer, z-scoring, HTML cleaning |
 
 ## CLI
 
-```bash
-# Score all corpora with freqs/ directories
-abstraction score-corpora [--force] [--modernize]
+20 subcommands, grouped below (`abstraction <command> --help` for full flag lists).
 
-# Score a single corpus
+### Scoring
+
+```bash
+# Score corpora with freqs/ directories to CSV (default: arc corpora only)
+abstraction score-corpora [corpora ...] [--all] [--force] [--workers N] [--modernize]
+
+# Score a single corpus by directory name
 abstraction score-corpus canon_fiction [--force] [--modernize]
 
-# Count abstract/concrete words per corpus
-abstraction count-corpora [--norms Median] [--force] [--modernize]
-abstraction count-corpus canon_fiction [--force] [--modernize]
+# Score synthetic arc corpora (deduplicated by genre) to CSV
+abstraction score-arcs [arcs ...] [--force] [--workers N] [--modernize]
 
-# Report arc statistics
-abstraction report-arc [--modernize]
-abstraction report-arc-counts [--abs-cutoff -1.0] [--conc-cutoff 1.0] [--modernize]
+# Score an LLTK corpus's texts via DuckDB freqs DB, 1:1 (no match-group averaging)
+abstraction score-ids <corpus> [--lang en|fr|de|es] [--force] [--output PATH] [--shard-size N]
 
-# Combined report (scores + counts + prose)
+# Score all passages in lltk.passages, write to abstraction.passage_scores (ClickHouse)
+abstraction score-passages [--lang en|fr|de] [--batch-size N] [--force]
+
+# Estimate corpus bias coefficients from within-match-group comparisons
+abstraction estimate-corpus-bias [--lang en|fr|de|es] [--score-col COL] [--reference CORPUS] [--min-overlap N]
+
+# Check freqs/ coverage for corpora
+abstraction check-freqs [corpus]
+
+# Unpack hathi_englit TSV archives into freqs JSONs
+abstraction fix-hathi-englit [--genres fiction,poetry]
+```
+
+### Counting
+
+```bash
+# Count z-score distributions for all corpora with freqs/
+abstraction count-corpora [--force] [--norms NORMS] [--modernize]
+
+# Count z-score distributions for a single corpus
+abstraction count-corpus canon_fiction [--force] [--norms NORMS] [--modernize]
+```
+
+### Reporting
+
+```bash
+# Combined report: scores + word proportions + prose
 abstraction report-full [-o report.md] [--csv results.csv] [--modernize]
 abstraction report-full --compare [-o comparison.md]   # raw vs modernized side-by-side
+
+# Piecewise arc statistics per genre (continuous scores)
+abstraction report-arc [--genres Fiction,Poetry,Periodical] [--min-year Y] [--max-year Y] [--csv FILE] [--modernize]
+
+# Arc statistics using word proportions (abstract/concrete %)
+abstraction report-arc-counts [--abs-cutoff -1.0] [--conc-cutoff 1.0] [--norm COL] [--csv FILE] [--modernize]
+
+# Shift-share (Oaxaca-Blinder) decomposition of abstractness change by genre tags
+abstraction genre-tag-shift --period-a 1700-1750 --period-b 1800-1850 \
+    [--arc arc_fiction] [--col Abs-Conc.Median.median] [--facet form|mode|register|flat|all] [--min-count N] [--csv FILE]
+```
+
+### Training & vector norms
+
+```bash
+# Generate skipgram files from a corpus by period
+abstraction train-skipgrams CanonFiction [--period-len 100] [--workers N] [--force] [--output-dir DIR] [--fast] [--max-skipgrams N]
+
+# Train a single Word2Vec model from a skipgrams file
+abstraction train-model data/models/.../skipgrams.txt.gz [--runs N] [--workers N] [--dims 100] [--window 10] [--verbose]
+
+# Train Word2Vec models for every skipgrams file under a directory
+abstraction train-all data/models_century5 [--runs 5] [--workers N] [--dims 100] [--window 10] [--verbose]
+
+# Generate IC (information content) norms from model vocabularies
+abstraction gen-icnorms [--model-dir data/models/]
+
+# Generate vector norms (Abs-Conc.*) from trained models
+abstraction gen-vecnorms [--lang en|fr|de|es] [--period-len 100] [--model-dir DIR] [--workers N]
+```
+
+### Web app
+
+```bash
+# Start the web app (FastAPI backend + SvelteKit frontend);
+# --refresh rebuilds the ClickHouse abstraction.scores / scores_rep tables + views
+abstraction app [--backend-only] [--frontend-only] [--host HOST] [--port PORT] [--frontend-port PORT] [--refresh]
 ```
 
 ## Notebooks
 
-| Notebook | Description |
-|----------|-------------|
+25 notebooks under `notebooks/`. `*-executed.ipynb` files alongside a few of these are papermill output copies (gitignored), not separate notebooks.
+
+| Notebook | Topic |
+|----------|-------|
 | `01-word-norms` | Load and explore psycholinguistic norms, classify words, visualize across sources |
 | `02-counting` | Score passages, sliding-window counting, compare abstract vs. concrete text |
 | `03-fiction-trends` | Plot abstraction trends across fiction history by genre |
 | `04-passages` | Find extreme passages, stratified sampling, per-book passage generation |
 | `05-models` | Inspect Word2Vec models, explore word neighborhoods, vector norms pipeline |
 | `06-corpus` | Explore the Corpus class, list available corpora, read and tokenize texts |
-| `07-arc-analysis` | Cross-corpus arc fitting, LOESS vs parametric, genre comparisons |
+| `07-arc-analysis` / `07-arc-analysis-v2` | Cross-corpus arc fitting, LOESS vs parametric, genre comparisons |
+| `08-character-abstraction` | Character abstraction via bimodal character-quote networks + quote scoring |
+| `09-character-intros` | Character-introduction classification analysis (BookNLP-derived) |
+| `10-discrimination-analysis` | Ch5: cross-task (lltk/largeliterarymodels/abstraction) discrimination analysis |
+| `11-passage-abstractness` | Ch5: passage abstractness broken down by narratological annotation tag |
+| `12-embedding-variance-partition` | dbRDA variance partitioning on e5 passage embeddings (content vs. form vs. genre vs. period) |
+| `13-ch5-cross-language` | Ch5: cross-language (English vs. French) passage content comparison |
+| `14-umap-exploration` | UMAP exploration of passage and text embeddings |
+| `15-character-naming` | Character naming conventions across the rise of the novel |
+| `16-plot-genre` | Plot-genre annotations across the rise of the novel |
+| `17-subgenre` | Subgenre annotations, pre-1800 fiction |
+| `18-character-types` | Character archetype + social class x abstractness |
+| `19-setting-abstractness` | Setting x passage abstractness, Path A annotation scheme |
+| `ESTCCounts` / `-2` / `-3` | Legacy ESTC bibliography title-word and genre-term counting exploration; imports a `book_history` helper module no longer in the package, so not runnable as-is |
+| `ESTCMatch` | Legacy ESTC/ECCO/EEBO metadata-matching exploration; same stale-import caveat as above |
+| `LLMPsgs2-Analyze-Pamela` | Legacy `abslithist`-era LLM passage-annotation analysis for Richardson's *Pamela* |
+| `PamelaPassages` | Legacy LLM passage-scoring prototype for *Pamela*, precursor to the current passage-annotation pipeline (`largeliterarymodels`) |
 
 ## Tests
 
 ```bash
 source .venv/bin/activate
 python -m pytest tests/ -v
+
+# Skip tests that need local data files / corpora (~/lltk_data, data/fields/):
+python -m pytest tests/ -v -m "not integration"
 ```
+
+`tests/conftest.py` owns the norm-mocking contract shared across files (`install_fake_norms`, autouse cache-reset fixtures for `scoring._NORM_DICTS`/`_NORMS_ARRAYS_CACHE`) and registers the `integration` and `slow` pytest markers.
 
 | Test file | Coverage |
 |-----------|----------|
-| `test_corpus.py` | camel_to_snake, pmap |
+| `test_corpus.py` | camel_to_snake, `Corpus` class (metadata/text_path/read_text), pmap |
 | `test_tokenize.py` | tokenize, tokenize_agnostic, strip_punct |
 | `test_norms.py` | classify_word, get_contrasts, format_norms_as_long |
 | `test_utils.py` | zfy, read/save_df, get_avgs_df, get_slices, cleanhtml, parse_json_str |
-| `test_scoring.py` | score_freqs, score_words, corpus scoring pipeline |
+| `test_scoring.py` | score_freqs, score_words, walk_freqs, corpus scoring pipeline |
+| `test_pct_scoring.py` | `_pct_abs`/`_pct_conc` frequency-proportion columns, assign_period_score |
+| `test_counting.py` | count_absconc, count_absconc_psg sliding-window edge cases |
+| `test_corpus_correction.py` | connected components, estimate_corpus_bias (exact recovery, SEs), save/load coefficients |
 | `test_plotting.py` | _compress_year |
-| `test_passages.py` | _word_style scaling, render_body, HTML rendering, flags, PNG export |
+| `test_passages.py` | _word_style scaling, render_body, HTML rendering, flags, PNG export (marked `slow`) |
 | `test_words.py` | frequency correlation, contribution decomposition, score shifts |
-| `test_integration.py` | End-to-end pipeline (requires local data) |
+| `test_cli.py` | `--help` exit codes, score-corpus/score-corpora end-to-end via a fixture corpus |
+| `test_ci_integration.py` | Cross-module flows against the bundled fixture corpus/norms under `tests/fixtures/` — no local data required |
+| `test_integration.py` | End-to-end pipeline against real local norms + `~/lltk_data/corpora/canon_fiction` (marked `integration`; auto-skips if data is absent) |
 
 ## Key concepts
 
@@ -439,3 +539,15 @@ abstraction score-corpus canon_fiction [--force]
 ```
 
 Scores are written as incremental CSVs to `data/scores/v8-raw/` (one per corpus, one row per text, 56 norm columns). The arc analysis pipeline then loads these, merges with corpus metadata, applies corpus fixed effects (`adjust_scores()`), and fits piecewise or LOESS trends per genre.
+
+### ClickHouse (current scores store)
+
+The CSV pipeline above is the original path (still used for local per-corpus analysis, and the numbers in "The central finding" above). Since 2026-04-19 the primary scores store backing the web app and arc aggregation is ClickHouse, on the same server LLTK uses (`localhost:8123`, user `lltk`):
+
+- **`abstraction.scores_{en,fr,de,es}`** hold raw per-text scores, 1:1 with `lltk.texts` — populated via `score_ids_ch()` (`scoring.py`) / `scripts/score_serverside_ch.py`'s server-side `INSERT ... SELECT` (minutes vs. hours client-side).
+- **`get_arc_scores()`** (`aggregate.py`) aggregates those per-text rows into arc-level DataFrames, JOINing through `lltk.match_groups FINAL` to average scores within a match group (`dedup="within_lang_group"`) or to pick one representative per group (`dedup="rep_only"`).
+- **`abstraction.scores` / `scores_rep`** (and the `abstraction.texts` / `texts_rep` views built on top) are produced from that aggregation by `init_db()` (`app/db.py`) — this is what `abstraction app --refresh` rebuilds, and what the FastAPI routes query through the `CHConn` DuckDB-compatibility shim.
+- **Corpus-bias correction**: per-corpus transcription-bias coefficients (OCR quality, edition selection, etc.) are estimated from within-match-group comparisons — `abstraction estimate-corpus-bias --lang en|fr|de|es` (`corpus_correction.py`) — and saved to `data/scores/corpus_bias_coefficients[_{fr,de,es}].json`. The web app's corpus-corrected toggle and `adjust_scores()` consume these.
+- The old per-corpus CSV pipeline (`data/scores/v8-raw/*.csv`) predates the ClickHouse cutover and is still actively used for corpus-level analysis; `scores_db.py`'s DuckDB store (`scores.duckdb`) is a fully deprecated read-only shim — nothing writes to it anymore.
+
+Using the ClickHouse-backed commands (`estimate-corpus-bias`, `score-passages`, `app`, `genre-tag-shift`) requires `pip install clickhouse-connect` and a ClickHouse server reachable at `localhost:8123`.
