@@ -27,35 +27,23 @@ All three coefficient files regenerated with the corrected FE estimator (disk fr
 - Regeneration is now reproducible: `abstraction estimate-corpus-bias --lang en|fr|de|es`. Non-EN loads from `abstraction.scores_{lang}` joined to `lltk.match_groups FINAL`, restricted to **native corpora** — scores_fr/de also contain foreign-language texts from `ecco`/`txtlab` etc., and a coefficient saved under those names would collide with the English ones in `load_all_corpus_bias()`'s merged dict. `estimate_corpus_bias` now raises if the reference corpus is absent (previously it silently re-based).
 - **Follow-up for the author**: the corrected-arc view will visibly change (ecco's correction more than doubled, and ecco is a major C18 source) — re-check any figures/prose that used the corpus-corrected toggle, and restart the web app so it reloads the JSONs.
 
-### 2. Cache invalidation family (§4.1–4.4)
-Design: one `norms_version()` helper (hash of `PATH_ALLNORMS` mtime + column names) stamped into every cache:
-- `freqs_cache.db` (`scoring.py` — keyed only by relpath+modernized; serves stale scores after norm regeneration)
-- `_NORMS_ARRAYS_CACHE` (`scoring.py:384-402` — **keyless**: can serve English arrays for French scoring; the test suite clears it, production does not)
-- `get_norm_dict` EN-fallback (`scoring.py:114-117` — silent, and uncached so it re-reads the 425MB pickle every call)
-- Web app trajectory JSON cache (`app/routes/trajectory.py:19-34`)
-- CSV resume header check (`scoring.py:932,1121,1495` — appends current-schema rows under stale headers)
+### 2. ~~Cache invalidation family (§4.1–4.4)~~ DONE 2026-07-05 (commit `dc5fa31`)
+`norms_version(lang)` fingerprint (norms.py) now stamps: `freqs_cache.db` (versioned column; legacy rows stamped with the version current at migration; `corpus_correction`'s query contract preserved), `_NORMS_ARRAYS_CACHE` (keyed by allnorms identity — cross-language contamination fixed), `get_norm_dict` EN-fallback (warns once, caches under requested key), trajectory JSON cache (fingerprint in filename), CSV resume (refuses on header mismatch). 22 regression tests.
 
-### 3. Retire the dead DuckDB shadow (§5)
-`abstraction score-missing` still writes to `scores.duckdb`, which nothing reads post-CH-cutover (2026-04-19). Rewire to `score_ids_ch` or delete the command; add `DeprecationWarning` to `scores_db.py` and drop its `__init__.py` re-exports. Also consider promoting `scripts/score_serverside_ch.py` (server-side INSERT…SELECT, much faster) into the CLI.
+### 3. ~~Retire the dead DuckDB shadow (§5)~~ DONE 2026-07-05 (commits `7080d5c`, `dc5fa31`)
+`score-missing` removed; `score_all_missing` deleted; `scores_db.py` deprecated (import + write warnings; read path kept for archaeology); package-root re-exports removed. Still open from this item: promoting `scripts/score_serverside_ch.py` into the CLI.
 
-### 4. Research-validity pass before finalizing book numbers (§2)
-Each is a one-file fix; see audit §2 for file:line detail:
-- `report_full` labels count-based values with score-based decades (§2.1)
-- Histogram vs live `pct_abstract` disagree (±3z truncation + boundary convention) (§2.2)
-- `per_feature_r2`: center y before no-intercept lstsq (§2.3)
-- `norm_period` mislabels median-fallback texts in FE analyses (§2.4)
-- Schmidtke DE supplement z-scored on its own subpopulation (§2.6)
-- EN vs FR/DE/ES `remove_stopwords` semantics differ (180K list vs ~200 NLTK) (§2.7)
-- Passage HTML drops `:`, `"`, `(`, `)` — affects print figures (§2.8, fix in `tokenize.py:93` display path)
-- Seed `plot_norms` sampling for reproducible figures (§2.9)
-- CH/DuckDB scorers omit `_pct_abs/_pct_conc` columns the legacy path computed (§2.10)
+### 4. ~~Research-validity pass (§2)~~ DONE 2026-07-05 except §2.10 (commits `cc0abd8`, `b662fd9`, `45539f7`)
+Fixed: report_full decade mislabeling; per_feature_r2 centering; norm_period median-fallback labeling (+`period_score_source` column); DE Schmidtke single-population z-scoring (**changes 18/6,682 DE words, 7 flip classification — regenerate `get_orignorms_de(force=True)` → `get_allnorms_de(force=True)` when convenient; vecnorm retraining not warranted**); FR/DE/ES stopword case-handling (zero effect on current stored data — forward-looking); lossless passage rendering (`:"()` survive; scoring byte-identical); seeded plot_norms; ±1.0 boundary inclusive + legend generated from `_word_style`; pct_abstract boundary-bin fold-in; report_arc corpus-balanced magnitudes; post-selection caveat lines.
+**Still open — §2.10**: CH/DuckDB scorers omit the `_pct_abs/_pct_conc` frequency-proportion columns the legacy path computed; adding them means a CH schema migration for `scores_{en,fr,de,es}` (new columns + re-score or backfill).
 
 ### 5. Remaining audit backlog
-- §5 crashes/bugs not yet fixed: `pmap` pickling (`train-skipgrams --workers`), `gen-vecnorms --workers` no-op, `int(NaN)` report crashes, plotting bugs (`min_y` compression, `facet_by_genre`, `_savefig` cwd), `words.py` NaN/cosine issues, `_biny` NaN→1400, `save_bookpassages` index-as-position, gzip-as-text counting (`counting.py:126-131`), `aggregate.py:219` LIKE wildcard.
-- §9 docs: README documents 10/21 CLI commands, never mentions ClickHouse; CLAUDE.md module table omits `analysis.py`/`words.py`/`passages.py`/`norms_es.py`.
-- §10 structure: `analysis.py` split proposal (arcfit/reports/loading_legacy/embeddings); consolidate the 4 numpy scorer copies; delete confirmed-dead functions (list in §10).
-- §11 performance: push app aggregation into CH `GROUP BY`; fix `list_corpora` N+1.
-- Push discipline: CI runs `pytest tests/ --ignore=tests/test_integration.py` on pushes to main (`.github/workflows/tests.yml`); keep it green.
+- §5 bugs still unfixed: `pmap` pickling crash (`train-skipgrams --workers N`, `counting.py incl_psg` path), `gen-vecnorms --workers` silent no-op, `words.py` NaN/cosine issues, `_biny` NaN→1400 binning, `save_bookpassages` index-as-position, gzip-as-text counting (`counting.py:126-131`), `aggregate.py:219` LIKE `_` wildcard.
+- New (found 2026-07-05 during fixes): `adjust_scores` does not forward its `search_range`/`search_step` args to the internal `fit_piecewise` call (analysis.py) — callers passing a custom range silently get the default (1650, 1850).
+- §10 structure: `analysis.py` split proposal (arcfit/reports/loading_legacy/embeddings); consolidate the 4 numpy scorer copies in scoring.py; delete confirmed-dead functions (inventory in audit §10); one `ruff` pass for unused imports.
+- §11 performance: push app aggregation into CH `GROUP BY`; fix `list_corpora` N+1; frontend texts-page pagination.
+- Legacy `ESTCCounts*`/`ESTCMatch` notebooks import a `book_history` module that no longer exists (flagged in README) — port or archive.
+- `llm.py` was removed 2026-07-05 (commit `c97eb17`, zero callers; LLM work lives in largeliterarymodels). §9 README refresh done (`d17c8ce`).
 
 ## Operational notes (things not obvious from the code)
 
