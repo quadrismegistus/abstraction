@@ -7,7 +7,6 @@ import os
 from collections import Counter
 
 import pandas as pd
-from tqdm import tqdm
 
 from .config import (
     COUNT_DIR, COUNT_WINDOW_LEN, MODERNIZE_SPELLING,

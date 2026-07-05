@@ -12,10 +12,10 @@ import pandas as pd
 from tqdm import tqdm
 
 from .config import (
-    FIELD_DIR, SOURCE_DIR, ZCUT, PATH_NORMS, PATH_ALLNORMS, PATH_VECNORMS,
-    PATH_ICNORMS, REMOVE_STOPWORDS, BAD_SOURCES,
+    SOURCE_DIR, ZCUT, PATH_NORMS, PATH_ALLNORMS, PATH_VECNORMS,
+    PATH_ICNORMS, REMOVE_STOPWORDS,
 )
-from .tokenize import get_stopwords, get_stopwords_and_names
+from .tokenize import get_stopwords_and_names
 from .utils import zfy, download_tqdm, read_df, save_df
 
 
@@ -299,7 +299,7 @@ def format_norms_as_long(dfnorms, zcut=ZCUT):
     rows = []
     for col in dfnorms.columns:
         parts = col.split(".")
-        contrast, source = parts[0], parts[1]
+        source = parts[1]
         period = parts[2] if len(parts) > 2 else ""
         source_label = f"{source}.{period}" if period else source
         source_type = "Conc" if source.split("-")[-1] == "Conc" else "Imag"

@@ -11,11 +11,10 @@ import asyncio
 import html as html_mod
 import os
 import re
-import textwrap
 
 import numpy as np
 
-from .scoring import score_words, get_norm_dict, _modernize_score
+from .scoring import get_norm_dict, _modernize_score
 from .tokenize import get_spelling_modernizer
 
 

@@ -6,7 +6,6 @@ vector field computation, and distance calculations.
 import gzip
 import os
 import random
-import time
 from collections import defaultdict
 
 import gensim
@@ -16,12 +15,11 @@ from tqdm import tqdm
 
 from .config import (
     PATH_MODELS, MODEL_MIN_COUNT, MODEL_NUM_DIM,
-    MODEL_PERIOD_LEN, PATH_VECNORMS, FIELD_DIR,
+    MODEL_PERIOD_LEN, PATH_VECNORMS,
 )
-from .corpus import load_corpus, pmap, pmap_iter
+from .corpus import load_corpus, pmap
 from .norms import get_origcontrasts, _add_series_to_norms
 from .tokenize import tokenize, tokenize_sentences
-from .utils import zfy
 
 
 # ---------------------------------------------------------------------------

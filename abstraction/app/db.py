@@ -15,7 +15,7 @@ DuckDB-compatibility shim (`CHConn`) so the existing `conn.execute(sql, params)
 """
 
 import threading
-from typing import Any, Optional, Sequence
+from typing import Optional, Sequence
 
 import clickhouse_connect
 import pandas as pd

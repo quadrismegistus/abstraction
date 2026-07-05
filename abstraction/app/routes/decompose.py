@@ -169,7 +169,6 @@ def _parse_genre_raw(genre_raw: str | None) -> str:
 
 def _decompose(df_early, df_late, cat_col, min_texts=5):
     """Run shift-share decomposition on two DataFrames with _score and cat_col."""
-    import numpy as np
 
     if len(df_early) == 0 or len(df_late) == 0:
         return None
@@ -259,7 +258,6 @@ def shift_share(
     - By is_translated: how much is translation vs original?
     """
     import pandas as pd
-    import numpy as np
     from ...analysis import assign_period_score
 
     col = validate_col(col)
@@ -494,7 +492,6 @@ def _corpus_controlled_decompose(early, late, min_texts=5):
     Only uses corpora present in both periods. Runs genre_raw decomposition
     within each such corpus, then averages the effects weighted by corpus size.
     """
-    import numpy as np
 
     # Find corpora present in both periods with enough texts
     early_corpora = set(early["corpus_name"].unique())

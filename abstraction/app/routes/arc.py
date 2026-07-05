@@ -80,7 +80,7 @@ def arc_texts(
 ):
     """Return paginated scored texts for scatter plot overlay."""
     import pandas as pd
-    from ...analysis import assign_period_score, CENTURY_BINS
+    from ...analysis import assign_period_score
 
     col = validate_col(col)
     col_parts = col.split(".")
@@ -204,10 +204,7 @@ def arc_aggregate(
     Each text contributes equally regardless of which corpus it comes from.
     No corpus fixed effects. Just bin by year, mean, LOESS.
     """
-    import pandas as pd
-    import numpy as np
-    from ...analysis import assign_period_score, CENTURY_BINS
-    from ..models import AggGenreArc, AggBinPoint
+    from ...analysis import assign_period_score
 
     col = validate_col(col)
     col_parts = col.split(".")
@@ -611,7 +608,6 @@ def arc_print(arcs: list[GenreArc]):
     matplotlib.use("Agg")
     import plotnine as p9
     import pandas as pd
-    import numpy as np
     from fastapi.responses import FileResponse
     from starlette.background import BackgroundTask
     from ...config import PATH_DATA

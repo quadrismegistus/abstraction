@@ -12,8 +12,7 @@ from scipy.stats import zscore
 from .config import PATH_FIGS, SOURCES_FOR_PLOTTING, BAD_SOURCES
 from .corpus import load_corpus
 from .norms import (
-    format_norms_as_long, get_orignorms, get_allnorms, NORM_SOURCE_ORDER,
-    classify_word,
+    format_norms_as_long, get_allnorms, NORM_SOURCE_ORDER,
 )
 
 # Print/export resolution for saved figures. Previously set globally via

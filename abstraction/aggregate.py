@@ -59,7 +59,7 @@ def _load_arc_reps(arc: str) -> list[str]:
 
 def _resolve_score_cols(ch, table: str, score_cols) -> list[str]:
     if score_cols is None:
-        cols = ch.query(f"SELECT name FROM system.columns WHERE database='abstraction' AND table=%(t)s ORDER BY position",
+        cols = ch.query("SELECT name FROM system.columns WHERE database='abstraction' AND table=%(t)s ORDER BY position",
                         parameters={"t": table}).result_rows
         score_cols = [r[0] for r in cols if r[0] != "_id"]
     score_cols = list(score_cols)

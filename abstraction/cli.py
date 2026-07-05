@@ -270,7 +270,7 @@ def cmd_train_model(args):
     if args.num_skips:
         print(f"  num_skips={args.num_skips:,}")
     else:
-        print(f"  num_skips=all (no cap)")
+        print("  num_skips=all (no cap)")
     t0 = time.time()
     gen_model(
         skipgram_path,
@@ -567,7 +567,6 @@ def cmd_score_passages(args):
     extract any score: scores['Abs-Conc.Median.median']. Tokenization uses
     tokenize_agnostic (regex word-boundary splitter, not str.split).
     """
-    import time
     import clickhouse_connect
     from .aggregate import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD
     from .scoring import score_text_allcols, build_allnorms_index
@@ -669,7 +668,7 @@ def cmd_score_passages(args):
 
             offset += batch_size
 
-    print(f"  done")
+    print("  done")
     client.close()
 
 

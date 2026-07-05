@@ -17,7 +17,6 @@ Mirrors English/French/German schema exactly.
 import os
 from collections import defaultdict
 
-import numpy as np
 import pandas as pd
 
 from .config import (
@@ -25,7 +24,7 @@ from .config import (
     PATH_VECNORMS_ES, PATH_ALLNORMS_ES, ZCUT,
 )
 from .norms import _add_series_to_norms, get_contrasts, classify_word
-from .utils import zfy, read_df, save_df
+from .utils import read_df, save_df
 
 
 _NLTK_STOPWORDS_ES = None

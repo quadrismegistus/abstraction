@@ -13,12 +13,11 @@ from tqdm import tqdm
 
 import sqlite3
 
-from .config import COUNT_DIR, DIST_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA, PATH_FREQS_DB
+from .config import COUNT_DIR, PSGS_DIR, SCORES_DIR, PATH_CORPORA, PATH_FREQS_DB
 from .corpus import load_corpus
 from .norms import get_allnorms, norms_version
 from .tokenize import tokenize_agnostic, get_spelling_modernizer
-from .counting import count_absconc, count_absconc_path
-from .utils import read_df, save_df
+from .counting import count_absconc_path
 
 
 # ---------------------------------------------------------------------------

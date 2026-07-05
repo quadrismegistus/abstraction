@@ -14,8 +14,8 @@ import pandas as pd
 from scipy.stats import zscore
 from tqdm import tqdm
 
-from .config import PATH_CORPORA, SCORES_DIR
-from .corpus import load_corpus, _camel_to_snake
+from .config import PATH_CORPORA
+from .corpus import load_corpus
 from .norms import get_allnorms
 from .scoring import _walk_freqs
 

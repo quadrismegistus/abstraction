@@ -9,7 +9,6 @@ Expects corpora at PATH_CORPORA/[corpus_name]/ with:
 import os
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from functools import partial
 
 import pandas as pd
 from tqdm import tqdm

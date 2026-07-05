@@ -9,7 +9,6 @@ not part of the abstract/concrete contrast by default.
 
 import os
 
-import numpy as np
 import pandas as pd
 
 from collections import defaultdict
@@ -20,7 +19,6 @@ from .config import (
 )
 from .utils import read_df, save_df
 from .norms import _add_series_to_norms, get_contrasts, classify_word
-from .utils import zfy
 
 
 _NLTK_STOPWORDS_FR = None
@@ -149,7 +147,6 @@ def get_allnorms_fr(remove_stopwords=True, force=False):
     If no vec norms exist on disk, returns orig-only.
     """
     import os
-    import pandas as pd
 
     if not force and os.path.exists(PATH_ALLNORMS_FR):
         df = read_df(PATH_ALLNORMS_FR)
