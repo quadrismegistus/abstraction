@@ -1,12 +1,11 @@
-"""Arc endpoints: aggregated decade bins and paginated raw texts."""
+"""Arc endpoints: aggregate arcs, by-genre arcs, paginated raw texts, print rendering."""
 
 from fastapi import APIRouter, HTTPException, Query
 
 from ..db import get_connection, RAW_CORPORA
 from ..validation import validate_col
 from ..models import (
-    ArcAggregated, ArcBin, ArcText, ArcTexts,
-    CorpusArc, CorpusArcBin,
+    ArcText, ArcTexts,
     GenreArc, AdjustedPoint, LoessPoint, ArcStats,
     AggGenreArc, AggBinPoint,
 )
@@ -64,119 +63,6 @@ def _build_where(genre: list[str], corpus: list[str],
         clauses.append(f"year <= {year_max}")
 
     return " AND ".join(clauses), params
-
-
-@router.get("/aggregated", response_model=ArcAggregated)
-def arc_aggregated(
-    col: str = DEFAULT_COL,
-    genre: list[str] = Query(default=[]),
-    corpus: list[str] = Query(default=[]),
-    year_min: float | None = None,
-    year_max: float | None = None,
-    bin_size: int = 10,
-    dedup: str = "within_lang_group",
-):
-    """Return decade-binned summary statistics for the arc plot."""
-    col = validate_col(col)
-    view, _ = _resolve_dedup(dedup)
-    where, params = _build_where(genre, corpus, year_min, year_max, col)
-    conn = get_connection()
-
-    rows = conn.execute(f"""
-        SELECT CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
-               "{col}", year
-        FROM {view}
-        WHERE {where}
-        ORDER BY decade
-    """, params).fetchall()
-
-    from collections import defaultdict
-    buckets: dict[int, list[float]] = defaultdict(list)
-    for decade, score, _year in rows:
-        if score is not None and decade is not None:
-            buckets[int(decade)].append(score)
-
-    import numpy as np
-    bins = []
-    for decade in sorted(buckets):
-        vals = buckets[decade]
-        arr = np.array(vals)
-        bins.append(ArcBin(
-            decade=decade,
-            mean=float(np.mean(arr)),
-            median=float(np.median(arr)),
-            q25=float(np.percentile(arr, 25)),
-            q75=float(np.percentile(arr, 75)),
-            n=len(vals),
-        ))
-
-    total = sum(b.n for b in bins)
-    return ArcAggregated(bins=bins, total=total)
-
-
-@router.get("/by-corpus", response_model=list[CorpusArc])
-def arc_by_corpus(
-    col: str = DEFAULT_COL,
-    genre: list[str] = Query(default=[]),
-    corpus: list[str] = Query(default=[]),
-    year_min: float | None = None,
-    year_max: float | None = None,
-    bin_size: int = 10,
-    dedup: str = "within_lang_group",
-):
-    """Return per-corpus decade-binned means for the macro arc plot."""
-    col = validate_col(col)
-    view, _ = _resolve_dedup(dedup)
-    where, params = _build_where(genre, corpus, year_min, year_max, col)
-    conn = get_connection()
-
-    rows = conn.execute(f"""
-        SELECT corpus_name, genre,
-               CAST(year / {bin_size} AS INT) * {bin_size} AS decade,
-               "{col}"
-        FROM {view}
-        WHERE {where}
-        ORDER BY corpus_name, decade
-    """, params).fetchall()
-
-    from collections import defaultdict
-    import numpy as np
-
-    corpus_data: dict[str, dict] = {}
-    for corpus_name, genre_val, decade, score in rows:
-        if score is None or decade is None:
-            continue
-        if corpus_name not in corpus_data:
-            corpus_data[corpus_name] = {
-                "genre_counts": defaultdict(int),
-                "decades": defaultdict(list),
-            }
-        corpus_data[corpus_name]["genre_counts"][genre_val or ""] += 1
-        corpus_data[corpus_name]["decades"][int(decade)].append(score)
-
-    results = []
-    for cname in sorted(corpus_data):
-        cd = corpus_data[cname]
-        decades = cd["decades"]
-        bins = []
-        total = 0
-        for decade in sorted(decades):
-            vals = decades[decade]
-            bins.append(CorpusArcBin(
-                decade=decade,
-                mean=float(np.mean(vals)),
-                n=len(vals),
-            ))
-            total += len(vals)
-        top_genre = max(cd["genre_counts"], key=cd["genre_counts"].get) if cd["genre_counts"] else None
-        results.append(CorpusArc(
-            corpus=cname,
-            genre=top_genre or None,
-            n_texts=total,
-            bins=bins,
-        ))
-
-    return results
 
 
 @router.get("/texts", response_model=ArcTexts)

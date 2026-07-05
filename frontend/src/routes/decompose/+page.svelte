@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { norm, periodMatched, corpusCorrected, corporaList } from '$lib/stores';
+  import { API_BASE } from '$lib/api';
 
   let genre = $state('arc_fiction');
   let earlyMin = $state(1700);
@@ -28,8 +29,7 @@
       if ($periodMatched) params.set('period_matched', 'true');
       if ($corpusCorrected) params.set('corpus_corrected', 'true');
       if (corpusFilter) params.append('corpus', corpusFilter);
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
-      const res = await fetch(`http://${host}:1709/api/decompose/shift-share?${params.toString()}`);
+      const res = await fetch(`${API_BASE}/decompose/shift-share?${params.toString()}`);
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       const data = await res.json();
       results = data.results || [];

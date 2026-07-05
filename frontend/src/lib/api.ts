@@ -1,15 +1,23 @@
 import type {
-  CorpusInfo, NormInfo, ArcAggregated, ArcTexts, CorpusArc, GenreArc, AggGenreArc,
+  CorpusInfo, NormInfo, ArcTexts, GenreArc, AggGenreArc,
   TrajectoryResponse, PassageResponse
 } from './types';
 
-// Use same hostname as the page, port 1709 for the API (Johnson's DOB)
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:1709/api`
-  : 'http://localhost:1709/api';
+// API base URL. Override with VITE_API_BASE (absolute like
+// "https://example.org/api", or relative like "/api" behind a reverse proxy).
+// Default: same protocol+hostname as the page, port 1709 (Johnson's DOB).
+export const API_BASE: string =
+  import.meta.env.VITE_API_BASE ??
+  (typeof window !== 'undefined'
+    ? `${window.location.protocol}//${window.location.hostname}:1709/api`
+    : 'http://localhost:1709/api');
 
 async function fetchJson<T>(path: string, params?: Record<string, string | string[]>): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
+  // Second arg makes relative API_BASE values (e.g. "/api") resolve against the page origin.
+  const url = new URL(
+    `${API_BASE}${path}`,
+    typeof window !== 'undefined' ? window.location.origin : 'http://localhost'
+  );
   if (params) {
     for (const [key, val] of Object.entries(params)) {
       if (Array.isArray(val)) {
@@ -31,14 +39,6 @@ export const fetchGenres = () => fetchJson<string[]>('/meta/genres');
 export const fetchRawCorpora = () => fetchJson<{id: string; label: string; lang: string; n_texts: number}[]>('/meta/raw-corpora');
 
 // Arc
-export function fetchArcAggregated(params: {
-  col?: string; genre?: string[]; corpus?: string[];
-  year_min?: string; year_max?: string; bin_size?: string;
-  dedup?: string;
-}) {
-  return fetchJson<ArcAggregated>('/arc/aggregated', params);
-}
-
 export function fetchArcAggregate(params: {
   col?: string; genre?: string[]; corpus?: string[];
   year_min?: string; year_max?: string;
@@ -57,14 +57,6 @@ export function fetchArcByGenre(params: {
   dedup?: string;
 }) {
   return fetchJson<GenreArc[]>('/arc/by-genre', params);
-}
-
-export function fetchArcByCorpus(params: {
-  col?: string; genre?: string[]; corpus?: string[];
-  year_min?: string; year_max?: string; bin_size?: string;
-  dedup?: string;
-}) {
-  return fetchJson<CorpusArc[]>('/arc/by-corpus', params);
 }
 
 export function fetchArcTexts(params: {

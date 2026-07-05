@@ -13,33 +13,6 @@ export interface NormInfo {
   label: string;
 }
 
-export interface ArcBin {
-  decade: number;
-  mean: number | null;
-  median: number | null;
-  q25: number | null;
-  q75: number | null;
-  n: number;
-}
-
-export interface ArcAggregated {
-  bins: ArcBin[];
-  total: number;
-}
-
-export interface CorpusArcBin {
-  decade: number;
-  mean: number | null;
-  n: number;
-}
-
-export interface CorpusArc {
-  corpus: string;
-  genre: string | null;
-  n_texts: number;
-  bins: CorpusArcBin[];
-}
-
 export interface ArcText {
   id: string;
   corpus: string;

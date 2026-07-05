@@ -37,30 +37,28 @@ PERIOD_LABELS = {
 @router.get("/corpora", response_model=list[CorpusInfo])
 def list_corpora():
     conn = get_connection()
-    rows = conn.execute("""
+    # Single pass: year stats over dated texts + distinct genres over all texts
+    # (genres deliberately include undated rows, matching the old per-corpus query).
+    df = conn.execute("""
         SELECT corpus_name,
-               COUNT(*) as n_texts,
-               MIN(year) as year_min,
-               MAX(year) as year_max
+               countIf(year IS NOT NULL) AS n_texts,
+               minIf(year, year IS NOT NULL) AS year_min,
+               maxIf(year, year IS NOT NULL) AS year_max,
+               groupUniqArrayIf(genre, genre IS NOT NULL AND genre != '') AS genres
         FROM texts
-        WHERE year IS NOT NULL
         GROUP BY corpus_name
+        HAVING n_texts > 0
         ORDER BY corpus_name
-    """).fetchall()
+    """).fetchdf()
 
-    results = []
-    for name, n, ymin, ymax in rows:
-        genres = [r[0] for r in conn.execute(
-            "SELECT DISTINCT genre FROM texts WHERE corpus_name = ? AND genre IS NOT NULL AND genre != ''",
-            [name]
-        ).fetchall()]
-        results.append(CorpusInfo(
-            name=name, n_texts=n,
-            year_min=ymin, year_max=ymax,
-            genres=sorted(genres),
-        ))
-
-    return results
+    return [
+        CorpusInfo(
+            name=row["corpus_name"], n_texts=int(row["n_texts"]),
+            year_min=row["year_min"], year_max=row["year_max"],
+            genres=sorted(row["genres"]),
+        )
+        for _, row in df.iterrows()
+    ]
 
 
 @router.get("/norms", response_model=list[NormInfo])
@@ -99,10 +97,6 @@ def list_genres():
     arc_list = [r[0] for r in arcs]
     genre_list = [r[0] for r in genres]
     return arc_list + [g for g in genre_list if g not in arc_list]
-
-
-class RawCorpusInfo(NormInfo.__class__):
-    pass
 
 
 @router.get("/raw-corpora")

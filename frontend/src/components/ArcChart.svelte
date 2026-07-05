@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { norm, selectedGenres, selectedCorpora, selectedRawCorpora, yearRange, periodMatched, loessSpan, adjustModel, corpusAdjusted, corpusSmoothed, corpusCorrected, binSize, splitBy, translatedFilter, minTexts, globalLoading, corporaList, dedup } from '$lib/stores';
-  import { fetchArcByGenre, fetchArcAggregate } from '$lib/api';
+  import { API_BASE, fetchArcByGenre, fetchArcAggregate } from '$lib/api';
   import type { GenreArc, AggGenreArc } from '$lib/types';
 
   let plotDiv: HTMLDivElement;
@@ -612,7 +612,7 @@
       }
     }}>Export PNG</button>
     <button onclick={async () => {
-      const res = await fetch(`http://${window.location.hostname}:1709/api/arc/print`, {
+      const res = await fetch(`${API_BASE}/arc/print`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(genreArcs),
