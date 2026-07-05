@@ -488,3 +488,25 @@ class TestAdjustScoresSearchRangeForwarding:
         assert not res.empty
         peak_year = res.loc[res["fitted"].idxmax(), "year"]
         assert peak_year <= 1850
+
+
+# ---------------------------------------------------------------------------
+# load_all_scored_ch (CH replacement for the broken legacy CSV loader)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+class TestLoadAllScoredCH:
+    """Needs live ClickHouse with the abstraction.texts_rep view."""
+
+    def test_shape_and_columns(self):
+        try:
+            from abstraction.analysis import load_all_scored_ch
+            df = load_all_scored_ch(arcs=["arc_fiction"])
+        except Exception as e:
+            pytest.skip(f"ClickHouse unavailable: {e}")
+        assert len(df) > 50_000
+        for col in ("id", "corpus_name", "year", "genre_harmonized",
+                    "Abs-Conc.Median.median"):
+            assert col in df.columns
+        assert set(df["genre_harmonized"]) == {"Fiction"}
+        assert df["Abs-Conc.Median.median"].notna().all()

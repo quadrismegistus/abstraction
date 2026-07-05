@@ -1155,11 +1155,53 @@ def fit_arc_all_by_genre(score_col="Abs-Conc.Median.median",
                             min_texts=min_texts, **kw)
 
 
+# Arc corpus -> harmonized genre label, for the CH loader below.
+ARC_GENRE_MAP = {
+    "arc_fiction": "Fiction",
+    "arc_poetry": "Poetry",
+    "arc_periodical": "Periodical",
+    "arc_essays": "Essays",
+    "arc_sermons": "Sermons",
+    "arc_biography": "Biography",
+}
+
+
+def load_all_scored_ch(arcs=None, score_cols=("Abs-Conc.Median.median",)):
+    """ClickHouse replacement for load_all_scored(): per-rep scored texts
+    for the English arc corpora, shaped for plot_arc_by_genre /
+    adjust_scores (columns: id, corpus_name, arc_corpus, year,
+    genre_harmonized, plus the requested score columns).
+
+    The legacy load_all_scored() reads v8 score CSVs joined against local
+    arc metadata.csv files, which no longer exist post-CH-migration
+    (2026-04-19) — arc corpora are CuratedCorpus classes backed by
+    ClickHouse. This queries the same abstraction.texts_rep view the web
+    app uses, so figures built from it match the app.
+    """
+    from .app.db import get_connection
+
+    conn = get_connection()
+    arcs = list(arcs) if arcs is not None else list(ARC_GENRE_MAP)
+    col_sql = ", ".join(f'"{c}"' for c in score_cols)
+    placeholders = ", ".join("?" for _ in arcs)
+    df = conn.execute(f"""
+        SELECT _id AS id, corpus_name, arc_corpus, year, {col_sql}
+        FROM texts_rep
+        WHERE arc_corpus IN ({placeholders}) AND year IS NOT NULL
+    """, arcs).fetchdf()
+    df = df.dropna(subset=list(score_cols))
+    df["genre_harmonized"] = df["arc_corpus"].map(ARC_GENRE_MAP).fillna(df["arc_corpus"])
+    return df
+
+
 def load_all_scored(scores_dir=None, version="v8-raw", exclude=EXCLUDE_CORPORA):
     """Load all scored corpora, harmonize genres, return a combined DataFrame.
 
     This is the data-loading step extracted from fit_arc_all_by_genre,
     useful when you need the underlying data (not just fit summaries).
+
+    NOTE: broken in current environments — the arc corpora no longer have
+    local metadata.csv files post-CH-migration. Use load_all_scored_ch().
     """
     if scores_dir is None:
         scores_dir = os.path.join(SCORES_DIR, version)
