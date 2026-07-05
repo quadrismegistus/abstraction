@@ -42,7 +42,7 @@ Fixed: gzip-as-text counting; both `--workers` pickling crashes (module-level wo
 
 ### 6. Remaining (optional tier)
 - **§2.10**: CH/DuckDB scorers omit `_pct_abs/_pct_conc` columns — needs a CH schema migration for `scores_{en,fr,de,es}` + backfill decision.
-- **DE norms regeneration** (Schmidtke fix): `get_orignorms_de(force=True)` → `get_allnorms_de(force=True)` — cheap, changes 18 words; then optionally re-score DE.
+- ~~**DE norms regeneration**~~ DONE 2026-07-05: orignorms + allnorms.de regenerated with the Schmidtke fix (exactly 18 SCM-Imag words changed, as predicted; polarity tests pass; backups at `*.bak-preschmidtke`). `norms_version("de")` changed, so DE caches self-invalidate. NOT yet done: re-scoring `scores_de` in CH under the new allnorms (`abstraction score-ids <corpus> --lang de --force` or the server-side script) — effect is ~18 words/0.27% of vocabulary, negligible at aggregate level, so re-score whenever DE work next happens anyway.
 - **`analysis.py` file split** (arcfit/reports/loading_legacy/embeddings) — deferred for notebook import compatibility; if done, keep re-exports in `analysis.py`.
 - **Consolidate the 4 numpy scorer copies** in scoring.py (audit §10) — the audit's §4 cache-keying fix removed the sharpest risk; remaining value is maintainability.
 - Legacy notebooks importing vanished modules: `ESTCCounts*`/`ESTCMatch` (`book_history`), `LLMPsgs2-Analyze-Pamela` (`abstraction.llm`, removed `c97eb17`) — port or archive.
