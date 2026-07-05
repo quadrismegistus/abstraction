@@ -4,8 +4,6 @@ Uses plotnine (ggplot2-style grammar of graphics).
 """
 
 import os
-import warnings
-warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 import plotnine as p9
@@ -18,7 +16,13 @@ from .norms import (
     classify_word,
 )
 
-p9.options.dpi = 300
+# Print/export resolution for saved figures. Previously set globally via
+# `p9.options.dpi = 300` at import time, which silently affected every
+# plotnine figure (including interactive Jupyter previews) for the whole
+# process. plotnine's `ggplot.save()` accepts `dpi=` directly, so each
+# save call below passes it explicitly instead
+# (AUDIT-2026-07-04.md §2.9/§5).
+SAVE_DPI = 300
 
 # ---------------------------------------------------------------------------
 # Label mappings
@@ -79,8 +83,17 @@ def plot_norms(dfnorms, words=None, sample_n=10, sample_spacer=0.5,
                only_source=None, ofn=None, title="", ylabel="",
                jitter=False, min_z=-2.5, max_z=2.5,
                source_order=None, label_rename=None,
-               font_size=7, width=9, height=8):
-    """Plot word positions along the abstract-concrete axis across norm sources."""
+               font_size=7, width=9, height=8, random_state=0):
+    """Plot word positions along the abstract-concrete axis across norm sources.
+
+    Parameters
+    ----------
+    random_state : int, optional
+        Seed for the example-word sampling (`sample_n`). Fixed by default
+        so regenerating a book figure reproduces the same example words
+        (AUDIT-2026-07-04.md §2.9); pass `None` for non-deterministic
+        sampling.
+    """
     if source_order is None:
         source_order = NORM_SOURCE_ORDER
     if label_rename is None:
@@ -109,7 +122,9 @@ def plot_norms(dfnorms, words=None, sample_n=10, sample_spacer=0.5,
     sample_words = set()
     if sample_n:
         sample_words = set(
-            df_top.groupby("zgroup").sample(n=1, replace=False).sort_values("z").index
+            df_top.groupby("zgroup")
+            .sample(n=1, replace=False, random_state=random_state)
+            .sort_values("z").index
         )
     sample_words |= words
 
@@ -160,7 +175,7 @@ def plot_norms(dfnorms, words=None, sample_n=10, sample_spacer=0.5,
 
     if ofn:
         os.makedirs(os.path.dirname(ofn), exist_ok=True)
-        fig.save(ofn)
+        fig.save(ofn, dpi=SAVE_DPI)
     return fig
 
 
@@ -265,8 +280,13 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
     df["value"] = val_map[valtype](df)
 
     if min_y is not None:
-        spcr = 0.5
-        df["value"] = df["value"].apply(lambda y: y if y > min_y else min_y + (y - min_y) * spcr)
+        # Floor sub-threshold values at min_y, mirroring the max_y clip
+        # below. Previously this "compressed" values toward min_y
+        # (`min_y + (y - min_y) * spcr`) but the result could still land
+        # below min_y for large outliers, and the subsequent `p9.ylim`
+        # silently dropped those points from the plot entirely
+        # (AUDIT-2026-07-04.md §5).
+        df["value"] = df["value"].clip(lower=min_y)
     if max_y is not None:
         df["value"] = df["value"].clip(upper=max_y)
 
@@ -299,7 +319,13 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
         fig += p9.geom_hline(yintercept=0, color="gray")
 
     if min_y is not None and max_y is not None:
-        fig += p9.ylim(min_y, max_y)
+        # coord_cartesian only clips the rendered viewport rather than
+        # converting out-of-range values to NA before stats are computed
+        # (as `p9.ylim`/`scale_y_continuous(limits=...)` do), so it can't
+        # silently drop points from the geom_smooth fit below, and it
+        # can't be silently overridden by the second y-scale added below
+        # for valtype == "abs-conc" (AUDIT-2026-07-04.md §5).
+        fig += p9.coord_cartesian(ylim=(min_y, max_y))
 
     fig += p9.geom_point(alpha=0.5, size=2)
 
@@ -328,10 +354,12 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
     fig += p9.xlab("Year")
 
     if valtype == "abs-conc":
-        fig += p9.scale_y_continuous(
-            breaks=list(range(-50, 51, 10)),
-            limits=[min_y - 2 if min_y else None, max_y + 2 if max_y else None],
-        )
+        # Breaks only — the axis *range* is set once, above, via
+        # coord_cartesian. A second scale_y_continuous(limits=...) here
+        # used to silently replace those limits with different ones
+        # (AUDIT-2026-07-04.md §5); coord and scale are independent
+        # layers, so this can no longer contradict it.
+        fig += p9.scale_y_continuous(breaks=list(range(-50, 51, 10)))
 
     if smooth:
         fig += p9.geom_smooth(
@@ -347,7 +375,7 @@ def plot_fiction(df, valtype="abs/conc", min_y=None, max_y=None,
         )
     if save_to:
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
-        fig.save(save_to)
+        fig.save(save_to, dpi=SAVE_DPI)
 
     return fig
 
@@ -506,7 +534,7 @@ def plot_arc(adj_df, title="", show_raw=True, show_corpus=True,
 
     if save_to:
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
-        fig.save(save_to)
+        fig.save(save_to, dpi=SAVE_DPI)
 
     return fig
 
@@ -699,7 +727,7 @@ def plot_arc_by_genre(combined_df, genres=None,
 
     if save_to:
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
-        fig.save(save_to)
+        fig.save(save_to, dpi=SAVE_DPI)
 
     return fig
 
@@ -732,7 +760,11 @@ LANG_COLORS = {"en": "#1f77b4", "fr": "#d62728", "de": "#9467bd"}
 def _savefig(fig, figname, figdir=None):
     if figname is None:
         return
-    path = os.path.join(figdir or "../figures", figname) if not os.path.isabs(figname) else figname
+    # Default to the package's configured figures directory rather than a
+    # cwd-relative "../figures" (AUDIT-2026-07-04.md §5), which only
+    # resolves correctly if the caller's cwd happens to be one level
+    # below the repo root.
+    path = os.path.join(figdir or PATH_FIGS, figname) if not os.path.isabs(figname) else figname
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fig.savefig(path, bbox_inches="tight")
 
@@ -786,6 +818,12 @@ def facet_by_genre(df, genre_cols, color_col=None, *, norm=None, cmap="RdBu",
                                label=f"{p} ({len(dm)})")
             ax.legend(loc="upper right", fontsize=6, markerscale=1.5)
             title_extra = ""
+        elif color_col is None:
+            # No color aesthetic requested — plot this genre's points in a
+            # single flat color instead of crashing on `d[None]`
+            # (AUDIT-2026-07-04.md §5).
+            ax.scatter(d[xcol], d[ycol], c="#1f77b4", s=8, alpha=0.7)
+            title_extra = ""
         else:
             valid = d[color_col].notna()
             ax.scatter(
@@ -838,12 +876,15 @@ def plot_umap_overview(feat, *, form_tags, annotation_cols=(), figname=None,
 
     ax = axes[0, 2]
     valid = feat["abs_score"].notna()
-    vmin, vmax = feat.loc[valid, "abs_score"].quantile([0.05, 0.95])
-    norm = Normalize(vmin=vmin, vmax=vmax)
     ax.scatter(feat.loc[~valid, xcol], feat.loc[~valid, ycol], c="#eee", s=4, alpha=0.3)
-    sc = ax.scatter(feat.loc[valid, xcol], feat.loc[valid, ycol],
-                    c=feat.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
-    plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness (+ = abstract)")
+    if valid.sum() > 0:
+        # quantile() on an empty subset returns NaN bounds, which would
+        # otherwise crash/blank out Normalize (AUDIT-2026-07-04.md §5).
+        vmin, vmax = feat.loc[valid, "abs_score"].quantile([0.05, 0.95])
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        sc = ax.scatter(feat.loc[valid, xcol], feat.loc[valid, ycol],
+                        c=feat.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
+        plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness (+ = abstract)")
     ax.set_title("Abstractness score", fontsize=11); ax.set_xticks([]); ax.set_yticks([])
 
     annotation_cols = list(annotation_cols)
@@ -897,12 +938,15 @@ def plot_text_umap_4panel(df, *, xcol, ycol, form_tags, figname=None,
 
     ax = axes[1, 0]
     valid = df["abs_score"].notna()
-    vmin, vmax = df.loc[valid, "abs_score"].quantile([0.05, 0.95])
-    norm = Normalize(vmin=vmin, vmax=vmax)
     ax.scatter(df.loc[~valid, xcol], df.loc[~valid, ycol], c="#eee", s=4, alpha=0.3)
-    sc = ax.scatter(df.loc[valid, xcol], df.loc[valid, ycol],
-                    c=df.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
-    plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness")
+    if valid.sum() > 0:
+        # quantile() on an empty subset returns NaN bounds, which would
+        # otherwise crash/blank out Normalize (AUDIT-2026-07-04.md §5).
+        vmin, vmax = df.loc[valid, "abs_score"].quantile([0.05, 0.95])
+        norm = Normalize(vmin=vmin, vmax=vmax)
+        sc = ax.scatter(df.loc[valid, xcol], df.loc[valid, ycol],
+                        c=df.loc[valid, "abs_score"], cmap="RdBu", norm=norm, s=5, alpha=0.55)
+        plt.colorbar(sc, ax=ax, shrink=0.7, label="abstractness")
     ax.set_title("Abstractness", fontsize=12); ax.set_xticks([]); ax.set_yticks([])
 
     ax = axes[1, 1]

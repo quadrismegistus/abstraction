@@ -10,12 +10,49 @@ Grayscale-friendly design for print:
 import asyncio
 import html as html_mod
 import os
+import re
 import textwrap
 
 import numpy as np
 
 from .scoring import score_words, get_norm_dict, _modernize_score
-from .tokenize import tokenize_agnostic, get_spelling_modernizer
+from .tokenize import get_spelling_modernizer
+
+
+# ---------------------------------------------------------------------------
+# Display tokenization
+# ---------------------------------------------------------------------------
+#
+# tokenize.tokenize_agnostic() (used by the scoring pipeline) matches word
+# tokens with `[\w']+` and punctuation with a *closed whitelist*
+# (`[.,!?; \-—–\n]`). Any character outside that whitelist — `:`,
+# `"`, `(`, `)`, and anything else not enumerated — matches neither
+# alternative and is silently dropped by re.findall (AUDIT-2026-07-04.md
+# §2.8). That's fine for scoring (punctuation carries no z-score either
+# way) but it corrupts the rendered HTML used for the book's print
+# passage figures and the web app's passage view.
+#
+# `_tokenize_display` keeps the exact same word-matching alternative
+# (`[\w']+`) — so word tokens, and therefore norm-dict lookups on their
+# lowercased forms, are byte-identical to what tokenize_agnostic produces
+# — but replaces the closed punctuation whitelist with a true catch-all,
+# `[^\w']`, matched one character at a time (same granularity as the
+# original whitelist). That is lossless for every character: anything
+# tokenize_agnostic already handled matches identically (each of those
+# characters already appeared alone in its whitelist), and anything it
+# used to drop (`:`, `"`, `(`, `)`, ...) now survives as its own
+# passed-through token.
+_DISPLAY_TOKEN_RE = re.compile(r"[\w']+|[^\w']")
+
+
+def _tokenize_display(txt):
+    """Tokenize text for HTML rendering without dropping any character.
+
+    Word tokens match `tokenize.tokenize_agnostic` exactly (so per-word
+    scoring lookups are unaffected); every other character is preserved
+    as its own token instead of being silently dropped.
+    """
+    return _DISPLAY_TOKEN_RE.findall(txt)
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +79,10 @@ def _word_style(z, max_z=3.0):
         alpha = 0.15 + intensity * 0.70  # 0.15..0.85
         css = (f"outline:{border_px}px solid rgba(0,0,0,{alpha:.2f}); "
                f"outline-offset:0px; border-radius:2px")
-        cls = "abstract" if z < -1.0 else "neither"
+        # Inclusive boundary, matching norms.classify_word's z <= -1 cutoff
+        # (AUDIT-2026-07-04.md §2.11) — a word at exactly z == -1.0 must be
+        # "Abstract" here too, not "neither".
+        cls = "abstract" if z <= -1.0 else "neither"
         return css, cls
 
     # z > 0: concrete shading scales from barely visible to bold+dark
@@ -52,7 +92,9 @@ def _word_style(z, max_z=3.0):
     css = (f"font-weight:{weight}; "
            f"background:rgba(0,0,0,{alpha:.2f}); "
            f"border-radius:2px")
-    cls = "concrete" if z > 1.0 else "neither"
+    # Inclusive boundary, matching norms.classify_word's z >= 1 cutoff
+    # (AUDIT-2026-07-04.md §2.11).
+    cls = "concrete" if z >= 1.0 else "neither"
     return css, cls
 
 
@@ -112,7 +154,7 @@ def _render_paragraph(txt, scores, spelling_d, inline_styles=True, preserve_newl
                     for line in lines if line.strip()]
         return '<br>\n'.join(rendered)
 
-    tokens = tokenize_agnostic(txt)
+    tokens = _tokenize_display(txt)
 
     parts = []
     for tok in tokens:
@@ -176,6 +218,42 @@ def _word_color_style(z, max_z=3.0):
             f"border-radius:2px")
 
 
+# Representative z-values for the four labeled legend swatches below.
+# Chosen to be unambiguously "abstract"/"concrete" (|z| well past the
+# ZCUT=1.0 classification boundary) or mildly so, without hardcoding the
+# CSS itself.
+_LEGEND_Z = {
+    "abstract": -2.5,
+    "slightly abstract": -0.3,
+    "slightly concrete": 0.3,
+    "concrete": 2.5,
+}
+
+
+def _legend_swatch_html(label, z):
+    """Render one legend `<span>` whose style comes straight from `_word_style`.
+
+    Generating the legend from the same function that styles passage words
+    guarantees the legend can never drift from the actual rendering rules
+    (AUDIT-2026-07-04.md §2.11 idea / §12.17), unlike the previous
+    hand-copied CSS literals.
+    """
+    css, _ = _word_style(z)
+    style = f"{css}; padding:0 3px; margin-right:12px;" if css else "padding:0 3px; margin-right:12px;"
+    return f'<span style="{style}">{label}</span>'
+
+
+def _render_legend_html(font_size):
+    """Build the shared abstract/concrete legend markup for a given font size."""
+    swatches = "".join(_legend_swatch_html(label, z) for label, z in _LEGEND_Z.items())
+    return (
+        f'<div style="margin-bottom:12px; font-size:{font_size - 2}px; color:#555;">'
+        f'{swatches}'
+        f'<span style="color:#888; margin-left:4px;">plain = unscored</span>'
+        f'</div>'
+    )
+
+
 def render_passage_body(txt, col="Abs-Conc.Median.median", mode="color", lang="en"):
     """Render passage text to an HTML fragment with data-z attributes.
 
@@ -228,16 +306,7 @@ def render_passage_html(txt, col="Abs-Conc.Median.median",
     """
     body = _render_body(txt, col=col, lang=lang)
 
-    legend_html = ""
-    if show_legend:
-        legend_html = f"""
-        <div style="margin-bottom:12px; font-size:{font_size - 2}px; color:#555;">
-            <span style="outline:3px solid rgba(0,0,0,0.60); outline-offset:0px; border-radius:2px; padding:0 3px; margin-right:12px;">abstract</span>
-            <span style="outline:1px solid rgba(0,0,0,0.15); outline-offset:0px; border-radius:2px; padding:0 3px; margin-right:12px;">slightly abstract</span>
-            <span style="font-weight:500; background:rgba(0,0,0,0.08); border-radius:2px; padding:0 3px; margin-right:12px;">slightly concrete</span>
-            <span style="font-weight:800; background:rgba(0,0,0,0.30); border-radius:2px; padding:0 3px; margin-right:12px;">concrete</span>
-            <span style="color:#888; margin-left:4px;">plain = unscored</span>
-        </div>"""
+    legend_html = _render_legend_html(font_size) if show_legend else ""
 
     title_html = ""
     if title and show_title:
@@ -447,15 +516,7 @@ def render_comparison_html(passages, col="Abs-Conc.Median.median",
 
     table = "<table><tr>" + "".join(cells) + "</tr></table>"
 
-    legend_html = ""
-    if show_legend:
-        legend_html = f"""<div class="legend">
-    <span style="outline:3px solid rgba(0,0,0,0.60); outline-offset:0px; border-radius:2px; padding:0 3px;">abstract</span>&ensp;
-    <span style="outline:1px solid rgba(0,0,0,0.15); outline-offset:0px; border-radius:2px; padding:0 3px;">slightly abstract</span>&ensp;
-    <span style="font-weight:500; background:rgba(0,0,0,0.08); border-radius:2px; padding:0 3px;">slightly concrete</span>&ensp;
-    <span style="font-weight:800; background:rgba(0,0,0,0.30); border-radius:2px; padding:0 3px;">concrete</span>&ensp;
-    <span style="color:#888;">plain = unscored</span>
-</div>"""
+    legend_html = _render_legend_html(font_size) if show_legend else ""
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -480,9 +541,6 @@ td:last-child {{ border-right: none; }}
 h4 {{ margin: 0 0 8px 0; font-family: serif; }}
 .psg-para {{ margin: 0; text-indent: 2em; }}
 .psg-first {{ text-indent: 0; }}
-.legend {{
-    margin-bottom: 12px; font-size: {font_size - 2}px; color: #555;
-}}
 </style>
 </head>
 <body>
