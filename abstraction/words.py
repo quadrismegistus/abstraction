@@ -176,7 +176,21 @@ def correlate_words_with_trend(decade_freqs, score_col="Abs-Conc.Median.median",
     min_total_freq : int
         Minimum total frequency across all decades to include a word.
     method : str
-        'cosine' for cosine similarity, 'pearson' for Pearson correlation.
+        'cosine' for (mean-centered) cosine similarity, 'pearson' for
+        Pearson correlation computed via np.corrcoef.
+
+        Word frequency trajectories and the aggregate trend are both
+        non-negative series, so *uncentered* cosine similarity mostly
+        measures whether two series share the same overall level, not
+        whether they move together — misleading for a column literally
+        named "correlation". 'cosine' therefore mean-centers both vectors
+        before taking their cosine, which is mathematically identical to
+        Pearson's r (cosine of centered vectors == Pearson correlation)
+        but stays vectorized across all words at once, instead of the
+        per-word Python loop 'pearson' uses. The two methods should agree
+        up to floating-point noise; 'cosine' is kept as the default because
+        it also degrades gracefully (near-zero, not NaN) for a word with a
+        ~constant trajectory, thanks to the epsilon in its denominator.
 
     Returns
     -------
@@ -186,6 +200,12 @@ def correlate_words_with_trend(decade_freqs, score_col="Abs-Conc.Median.median",
         Sorted by correlation (ascending = most anti-correlated with trend).
     """
     allnorms = get_allnorms()
+    # Defensive dedup: allnorms can carry duplicate word-index entries (see
+    # scoring.py's dedup calls and word_score_shifts() below). A duplicated
+    # index makes `norm_scores[prop_df.columns]` return extra rows, which
+    # breaks the `prop_df.values @ word_scores.values` matmul below with a
+    # shape-mismatch ValueError.
+    allnorms = allnorms[~allnorms.index.duplicated(keep="first")]
     if score_col not in allnorms.columns:
         raise ValueError(f"Unknown norm column: {score_col}")
 
@@ -215,15 +235,24 @@ def correlate_words_with_trend(decade_freqs, score_col="Abs-Conc.Median.median",
     # Correlate each word's proportion trajectory with the trend
     if method == "cosine":
         from numpy.linalg import norm as np_norm
-        trend_normed = trend / (np_norm(trend) + 1e-12)
+        # Mean-center before the cosine so this measures co-movement
+        # (like Pearson's r) rather than shared level — see docstring.
+        trend_c = trend - trend.mean()
+        trend_normed = trend_c / (np_norm(trend_c) + 1e-12)
         word_trajs = prop_df.values.T  # words × decades
-        word_norms = np.sqrt((word_trajs ** 2).sum(axis=1)) + 1e-12
-        correlations = (word_trajs @ trend_normed) / word_norms
+        word_trajs_c = word_trajs - word_trajs.mean(axis=1, keepdims=True)
+        word_norms = np.sqrt((word_trajs_c ** 2).sum(axis=1)) + 1e-12
+        correlations = (word_trajs_c @ trend_normed) / word_norms
     elif method == "pearson":
-        correlations = np.array([
-            np.corrcoef(prop_df[w].values, trend)[0, 1]
-            for w in prop_df.columns
-        ])
+        # A word with an exactly-constant trajectory has undefined
+        # correlation (zero std -> 0/0); NaN is the correct, expected result
+        # here, so suppress numpy's "invalid value encountered in divide"
+        # warning rather than let it leak out of an otherwise-handled case.
+        with np.errstate(invalid="ignore", divide="ignore"):
+            correlations = np.array([
+                np.corrcoef(prop_df[w].values, trend)[0, 1]
+                for w in prop_df.columns
+            ])
     else:
         raise ValueError(f"Unknown method: {method}")
 
@@ -240,8 +269,14 @@ def correlate_words_with_trend(decade_freqs, score_col="Abs-Conc.Median.median",
     results.loc[results["z_score"] <= -1.0, "category"] = "Abstract"
     results.loc[results["z_score"] >= 1.0, "category"] = "Concrete"
 
-    # Z-score the correlations for easier interpretation
-    results["correlation_z"] = zscore(results["correlation"])
+    # Z-score the correlations for easier interpretation. 'pearson' can
+    # produce a real NaN for a word with an exactly constant trajectory
+    # (np.corrcoef divides by a zero std); zscore's default nan_policy
+    # ("propagate") would otherwise let that single NaN poison every other
+    # word's z-score too. nan_policy="omit" computes mean/std over the
+    # non-NaN entries only, so the rest still get finite z-scores — the
+    # NaN word's own z-score stays NaN, which is correct (undefined).
+    results["correlation_z"] = zscore(results["correlation"], nan_policy="omit")
     results["freq_log"] = np.log10(results["freq"].clip(lower=1))
 
     results = results.sort_values("correlation", ascending=True).reset_index(drop=True)
@@ -283,6 +318,12 @@ def word_contributions(decade_freqs, score_col="Abs-Conc.Median.median",
         Sorted by contribution (largest positive = most concretizing).
     """
     allnorms = get_allnorms()
+    # Defensive dedup: see the matching comment in correlate_words_with_trend()
+    # above. Without this, `norm_scores[freq_df.columns]` below can return
+    # extra rows for a duplicated word, misaligning the `freq_change *
+    # word_scores` multiply ("cannot reindex on an axis with duplicate
+    # labels").
+    allnorms = allnorms[~allnorms.index.duplicated(keep="first")]
     norm_scores = allnorms[score_col].dropna()
 
     shared = sorted(set(decade_freqs.columns) & set(norm_scores.index))
@@ -331,7 +372,12 @@ def word_contributions(decade_freqs, score_col="Abs-Conc.Median.median",
     results.loc[results["z_score"] <= -1.0, "category"] = "Abstract"
     results.loc[results["z_score"] >= 1.0, "category"] = "Concrete"
 
-    results["freq_change_pct"] = (results["freq_change"] / results["freq_early"].clip(lower=1e-10)) * 100
+    # A word absent in the early period (freq_early == 0) has no meaningful
+    # percent change — "infinite growth from nothing" — so report NaN rather
+    # than the previous `clip(lower=1e-10)`, which turned a true zero
+    # denominator into a fake ~1e-10 one and produced ~10^12% artifacts.
+    freq_early_safe = results["freq_early"].where(results["freq_early"] > 0, np.nan)
+    results["freq_change_pct"] = (results["freq_change"] / freq_early_safe) * 100
 
     results = results.sort_values("contribution", ascending=False).reset_index(drop=True)
     return results

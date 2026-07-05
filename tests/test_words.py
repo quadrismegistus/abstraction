@@ -74,9 +74,14 @@ def fake_decade_freqs():
     # Concrete words: low early, rising
     for w in ["stone", "wall", "hair"]:
         data[w] = [200 + i * 80 for i in range(n)]
-    # Neutral: flat
-    for w in ["the", "old", "big"]:
-        data[w] = [5000] * n
+    # Neutral: roughly flat, but with slight per-decade variation so the
+    # words don't end up bit-for-bit identical to each other. Perfectly
+    # identical (degenerate) trajectories are the scenario that used to
+    # trigger a scipy "precision loss" RuntimeWarning out of zscore() when
+    # min_total_freq filtered everything else away (see
+    # test_min_total_freq_filters below and words.py:244/AUDIT-2026-07-04 §5).
+    for i_w, w in enumerate(["the", "old", "big"]):
+        data[w] = [5000 + ((i + i_w) % 3 - 1) * 15 for i in range(n)]
     return pd.DataFrame(data, index=decades)
 
 
@@ -95,6 +100,30 @@ def patch_norms(monkeypatch):
         fake_df[vcol] = fake_df.index.map(vals)
 
     monkeypatch.setattr("abstraction.words.get_allnorms", lambda **kw: fake_df)
+
+
+@pytest.fixture
+def patch_norms_duplicated(monkeypatch):
+    """Same fake norms as patch_norms, but with a duplicated index entry.
+
+    Reproduces AUDIT-2026-07-04 §4.12/§5: production allnorms frames
+    demonstrably carry duplicate word-index rows (scoring.py dedups
+    defensively in nine places); correlate_words_with_trend() and
+    word_contributions() were the two consumers that didn't.
+    """
+    col = "Abs-Conc.Median.median"
+    fake_df = pd.DataFrame({col: FAKE_NORMS_DATA})
+    fake_df.index.name = "word"
+
+    for vcol, vals in FAKE_VECNORMS.items():
+        for word in fake_df.index:
+            if word not in vals:
+                vals[word] = np.nan
+        fake_df[vcol] = fake_df.index.map(vals)
+
+    # Duplicate a row that's actually used by the test fixtures below.
+    dup_df = pd.concat([fake_df, fake_df.loc[["stone"]]])
+    monkeypatch.setattr("abstraction.words.get_allnorms", lambda **kw: dup_df)
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +266,141 @@ class TestWordScoreShifts:
         with pytest.raises(ValueError, match="Unknown column"):
             word_score_shifts(source="Median", period_early="C99",
                               period_late="C19")
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for AUDIT-2026-07-04 §4.12 / §5 (words.py)
+# ---------------------------------------------------------------------------
+
+class TestDuplicateAllnormsIndex:
+    """A duplicated word in allnorms used to crash or misalign these two
+    functions (words.py ~192-213, ~286-318); scoring.py dedups defensively
+    but these functions didn't.
+    """
+
+    def test_correlate_words_with_trend_survives_duplicates(
+        self, fake_decade_freqs, patch_norms_duplicated
+    ):
+        result = correlate_words_with_trend(fake_decade_freqs, min_total_freq=0)
+        assert isinstance(result, pd.DataFrame)
+        # "stone" must appear exactly once despite the duplicated allnorms row.
+        assert (result["word"] == "stone").sum() == 1
+
+    def test_word_contributions_survives_duplicates(
+        self, fake_decade_freqs, patch_norms_duplicated
+    ):
+        result = word_contributions(fake_decade_freqs,
+                                    period_early=(1700, 1760),
+                                    period_late=(1840, 1910),
+                                    min_total_freq=0)
+        assert isinstance(result, pd.DataFrame)
+        assert (result["word"] == "stone").sum() == 1
+
+
+class TestNaNZScoreHandling:
+    """A word with an exactly-constant (here: always-zero) frequency
+    trajectory makes np.corrcoef return NaN under method='pearson'
+    (division by a zero std). That single NaN used to poison every other
+    word's correlation_z via zscore()'s default nan_policy='propagate'.
+    """
+
+    def test_constant_word_does_not_poison_other_zscores(self, patch_norms):
+        decades = list(range(1700, 1910, 10))
+        n = len(decades)
+        data = {
+            "virtue": [1000 - i * 80 for i in range(n)],
+            "stone": [200 + i * 80 for i in range(n)],
+            # "role" is in FAKE_NORMS_DATA but never occurs in these texts,
+            # so its proportion trajectory is exactly 0.0 every decade.
+            "role": [0] * n,
+        }
+        df = pd.DataFrame(data, index=decades)
+
+        result = correlate_words_with_trend(df, min_total_freq=0, method="pearson")
+
+        role = result[result["word"] == "role"].iloc[0]
+        others = result[result["word"] != "role"]
+        assert np.isnan(role["correlation"])
+        assert others["correlation_z"].notna().all()
+        assert np.isfinite(others["correlation_z"]).all()
+
+
+class TestCosineMeasuresComovement:
+    """Cosine similarity of non-centered, all-positive frequency proportions
+    mostly reflects shared *level*, not co-movement, even though the output
+    column is named "correlation". correlate_words_with_trend() now
+    mean-centers both vectors before the cosine so it behaves like Pearson's
+    r (words.py ~216-227 / AUDIT-2026-07-04 §5).
+    """
+
+    def test_flat_word_is_near_zero_even_when_trend_is_always_positive(
+        self, patch_norms
+    ):
+        decades = list(range(1700, 1910, 10))
+        n = len(decades)
+        # "big" (z=+0.5) dominates and rises; "role" (z=-0.5) is a small,
+        # slowly-declining minority. The resulting weighted trend is always
+        # positive (never crosses zero) but trends upward. "old" (z=+0.3) is
+        # perfectly flat and has zero true relationship to that trend.
+        data = {
+            "role": [200 - i * 5 for i in range(n)],
+            "big": [800 + i * 5 for i in range(n)],
+            "old": [1000] * n,
+        }
+        df = pd.DataFrame(data, index=decades)
+
+        # Sanity-check the premise: the trend never crosses zero.
+        trend_col = "Abs-Conc.Median.median"
+        allnorms = pd.DataFrame({trend_col: FAKE_NORMS_DATA})
+        freq_df = df[sorted(data)]
+        prop_df = freq_df.div(freq_df.sum(axis=1), axis=0)
+        trend = prop_df.values @ allnorms.loc[prop_df.columns, trend_col].values
+        assert (trend > 0).all()
+
+        result = correlate_words_with_trend(df, min_total_freq=0)
+        old = result[result["word"] == "old"].iloc[0]
+        big = result[result["word"] == "big"].iloc[0]
+        role = result[result["word"] == "role"].iloc[0]
+
+        # Flat word: no real co-movement with the trend, regardless of the
+        # trend's overall (always-positive) level.
+        assert abs(old["correlation"]) < 1e-6
+        # Rising concrete word tracks the (rising) trend closely...
+        assert big["correlation"] > 0.9
+        # ...and the declining word anti-correlates, even though its own
+        # frequency values stay positive throughout.
+        assert role["correlation"] < -0.9
+
+
+# ---------------------------------------------------------------------------
+# freq_change_pct: words absent in the early period (AUDIT-2026-07-04 §5)
+# ---------------------------------------------------------------------------
+
+class TestFreqChangePct:
+    def test_absent_early_word_gives_nan_not_huge_pct(self, patch_norms):
+        """A word with zero frequency in the early period used to produce
+        ~1e12% via `clip(lower=1e-10)` on the denominator; it should now be
+        NaN (undefined percent change from nothing).
+        """
+        decades = list(range(1700, 1910, 10))
+        n = len(decades)
+        data = {
+            "virtue": [1000 - i * 80 for i in range(n)],
+            "stone": [200 + i * 80 for i in range(n)],
+            # "role" only appears in the late period.
+            "role": [0 if year < 1840 else 500 for year in decades],
+        }
+        df = pd.DataFrame(data, index=decades)
+
+        result = word_contributions(df,
+                                    period_early=(1700, 1760),
+                                    period_late=(1840, 1910),
+                                    min_total_freq=0)
+        role = result[result["word"] == "role"].iloc[0]
+        assert role["freq_early"] == 0
+        assert np.isnan(role["freq_change_pct"])
+        # Every other word's pct should stay finite and sane (not blown up
+        # by the fix).
+        others = result[result["word"] != "role"]
+        assert np.isfinite(others["freq_change_pct"]).all()
+        assert (others["freq_change_pct"].abs() < 1000).all()
