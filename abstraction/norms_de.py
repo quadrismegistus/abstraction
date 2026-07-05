@@ -32,6 +32,22 @@ from .utils import zfy, read_df, save_df
 _NLTK_STOPWORDS_DE = None
 
 
+# NOTE on `remove_stopwords` semantics across languages: English (`norms.py`)
+# filters against a curated ~180K-entry stopwords+names list (function words,
+# honorifics, proper names), lowercasing both the list and the norms index
+# before comparing. There is no equivalent list for German -- this module only
+# filters the ~200-word NLTK German function-word list, so far fewer non-content
+# words are excluded here than in English. Building an 180K-scale list for
+# German is out of scope; treat `remove_stopwords=True` results as NOT directly
+# comparable in coverage across languages.
+#
+# Case handling is also language-specific: NLTK's German stopword list is
+# all-lowercase function words, but German nouns are legitimately capitalized
+# (and vector-norm vocabularies come straight from corpus text, so they retain
+# real capitalization). We therefore lowercase the index only for the
+# membership test below -- never the stored index/word column -- so a
+# sentence-initial "Und" is correctly recognized as the stopword "und" while a
+# capitalized noun like "Stein" is never mistaken for one.
 def get_nltk_stopwords_de():
     global _NLTK_STOPWORDS_DE
     if _NLTK_STOPWORDS_DE is None:
@@ -81,6 +97,7 @@ _HUMAN_IMAGEABILITY = {
 def gen_orignorms_de():
     """Generate and save German original (empirical) word norms from all human sources."""
     conde = load_conde()
+    schmidtke = load_schmidtke()
     norms = []
 
     for source, col in _HUMAN_CONCRETENESS.items():
@@ -90,19 +107,27 @@ def gen_orignorms_de():
         _add_series_to_norms(series, source, norms)
 
     for source, col in _HUMAN_IMAGEABILITY.items():
-        if col is not None:
+        if source == "Abs-Conc.SCM-Imag":
+            # Schmidtke et al. (2014) imageability. Conde's `Schmi_ima_human` column
+            # is a verbatim subset of the standalone Schmidtke2014.xlsx file (raw
+            # values identical on the overlap -- verified against the source data),
+            # but the standalone file also has a handful of extra words absent from
+            # Conde. Build ONE raw series over the union of both, then z-score once,
+            # so every word in this column shares a single z-scale. (Previously the
+            # Conde subset and the non-overlapping extras were z-scored separately
+            # -- over different, differently-sized populations -- yet stamped with
+            # the same "Abs-Conc.SCM-Imag" column label, silently mixing two
+            # incompatible z-scales under one name.)
+            base = conde[col].dropna()
+            extra = schmidtke[~schmidtke.index.isin(base.index)]["IMA_MEAN"].dropna()
+            series = pd.concat([base, extra])
+            series = series[~series.index.duplicated(keep="first")]
+        elif col is not None:
             series = conde[col].dropna()
         else:
             grandy = conde[["Grandy_ima_young", "Grandy_ima_old"]].mean(axis=1).dropna()
             series = grandy
         _add_series_to_norms(series, source, norms)
-
-    # Supplement Schmidtke from separate file for words not in Conde
-    schmidtke = load_schmidtke()
-    conde_schmi_words = set(conde[conde["Schmi_ima_human"].notna()].index)
-    extra = schmidtke[~schmidtke.index.isin(conde_schmi_words)]["IMA_MEAN"].dropna()
-    if len(extra) > 0:
-        _add_series_to_norms(extra, "Abs-Conc.SCM-Imag", norms)
 
     df = pd.DataFrame(norms).drop_duplicates(["word", "source"], keep="first")
     df = df.pivot(index="word", columns="source", values="z")
@@ -116,7 +141,7 @@ def get_orignorms_de(remove_stopwords=True, force=False):
         gen_orignorms_de()
     df = pd.read_csv(PATH_NORMS_DE).set_index("word")
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_de())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_de())]
     df["Abs-Conc.Median"] = df.median(axis=1)
     return df
 
@@ -128,7 +153,7 @@ def get_orignorms_de(remove_stopwords=True, force=False):
 def get_origcontrasts_de(remove_stopwords=True):
     df = get_orignorms_de(remove_stopwords=False)
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_de())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_de())]
     return get_contrasts(df)
 
 
@@ -143,7 +168,7 @@ def classify_word_de(z, zcut=ZCUT):
 def get_vecnorms_de(remove_stopwords=True):
     df = pd.read_pickle(PATH_VECNORMS_DE)
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_de())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_de())]
     colgroups = defaultdict(set)
     for col in df.columns:
         if col.count(".") != 2:
@@ -159,7 +184,7 @@ def get_allnorms_de(remove_stopwords=True, force=False):
     if not force and os.path.exists(PATH_ALLNORMS_DE):
         df = read_df(PATH_ALLNORMS_DE)
         if remove_stopwords:
-            df = df[~df.index.isin(get_nltk_stopwords_de())]
+            df = df[~df.index.str.lower().isin(get_nltk_stopwords_de())]
         return df
 
     orig = get_orignorms_de(remove_stopwords=False)
@@ -173,7 +198,7 @@ def get_allnorms_de(remove_stopwords=True, force=False):
 
     save_df(combined, PATH_ALLNORMS_DE)
     if remove_stopwords:
-        combined = combined[~combined.index.isin(get_nltk_stopwords_de())]
+        combined = combined[~combined.index.str.lower().isin(get_nltk_stopwords_de())]
     return combined
 
 

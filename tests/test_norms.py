@@ -1,6 +1,11 @@
+import os
+
 from abstraction.norms import classify_word, get_contrasts, format_norms_as_long
 import pandas as pd
 import numpy as np
+import pytest
+
+from abstraction.config import PATH_ALLNORMS_FR, PATH_ALLNORMS_DE, PATH_ALLNORMS_ES
 
 
 class TestClassifyWord:
@@ -84,3 +89,67 @@ class TestFormatNormsAsLong:
         assert rock["decision"] == "Concrete"
         virtue = long[long["word"] == "virtue"].iloc[0]
         assert virtue["decision"] == "Abstract"
+
+
+# ---------------------------------------------------------------------------
+# Multilingual polarity smoke tests
+#
+# These load the REAL generated allnorms pickles (FR/DE/ES) through the
+# public getters and check a handful of unambiguous words land on the right
+# side of zero on "Abs-Conc.Median.median" (positive = concrete, negative =
+# abstract -- the same convention as classify_word/get_contrasts above). A
+# reverse-coding bug (e.g. forgetting to negate a source, or mixing up which
+# pole is "positive" when combining sources -- see the Kanske reverse-coding
+# in norms_de.py) would silently flip an entire language's arc; these tests
+# exist to catch exactly that. They're marked `integration` (see conftest.py)
+# and skip automatically when the local data/ volume isn't mounted.
+# ---------------------------------------------------------------------------
+
+_MEDIAN_COL = "Abs-Conc.Median.median"
+
+
+def _assert_polarity(df, concrete_words, abstract_words, col=_MEDIAN_COL):
+    for w in concrete_words:
+        assert w in df.index, f"expected concrete word {w!r} missing from norms"
+        v = df.loc[w, col]
+        assert v > 0, f"{w!r} expected concrete-positive on {col}, got {v}"
+    for w in abstract_words:
+        assert w in df.index, f"expected abstract word {w!r} missing from norms"
+        v = df.loc[w, col]
+        assert v < 0, f"{w!r} expected abstract-negative on {col}, got {v}"
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.path.exists(PATH_ALLNORMS_FR),
+    reason=f"French allnorms pickle not present at {PATH_ALLNORMS_FR}",
+)
+class TestFrenchNormsPolarity:
+    def test_polarity(self):
+        from abstraction.norms_fr import get_allnorms_fr
+        df = get_allnorms_fr()
+        _assert_polarity(df, ["pierre", "table"], ["vérité", "idée"])
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.path.exists(PATH_ALLNORMS_DE),
+    reason=f"German allnorms pickle not present at {PATH_ALLNORMS_DE}",
+)
+class TestGermanNormsPolarity:
+    def test_polarity(self):
+        from abstraction.norms_de import get_allnorms_de
+        df = get_allnorms_de()
+        _assert_polarity(df, ["stein", "tisch"], ["wahrheit", "begriff"])
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    not os.path.exists(PATH_ALLNORMS_ES),
+    reason=f"Spanish allnorms pickle not present at {PATH_ALLNORMS_ES}",
+)
+class TestSpanishNormsPolarity:
+    def test_polarity(self):
+        from abstraction.norms_es import get_allnorms_es
+        df = get_allnorms_es()
+        _assert_polarity(df, ["piedra", "mesa"], ["verdad", "idea"])

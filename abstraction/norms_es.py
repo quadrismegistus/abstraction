@@ -31,6 +31,20 @@ from .utils import zfy, read_df, save_df
 _NLTK_STOPWORDS_ES = None
 
 
+# NOTE on `remove_stopwords` semantics across languages: English (`norms.py`)
+# filters against a curated ~180K-entry stopwords+names list (function words,
+# honorifics, proper names), lowercasing both the list and the norms index
+# before comparing. There is no equivalent list for Spanish -- this module only
+# filters the ~200-word NLTK Spanish function-word list, so far fewer
+# non-content words are excluded here than in English. Building an 180K-scale
+# list for Spanish is out of scope; treat `remove_stopwords=True` results as
+# NOT directly comparable in coverage across languages.
+#
+# Words in the orig-norms sources are already lowercased at load time, but
+# vector-norm vocabularies come straight from corpus text and can include
+# capitalized/sentence-initial forms (e.g. "El", "Y"); NLTK's Spanish stopword
+# list is all-lowercase. We therefore lowercase the index only for the
+# membership test below, so capitalized function words aren't missed.
 def get_nltk_stopwords_es():
     global _NLTK_STOPWORDS_ES
     if _NLTK_STOPWORDS_ES is None:
@@ -104,7 +118,7 @@ def get_orignorms_es(remove_stopwords=True, force=False):
         gen_orignorms_es()
     df = pd.read_csv(PATH_NORMS_ES).set_index("word")
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_es())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_es())]
     df["Abs-Conc.Median"] = df.median(axis=1)
     return df
 
@@ -117,7 +131,7 @@ def get_origcontrasts_es(remove_stopwords=True):
     """Build Spanish abstract/concrete contrast word sets from EsPal + Guasch."""
     df = get_orignorms_es(remove_stopwords=False)
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_es())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_es())]
     return get_contrasts(df)
 
 
@@ -132,7 +146,7 @@ def classify_word_es(z, zcut=ZCUT):
 def get_vecnorms_es(remove_stopwords=True):
     df = pd.read_pickle(PATH_VECNORMS_ES)
     if remove_stopwords:
-        df = df[~df.index.isin(get_nltk_stopwords_es())]
+        df = df[~df.index.str.lower().isin(get_nltk_stopwords_es())]
     colgroups = defaultdict(set)
     for col in df.columns:
         if col.count(".") != 2:
@@ -148,7 +162,7 @@ def get_allnorms_es(remove_stopwords=True, force=False):
     if not force and os.path.exists(PATH_ALLNORMS_ES):
         df = read_df(PATH_ALLNORMS_ES)
         if remove_stopwords:
-            df = df[~df.index.isin(get_nltk_stopwords_es())]
+            df = df[~df.index.str.lower().isin(get_nltk_stopwords_es())]
         return df
 
     orig = get_orignorms_es(remove_stopwords=False)
@@ -162,7 +176,7 @@ def get_allnorms_es(remove_stopwords=True, force=False):
 
     save_df(combined, PATH_ALLNORMS_ES)
     if remove_stopwords:
-        combined = combined[~combined.index.isin(get_nltk_stopwords_es())]
+        combined = combined[~combined.index.str.lower().isin(get_nltk_stopwords_es())]
     return combined
 
 
