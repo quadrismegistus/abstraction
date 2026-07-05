@@ -755,10 +755,21 @@ def report_arc(combined_df=None, genres=None,
             except np.linalg.LinAlgError:
                 pass
 
-        # Raw values at key decades
-        raw_start = float(dec_raw[start_yr])
-        raw_peak = float(dec_raw[peak_yr])
-        raw_end = float(dec_raw[end_yr])
+        # Raw values at key decades. Selection above (peak_yr/start_yr/end_yr)
+        # is done on the corpus-balanced (decade, corpus) aggregation
+        # (adj_dec); report magnitudes from that SAME aggregation so the
+        # numbers shown are consistent with why those decades were picked
+        # (a decade dominated by one large corpus can otherwise report a
+        # text-pooled magnitude at odds with the corpus-balanced selection).
+        raw_start = float(adj_dec[start_yr])
+        raw_peak = float(adj_dec[peak_yr])
+        raw_end = float(adj_dec[end_yr])
+
+        # Text-pooled (unweighted-by-corpus) versions, kept for reference and
+        # explicitly labeled as such -- do not mix these into ratios/SDs above.
+        raw_start_pooled = float(dec_raw[start_yr])
+        raw_peak_pooled = float(dec_raw[peak_yr])
+        raw_end_pooled = float(dec_raw[end_yr])
 
         n_start = int(dec_n[start_yr])
         n_peak = int(dec_n[peak_yr])
@@ -782,6 +793,9 @@ def report_arc(combined_df=None, genres=None,
             "raw_start": raw_start,
             "raw_peak": raw_peak,
             "raw_end": raw_end,
+            "raw_start_pooled": raw_start_pooled,
+            "raw_peak_pooled": raw_peak_pooled,
+            "raw_end_pooled": raw_end_pooled,
             "rise_sd": rise_sd,
             "fall_sd": fall_sd,
             "peak_vs_start": _safe_ratio(raw_peak, raw_start),
@@ -806,13 +820,15 @@ def report_arc(combined_df=None, genres=None,
             ratio_peak_end = _safe_ratio(raw_peak, raw_end)
             ratio_str_rise = f"{ratio_peak_start:.2f}x" if np.isfinite(ratio_peak_start) else "N/A (sign change)"
             ratio_str_fall = f"{ratio_peak_end:.2f}x" if np.isfinite(ratio_peak_end) else "N/A (sign change)"
+            bp_str = (f"{int(pw['pw_break_year'])}"
+                      if np.isfinite(pw["pw_break_year"]) else "insufficient data")
             prose_lines.append(
                 f"{genre}: abstractness rises from {raw_start:.4f} in the "
                 f"{start_yr}s (n={n_start:,}) to {raw_peak:.4f} in the "
                 f"{peak_yr}s (n={n_peak:,}): {ratio_str_rise}, "
                 f"+{rise_sd:.2f} SD. Then falls to {raw_end:.4f} in the "
                 f"{end_yr}s (n={n_end:,}): peak vs end {ratio_str_fall}. "
-                f"Piecewise breakpoint at {int(pw['pw_break_year'])}; "
+                f"Piecewise breakpoint at {bp_str}; "
                 f"rise slope = {pw['pw_slope_before']:+.4f}/decade "
                 f"(p = {pw['pw_slope_before_p']:.1e}), "
                 f"fall slope = {pw['pw_slope_after']:+.4f}/decade "
@@ -828,8 +844,13 @@ def report_arc(combined_df=None, genres=None,
         for line in prose_lines:
             print(line)
             print()
-        print(f"(Ratios use raw abstractness scores; reported only when "
-              f"both values have the same sign.)")
+        print(f"(Ratios use raw abstractness scores from the corpus-balanced "
+              f"(decade, corpus) aggregation used to select the key decades "
+              f"[see raw_*_pooled columns for text-pooled magnitudes]; "
+              f"reported only when both values have the same sign.)")
+        print("(Breakpoint selected by grid search over search_range/"
+              "search_step; slope p-values do not account for this "
+              "selection.)")
 
     return df
 
@@ -856,17 +877,28 @@ CENTURY_BINS = [
 def assign_period_score(df, source="Median", year_col="year"):
     """Pick the period-matched norm score for each text based on its year.
 
-    Adds two columns to df:
+    Adds columns to df:
       - 'period_score': the z-score from the century-matched norm column
-      - 'norm_period': the century label (C16, C17, ...) used
+      - 'norm_period': the century label (C16, C17, ...) used, or "median"
+        wherever the transhistorical-median fallback was used instead
+      - 'period_score_source': "period" if period_score came from the
+        century-matched column, "median" if it came from the fallback
 
     For a text from 1750, uses 'Abs-Conc.{source}.C18'.
-    Falls back to the cross-century median if the period column is missing or NaN.
+    Falls back to the cross-century median if the period column is missing
+    or NaN *for that row* -- note that a period column can exist but still
+    be NaN for individual rows (sparse per-period coverage), so the
+    label/source are only set to the period name where the period column
+    actually has a value; otherwise the row falls through to the median
+    fallback below and is labeled accordingly (this previously mislabeled
+    such rows as the period even though their score came from the median,
+    contaminating period fixed-effect groups).
     """
     df = df.copy()
     df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
     df["norm_period"] = None
     df["period_score"] = np.nan
+    df["period_score_source"] = None
 
     median_col = f"Abs-Conc.{source}.median"
 
@@ -874,14 +906,19 @@ def assign_period_score(df, source="Median", year_col="year"):
         col = f"Abs-Conc.{source}.{label}"
         mask = (df[year_col] >= lo) & (df[year_col] < hi)
         if col in df.columns:
-            df.loc[mask, "norm_period"] = label
-            df.loc[mask, "period_score"] = df.loc[mask, col]
+            have_val = mask & df[col].notna()
+            df.loc[have_val, "norm_period"] = label
+            df.loc[have_val, "period_score"] = df.loc[have_val, col]
+            df.loc[have_val, "period_score_source"] = "period"
 
-    # Fill NaN period_scores with the transhistorical median
+    # Fill NaN period_scores with the transhistorical median. This also
+    # catches (and relabels) rows whose period column exists but was NaN
+    # for that row, which "have_val" above deliberately left unset.
     if median_col in df.columns:
         still_nan = df["period_score"].isna()
         df.loc[still_nan, "period_score"] = df.loc[still_nan, median_col]
-        df.loc[still_nan & df["norm_period"].isna(), "norm_period"] = "median"
+        df.loc[still_nan, "norm_period"] = "median"
+        df.loc[still_nan, "period_score_source"] = "median"
 
     return df
 
@@ -1478,20 +1515,49 @@ def pct_in_range(rec, norm="Abs-Conc.Median.median", lo=None, hi=None):
     return in_range / total
 
 
+# Histograms from count_corpus_freqs (scoring.py:_count_freqs_allnorms) key
+# each 0.1-wide bin by its UPPER edge, half-open on the left: bin "e" holds
+# z in [e - _COUNT_BIN_WIDTH, e). Because of this, a value sitting exactly on
+# a cutoff always lands in the bin keyed cutoff + _COUNT_BIN_WIDTH, never the
+# bin keyed cutoff itself (verified against scoring.py's
+# `zip(bin_edges[1:], hist)` keying). The live scoring path (scoring.py
+# score_ids_ch) is inclusive at the cutoff (`v <= -cutoff_mag` / `v >=
+# cutoff_mag`). pct_concrete's `e > cutoff` already matches that exactly (a
+# bin's lower edge equalling cutoff means every value in it is >= cutoff, so
+# no approximation is needed). pct_abstract cannot be made exact the same
+# way -- the bin containing exact ties at cutoff also contains values above
+# cutoff -- so it folds that boundary bin into "abstract" to match the live
+# path's inclusive convention as closely as the 0.1-wide bins allow, rather
+# than silently implementing a strict "<" test that drops ties at cutoff.
+_COUNT_BIN_WIDTH = 0.1  # must match scoring.DEFAULT_BIN_EDGES's 0.1 step
+
+
 def pct_abstract(rec, norm="Abs-Conc.Median.median", cutoff=-1.0):
-    """Proportion of words with z-score ≤ cutoff (abstract words)."""
+    """Proportion of words with z-score <= cutoff (abstract words).
+
+    Boundary convention: inclusive at cutoff (matches the live scoring
+    path's `v <= -cutoff_mag`) as closely as the 0.1-wide count bins
+    allow -- see the module-level note above _COUNT_BIN_WIDTH.
+    """
     bins = rec.get(norm)
     if not bins:
         return np.nan
     total = sum(bins.values())
     if total == 0:
         return np.nan
-    abstract = sum(c for e, c in bins.items() if float(e) <= cutoff)
+    abstract = sum(c for e, c in bins.items() if float(e) <= cutoff + _COUNT_BIN_WIDTH)
     return abstract / total
 
 
 def pct_concrete(rec, norm="Abs-Conc.Median.median", cutoff=1.0):
-    """Proportion of words with z-score > cutoff (concrete words)."""
+    """Proportion of words with z-score >= cutoff (concrete words).
+
+    Boundary convention: bins are keyed by upper edge and half-open on
+    the left, so `e > cutoff` already selects exactly the bins whose
+    values are all >= cutoff (including exact ties, which fall in the
+    bin keyed cutoff + _COUNT_BIN_WIDTH) -- this exactly matches the
+    live scoring path's inclusive `v >= cutoff_mag`, no adjustment needed.
+    """
     bins = rec.get(norm)
     if not bins:
         return np.nan
@@ -1658,13 +1724,15 @@ def _report_one_measure(genre, gdf, score_col, corpus_col, label,
         f"{label}_n_texts_end": int(dec_n.get(end_yr, 0)),
     }
 
+    bp_str = (f"{int(pw['pw_break_year'])}"
+              if np.isfinite(pw["pw_break_year"]) else "insufficient data")
     prose = (
         f"  {label.capitalize()}:\n"
         f"    {start_yr}s: {pct_start:.1f}%  →  {peak_yr}s: {pct_peak:.1f}% (peak)  →  {end_yr}s: {pct_end:.1f}%\n"
         f"    Rise:  {pct_start:.1f}% → {pct_peak:.1f}% = {peak_vs_start:.1f}x ({start_yr}s→{peak_yr}s)\n"
         f"    Fall:  {pct_peak:.1f}% → {pct_end:.1f}% = {peak_vs_end:.1f}x ({peak_yr}s→{end_yr}s)\n"
         f"    Net:   {pct_start:.1f}% → {pct_end:.1f}% = {start_vs_end:.1f}x ({start_yr}s→{end_yr}s)\n"
-        f"    Breakpoint {int(pw['pw_break_year'])}; R² = {pw['pw_r2']:.3f}"
+        f"    Breakpoint {bp_str}; R² = {pw['pw_r2']:.3f}"
     )
     return row, prose
 
@@ -1777,6 +1845,9 @@ def report_arc_counts(combined_df=None, genres=None,
                     return f"{r:.1f}:1 (1:{1/r:.1f} conc/abs)"
                 return f"{r:.1f}:1"
 
+            bp_str = (f"{int(abs_row['abstract_breakpoint'])}"
+                      if np.isfinite(abs_row["abstract_breakpoint"]) else "insufficient data")
+
             genre_prose = [
                 f"{genre} (n = {len(gdf):,}):",
                 f"  Rise ({abs_start}s → {abs_peak}s):",
@@ -1796,7 +1867,7 @@ def report_arc_counts(combined_df=None, genres=None,
                 f"    Concrete: {c_s:.1f}% → {c_e:.1f}% ({_r(c_s, c_e):.1f}x decline)",
                 f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_s, r_e):.1f}x decline)" if r_e < r_s else
                 f"    Abs/Conc ratio: {_fmt_ratio(r_s)} → {_fmt_ratio(r_e)} ({_r(r_e, r_s):.1f}x increase)",
-                f"  Breakpoint {int(abs_row['abstract_breakpoint'])}; "
+                f"  Breakpoint {bp_str}; "
                 f"R² abstract = {abs_row['abstract_r2']:.3f}"
                 + (f", R² concrete = {conc_row['concrete_r2']:.3f}" if conc_row else ""),
             ]
@@ -1813,6 +1884,9 @@ def report_arc_counts(combined_df=None, genres=None,
             print()
         print(f"(Abstract: z ≤ {abs_cutoff}; Concrete: z > {conc_cutoff}; "
               f"proportions are frequency-weighted.)")
+        print("(Breakpoint selected by grid search over search_range/"
+              "search_step; slope p-values do not account for this "
+              "selection.)")
 
     return df
 
@@ -1909,7 +1983,7 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         cr = cr.iloc[0] if len(cr) else None
 
         n = f"{int(sr['n_texts_total']):,}"
-        bp = int(sr["breakpoint"])
+        bp = int(sr["breakpoint"]) if np.isfinite(sr["breakpoint"]) else "N/A"
         rise_p = _p_stars(sr["slope_before_p"])
         fall_p = _p_stars(sr["slope_after_p"])
         rise_slope = f"{sr['slope_before']:+.4f}/dec {rise_p}"
@@ -1934,7 +2008,15 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         peak_yr = int(sr["peak_decade"])
         end_yr = int(sr["end_decade"])
 
-        # Count-based values at score-based key decades
+        # Count-based values at the COUNT analysis's OWN key decades -- these
+        # generally differ from the score decades above, since the score and
+        # count piecewise fits are run independently and can pick different
+        # peak/trough decades. Labeling these rows with the score decades
+        # (as this used to do) would attribute count percentages to the
+        # wrong years whenever the two fits disagree.
+        cnt_start_yr = int(cr["abstract_start_decade"])
+        cnt_peak_yr = int(cr["abstract_peak_decade"])
+        cnt_end_yr = int(cr["abstract_end_decade"])
         a_s = cr["abstract_pct_start"]
         a_p = cr["abstract_pct_peak"]
         a_e = cr["abstract_pct_end"]
@@ -1952,42 +2034,45 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         lines.append("**Scores** (continuous weighted-mean concreteness, inverted so abstractness is up):")
         lines.append(f"- {start_yr}s: {sr['raw_start']:.4f} → {peak_yr}s: {sr['raw_peak']:.4f} → {end_yr}s: {sr['raw_end']:.4f}")
         lines.append(f"- Rise: +{sr['rise_sd']:.2f} SD | Fall: +{sr['fall_sd']:.2f} SD")
-        lines.append(f"- Breakpoint: {int(sr['breakpoint'])} | R² = {sr['r2']:.3f}")
+        bp_str = int(sr["breakpoint"]) if np.isfinite(sr["breakpoint"]) else "N/A"
+        lines.append(f"- Breakpoint: {bp_str} | R² = {sr['r2']:.3f}")
         rise_p_str = _p_stars(sr["slope_before_p"])
         fall_p_str = _p_stars(sr["slope_after_p"])
         lines.append(f"- Rise slope: {sr['slope_before']:+.4f}/decade (p = {sr['slope_before_p']:.1e}) {rise_p_str}")
         lines.append(f"- Fall slope: {sr['slope_after']:+.4f}/decade (p = {sr['slope_after_p']:.1e}) {fall_p_str}")
         lines.append("")
 
-        # Counts table
-        lines.append(f"**Word proportions** (abstract: z ≤ {abs_cutoff}, concrete: z > {conc_cutoff}):")
+        # Counts table -- key decades are the count analysis's own (may
+        # differ from the score decades reported above; see note above).
+        lines.append(f"**Word proportions** (abstract: z ≤ {abs_cutoff}, concrete: z > {conc_cutoff}; "
+                      f"key decades from the count analysis's own fit):")
         lines.append("")
         lines.append("| Phase | Abstract | Concrete | Abs/Conc ratio |")
         lines.append("|---|---|---|---|")
 
         lines.append(
-            f"| {start_yr}s (start) | {a_s:.1f}% | {c_s:.1f}% | {_fmt_ratio(r_s)} |"
+            f"| {cnt_start_yr}s (start) | {a_s:.1f}% | {c_s:.1f}% | {_fmt_ratio(r_s)} |"
         )
         lines.append(
-            f"| {peak_yr}s (peak) | {a_p:.1f}% | {c_p:.1f}% | {_fmt_ratio(r_p)} |"
+            f"| {cnt_peak_yr}s (peak) | {a_p:.1f}% | {c_p:.1f}% | {_fmt_ratio(r_p)} |"
         )
         lines.append(
-            f"| {end_yr}s (end) | {a_e:.1f}% | {c_e:.1f}% | {_fmt_ratio(r_e)} |"
+            f"| {cnt_end_yr}s (end) | {a_e:.1f}% | {c_e:.1f}% | {_fmt_ratio(r_e)} |"
         )
         lines.append(
-            f"| **Rise** ({start_yr}s→{peak_yr}s) "
+            f"| **Rise** ({cnt_start_yr}s→{cnt_peak_yr}s) "
             f"| {_safe_ratio(a_p, a_s):.1f}x "
             f"| {_safe_ratio(c_s, c_p):.1f}x decline "
             f"| {_safe_ratio(r_p, r_s):.1f}x |"
         )
         lines.append(
-            f"| **Fall** ({peak_yr}s→{end_yr}s) "
+            f"| **Fall** ({cnt_peak_yr}s→{cnt_end_yr}s) "
             f"| {_safe_ratio(a_p, a_e):.1f}x decline "
             f"| {_safe_ratio(c_e, c_p):.1f}x increase "
             f"| {_safe_ratio(r_p, r_e):.1f}x decline |"
         )
         lines.append(
-            f"| **Net** ({start_yr}s→{end_yr}s) "
+            f"| **Net** ({cnt_start_yr}s→{cnt_end_yr}s) "
             f"| {_safe_ratio(max(a_s, a_e), min(a_s, a_e)):.1f}x {'decline' if a_e < a_s else 'increase'} "
             f"| {_safe_ratio(max(c_s, c_e), min(c_s, c_e)):.1f}x {'increase' if c_e > c_s else 'decline'} "
             f"| {_safe_ratio(max(r_s, r_e), min(r_s, r_e)):.1f}x {'decline' if r_e < r_s else 'increase'} |"
@@ -2014,6 +2099,14 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         start_yr = int(sr["start_decade"])
         peak_yr = int(sr["peak_decade"])
         end_yr = int(sr["end_decade"])
+        # Count-based ratios below (r_s/r_p/r_e) are computed at the count
+        # analysis's own key decades, not the score decades above -- label
+        # them with cnt_*_yr so the prose doesn't attribute a percentage to
+        # the wrong year (see the per-genre detail block above for the
+        # same fix).
+        cnt_start_yr = int(cr["abstract_start_decade"])
+        cnt_peak_yr = int(cr["abstract_peak_decade"])
+        cnt_end_yr = int(cr["abstract_end_decade"])
         a_s = cr["abstract_pct_start"]
         a_p = cr["abstract_pct_peak"]
         a_e = cr["abstract_pct_end"]
@@ -2032,21 +2125,24 @@ def report_full(scores_df=None, counts_df=None, genres=None,
             f"Abstractness rises from the {start_yr}s to a peak in the {peak_yr}s "
             f"(+{sr['rise_sd']:.2f} SD), "
             f"then falls through the {end_yr}s (+{sr['fall_sd']:.2f} SD). "
-            f"At peak, {genre.lower()} has {_fmt_ratio(r_p)} abstract-to-concrete words, "
+            f"By word-proportion counts (own key decades: {cnt_start_yr}s/"
+            f"{cnt_peak_yr}s/{cnt_end_yr}s), at peak {genre.lower()} has "
+            f"{_fmt_ratio(r_p)} abstract-to-concrete words, "
         )
         if r_s >= 1:
-            prose += f"up from {_fmt_ratio(r_s)} in the {start_yr}s ({ratio_rise:.1f}x). "
+            prose += f"up from {_fmt_ratio(r_s)} in the {cnt_start_yr}s ({ratio_rise:.1f}x). "
         else:
-            prose += f"up from {_fmt_ratio(r_s)} in the {start_yr}s. "
+            prose += f"up from {_fmt_ratio(r_s)} in the {cnt_start_yr}s. "
         if r_e < 1:
             prose += (
-                f"By the {end_yr}s, the ratio inverts to {_fmt_ratio(r_e)} — "
+                f"By the {cnt_end_yr}s, the ratio inverts to {_fmt_ratio(r_e)} — "
                 f"a {ratio_fall:.1f}x decline from peak. "
             )
         else:
-            prose += f"By the {end_yr}s it falls to {_fmt_ratio(r_e)}. "
+            prose += f"By the {cnt_end_yr}s it falls to {_fmt_ratio(r_e)}. "
+        bp_str = int(sr["breakpoint"]) if np.isfinite(sr["breakpoint"]) else "N/A"
         prose += (
-            f"Piecewise breakpoint at {int(sr['breakpoint'])}; "
+            f"Piecewise breakpoint at {bp_str}; "
             f"rise slope = {sr['slope_before']:+.4f}/decade "
             f"(p = {sr['slope_before_p']:.1e}), "
             f"fall slope = {sr['slope_after']:+.4f}/decade "
@@ -2060,7 +2156,10 @@ def report_full(scores_df=None, counts_df=None, genres=None,
         f"*(Scores: continuous weighted-mean concreteness, inverted. "
         f"Proportions: frequency-weighted, abstract z ≤ {abs_cutoff}, "
         f"concrete z > {conc_cutoff}. "
-        f"All regressions include corpus fixed effects.)*"
+        f"All regressions include corpus fixed effects. "
+        f"Piecewise breakpoints are selected by grid search over "
+        f"search_range/search_step; slope p-values do not account for "
+        f"this selection.)*"
     )
 
     md = "\n".join(lines)
@@ -2195,7 +2294,7 @@ def report_compare(genres=None,
 
         if sr_raw is not None or sr_mod is not None:
             for label, key, fmt in [
-                ("Breakpoint", "breakpoint", lambda v: f"{int(v)}"),
+                ("Breakpoint", "breakpoint", lambda v: f"{int(v)}" if np.isfinite(v) else "insufficient data"),
                 ("Start decade", "start_decade", lambda v: f"{int(v)}s"),
                 ("Peak decade", "peak_decade", lambda v: f"{int(v)}s"),
                 ("End decade", "end_decade", lambda v: f"{int(v)}s"),
@@ -2224,7 +2323,7 @@ def report_compare(genres=None,
 
         if cr_raw is not None or cr_mod is not None:
             for label, key, fmt in [
-                ("Breakpoint (abstract)", "abstract_breakpoint", lambda v: f"{int(v)}"),
+                ("Breakpoint (abstract)", "abstract_breakpoint", lambda v: f"{int(v)}" if np.isfinite(v) else "insufficient data"),
                 ("Abstract start", "abstract_pct_start", lambda v: f"{v:.1f}%"),
                 ("Abstract peak", "abstract_pct_peak", lambda v: f"{v:.1f}%"),
                 ("Abstract end", "abstract_pct_end", lambda v: f"{v:.1f}%"),
@@ -2404,10 +2503,19 @@ def per_feature_r2(feat, groups, pca_components=50, top_n=30, emb_col="embedding
             v = feat[col].fillna(0).values.astype(float)
             if v.std() == 0:
                 continue
+            prevalence = v.mean()
+            # Center v: the regression below has no intercept term, so an
+            # uncentered (e.g. high-prevalence binary) feature would soak up
+            # part of Xp's mean through its own mean rather than through its
+            # variation, systematically understating R² for such features.
+            # Xp is already centered (via X_raw's centering + PCA), so both
+            # sides of the regression need to be mean-zero for R² to be
+            # comparable across features regardless of prevalence.
+            v = v - prevalence
             Y = v.reshape(-1, 1)
             beta = np.linalg.lstsq(Y, Xp, rcond=None)[0]
             r2 = 1 - ((Xp - Y @ beta) ** 2).sum() / total_ss
-            rows.append({"group": group, "feature": col, "R2": r2, "prevalence": v.mean()})
+            rows.append({"group": group, "feature": col, "R2": r2, "prevalence": prevalence})
     return pd.DataFrame(rows).sort_values("R2", ascending=False).head(top_n)
 
 
