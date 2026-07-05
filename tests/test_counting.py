@@ -1,10 +1,16 @@
+import functools
+import gzip
+import multiprocessing as mp
 import os
+from concurrent.futures import ProcessPoolExecutor
 
 import pandas as pd
 import pytest
 
+from abstraction.corpus import Corpus
 from abstraction.counting import (
     count_absconc,
+    count_absconc_corpus,
     count_absconc_path,
     count_absconc_psg,
     _count_window,
@@ -225,3 +231,147 @@ class TestCountAbsconcPath:
         for r in from_file:
             del r["path"]
         assert direct == from_file
+
+    def test_gz_only_corpus_counted_correctly(self, tmp_path):
+        """A gz-only corpus text must be gunzipped before counting, not read
+        as raw binary mojibake (regression test for counting.py:126-131)."""
+        corpus_dir = tmp_path / "mini_corpus"
+        txt_dir = corpus_dir / "txt"
+        txt_dir.mkdir(parents=True)
+        txt = "virtue rock table face justice"
+        with gzip.open(txt_dir / "text1.txt.gz", "wt", encoding="utf-8") as f:
+            f.write(txt)
+        pd.DataFrame({"id": ["text1"]}).to_csv(corpus_dir / "metadata.csv", index=False)
+
+        corpus = Corpus("mini_corpus", root=str(tmp_path))
+        path = corpus.text_path("text1")
+        assert path.endswith(".gz")  # no uncompressed sibling exists
+
+        results = count_absconc_path(path, window_len=5, sources={"Median"})
+        assert len(results) == 1
+        r = results[0]
+        # Real recognized tokens, not mojibake from reading the gzip binary
+        # directly as if it were utf-8 text.
+        assert r["num_abs"] == 2  # virtue, justice
+        assert r["num_conc"] == 2  # rock, table
+        assert r["num_neither"] == 1  # face
+        assert r["num_total"] == 5
+
+    def test_tok_i_keep_last_matches_in_loop_convention(self):
+        """The keep-last window's tok_i should use the same 1-indexed
+        convention as full windows (regression test for the i+2 off-by-one:
+        tok_i must equal the total token count, not total+1)."""
+        from abstraction.config import MODERNIZE_SPELLING
+        from abstraction.tokenize import tokenize as _tokenize
+
+        txt = "virtue rock table face justice"
+        expected_tok_i = len(_tokenize(txt, lower=False, modernize=MODERNIZE_SPELLING))
+        results = count_absconc(txt, window_len=100, keep_last=True, sources={"Median"})
+        assert len(results) == 1
+        assert results[0]["tok_i"] == expected_tok_i
+
+
+# ---------------------------------------------------------------------------
+# Tests for get_norms_for_counting
+# ---------------------------------------------------------------------------
+
+
+class TestGetNormsForCounting:
+    def test_explicit_source_bypasses_prefilter(self, monkeypatch):
+        """An explicit `sources` argument must bypass the SOURCES_FOR_COUNTING
+        prefilter, so callers can request a norm source outside the default
+        counting set instead of silently getting []."""
+        custom_contrast = {
+            "contrast": "Abs-Conc", "source": "Custom", "period": "custom",
+            "neg": {"virtue"}, "pos": {"rock"}, "neither": {"face"},
+        }
+        # SOURCES_FOR_COUNTING (patched by the autouse fixture) does NOT
+        # include "Custom".
+        monkeypatch.setattr(
+            "abstraction.counting._NORM_CONTRASTS", FAKE_CONTRASTS + [custom_contrast]
+        )
+        results = get_norms_for_counting(sources={"Custom"})
+        assert len(results) == 1
+        assert results[0]["source"] == "Custom"
+
+    def test_default_still_restricted_to_sources_for_counting(self, monkeypatch):
+        """With no explicit sources, the SOURCES_FOR_COUNTING default filter
+        still applies."""
+        custom_contrast = {
+            "contrast": "Abs-Conc", "source": "Custom", "period": "custom",
+            "neg": {"virtue"}, "pos": {"rock"}, "neither": {"face"},
+        }
+        monkeypatch.setattr(
+            "abstraction.counting._NORM_CONTRASTS", FAKE_CONTRASTS + [custom_contrast]
+        )
+        results = get_norms_for_counting()
+        sources = {dx["source"] for dx in results}
+        assert "Custom" not in sources
+        assert sources == {"Median", "Other"}
+
+
+# ---------------------------------------------------------------------------
+# Tests for count_absconc_psg window_len handling
+# ---------------------------------------------------------------------------
+
+
+class TestCountAbsconcPsgWindowLen:
+    def test_explicit_window_len_kwarg_does_not_double_pass(self):
+        """Passing window_len explicitly must not raise
+        'got multiple values for keyword argument' (regression test for the
+        double-pass bug), and the value must actually take effect."""
+        df = count_absconc_psg(
+            SAMPLE_TEXT, sources={"Median"}, periods={"median"}, window_len=3,
+        )
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) > 0
+        assert (df["num_tokens"] <= 3).all()
+
+
+# ---------------------------------------------------------------------------
+# Multiprocessing smoke test for count_absconc_corpus(incl_psg=True)
+# ---------------------------------------------------------------------------
+
+
+class TestCountAbsconcCorpusMultiproc:
+    def test_incl_psg_num_proc_2_smoke(self, tmp_path, monkeypatch):
+        """Regression test for the pickling crash: count_absconc_corpus's
+        incl_psg=True path used to submit a nested closure to
+        ProcessPoolExecutor, which always raised a pickling TypeError under
+        num_proc > 1. The fix moved the worker to a module-level function
+        (_count_absconc_path_psg); this must survive a real multiprocess
+        round-trip.
+
+        Uses a fork mp_context *for this test only* (monkeypatched onto
+        abstraction.corpus.ProcessPoolExecutor, not a production change) so
+        the forked workers inherit this test's fake norms cache instead of
+        needing the real ~15s allnorms.pkl.gz load.
+        """
+        fork_executor = functools.partial(
+            ProcessPoolExecutor, mp_context=mp.get_context("fork")
+        )
+        monkeypatch.setattr("abstraction.corpus.ProcessPoolExecutor", fork_executor)
+
+        corpus_dir = tmp_path / "mini_corpus"
+        txt_dir = corpus_dir / "txt"
+        txt_dir.mkdir(parents=True)
+        for i in range(1, 4):
+            (txt_dir / f"text{i}.txt").write_text(
+                "virtue rock table face justice " * 3, encoding="utf-8"
+            )
+        pd.DataFrame({"id": [f"text{i}" for i in range(1, 4)]}).to_csv(
+            corpus_dir / "metadata.csv", index=False
+        )
+        monkeypatch.setattr(
+            "abstraction.counting.load_corpus",
+            lambda name: Corpus(name, root=str(tmp_path)),
+        )
+
+        ofn = str(tmp_path / "out.csv.gz")
+        count_absconc_corpus("mini_corpus", num_proc=2, incl_psg=True, ofn=ofn)
+
+        assert os.path.exists(ofn)
+        df = pd.read_csv(ofn)
+        assert len(df) > 0
+        assert "passage" in df.columns
+        assert (df["num_abs"] + df["num_conc"] + df["num_neither"] == df["num_total"]).all()

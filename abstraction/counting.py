@@ -2,6 +2,7 @@
 Sliding-window counting of abstract/concrete words in texts.
 """
 
+import gzip
 import os
 from collections import Counter
 
@@ -27,13 +28,14 @@ _NORM_CONTRASTS = None
 def get_norms_for_counting(sources=None, periods=None):
     global _NORM_CONTRASTS
     if _NORM_CONTRASTS is None:
-        _NORM_CONTRASTS = [
-            dx for dx in get_allcontrasts(remove_stopwords=True)
-            if dx["source"] in SOURCES_FOR_COUNTING
-        ]
+        # Cache the full contrast set (unfiltered by SOURCES_FOR_COUNTING) so
+        # that an explicit `sources` argument can request norm sources
+        # outside the default counting set without silently returning [].
+        _NORM_CONTRASTS = get_allcontrasts(remove_stopwords=True)
+    allowed_sources = set(sources) if sources else SOURCES_FOR_COUNTING
     return [
         dx for dx in _NORM_CONTRASTS
-        if (not sources or dx["source"] in sources)
+        if dx["source"] in allowed_sources
         and (not periods or dx["period"] in periods)
     ]
 
@@ -67,10 +69,9 @@ def _count_window(dx, recog_tokens, all_tokens=None, incl_psg=False, vocab_len=5
     result["num_total"] = total
 
     if incl_psg and all_tokens is not None:
-        parens = {"(", "]"}
         psg = []
         for tok in all_tokens:
-            if tok in {"n't"} or (not tok[0].isalpha() and tok[0] not in parens):
+            if tok in {"n't"} or not tok[0].isalpha():
                 if psg:
                     psg[-1] += tok
                     continue
@@ -81,10 +82,7 @@ def _count_window(dx, recog_tokens, all_tokens=None, incl_psg=False, vocab_len=5
                 tok = f"<i><u>{tok}</u></i>"
             elif tokl in dx["neither"]:
                 tok = f"<i>{tok}</i>"
-            if psg and psg[-1] in parens:
-                psg[-1] += tok
-            else:
-                psg.append(tok)
+            psg.append(tok)
         result["passage"] = " ".join(psg).strip().replace("\n", "\n<br>")
 
     return result
@@ -117,24 +115,29 @@ def count_absconc(txt, window_len=COUNT_WINDOW_LEN, keep_last=True,
         if keep_last and recog_tokens:
             cdx = _count_window(dx, recog_tokens, all_tokens, incl_psg=incl_psg)
             cdx["slice"] = len(results) + 1
-            cdx["tok_i"] = i + 2 if tokens else 0
+            cdx["tok_i"] = i + 1 if tokens else 0
             results.append(cdx)
 
     return results
 
 
 def count_absconc_path(path, **kwargs):
-    """Count abstract/concrete words in a text file."""
+    """Count abstract/concrete words in a text file (gzip-aware)."""
     if path.endswith(".gz") and os.path.exists(path[:-3]):
         path = path[:-3]
-    with open(path, encoding="utf-8", errors="ignore") as f:
-        results = count_absconc(f.read(), **kwargs)
+    if path.endswith(".gz"):
+        with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as f:
+            txt = f.read()
+    else:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            txt = f.read()
+    results = count_absconc(txt, **kwargs)
     for dx in results:
         dx["path"] = path
     return results
 
 
-def count_absconc_psg(txt, sources=None, periods=None, **kwargs):
+def count_absconc_psg(txt, sources=None, periods=None, window_len=COUNT_WINDOW_LEN, **kwargs):
     """Count with passage text included, return sorted DataFrame."""
     if sources is None:
         sources = {"Median"}
@@ -142,7 +145,7 @@ def count_absconc_psg(txt, sources=None, periods=None, **kwargs):
         periods = {"median"}
     df = pd.DataFrame(count_absconc(
         txt, incl_psg=True, sources=sources, periods=periods,
-        window_len=COUNT_WINDOW_LEN, **kwargs,
+        window_len=window_len, **kwargs,
     ))
     if len(df):
         df["abs-conc"] = df["num_abs"] - df["num_conc"]
@@ -154,6 +157,21 @@ def count_absconc_psg(txt, sources=None, periods=None, **kwargs):
 # Corpus-level counting
 # ---------------------------------------------------------------------------
 
+def _count_absconc_path_psg(path):
+    """Corpus-level counting worker for incl_psg=True.
+
+    Defined at module level (rather than as a nested closure) so it can be
+    pickled by ProcessPoolExecutor when num_proc > 1.
+    """
+    try:
+        return count_absconc_path(
+            path, sources={"Median"}, periods={"median"}, incl_psg=True,
+        )
+    except Exception as e:
+        print(f"Error counting {path}: {e}")
+        return []
+
+
 def count_absconc_corpus(corpus_name, num_proc=1, incl_psg=False, ofn=None):
     """Count abstract/concrete words across all texts in a corpus."""
     corpus = load_corpus(corpus_name)
@@ -161,21 +179,7 @@ def count_absconc_corpus(corpus_name, num_proc=1, incl_psg=False, ofn=None):
     paths = [corpus.text_path(tid) for tid in meta["id"]]
     path2id = dict(zip(paths, meta["id"]))
 
-    func = count_absconc_path
-    if incl_psg:
-        def func(path):
-            try:
-                with open(path, encoding="utf-8", errors="ignore") as f:
-                    ld = count_absconc(
-                        f.read(), sources={"Median"}, periods={"median"},
-                        incl_psg=True,
-                    )
-                for dx in ld:
-                    dx["path"] = path
-                return ld
-            except Exception as e:
-                print(f"Error counting {path}: {e}")
-                return []
+    func = _count_absconc_path_psg if incl_psg else count_absconc_path
 
     if not ofn:
         psg_tag = ".psgs" if incl_psg else ""
@@ -192,8 +196,9 @@ def count_absconc_corpus(corpus_name, num_proc=1, incl_psg=False, ofn=None):
                 dx["id"] = path2id.get(dx.pop("path", ""))
                 yield dx
 
-    header = ["id", "slice", "source", "period", "num_abs", "num_conc",
-              "num_neither", "num_total", "num_types"]
+    header = ["id", "slice", "tok_i", "source", "period", "contrast",
+              "num_words", "num_tokens", "num_types",
+              "num_abs", "num_conc", "num_neither", "num_total"]
     if incl_psg:
         header.append("passage")
     else:

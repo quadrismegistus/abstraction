@@ -99,14 +99,17 @@ def _camel_to_snake(name):
 # ---------------------------------------------------------------------------
 
 def pmap(func, items, num_proc=1, desc=None):
-    """Parallel map returning a list of results."""
+    """Parallel map returning a list of results, in input order."""
     if num_proc <= 1:
         return [func(item) for item in tqdm(items, desc=desc)]
     with ProcessPoolExecutor(max_workers=num_proc) as pool:
         futures = [pool.submit(func, item) for item in items]
+        pbar = tqdm(total=len(futures), desc=desc)
         results = []
-        for f in tqdm(as_completed(futures), total=len(futures), desc=desc):
+        for f in futures:
             results.append(f.result())
+            pbar.update(1)
+        pbar.close()
         return results
 
 

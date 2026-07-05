@@ -79,6 +79,13 @@ def save_skipgrams_from_paths(paths, ofn, min_len=10, fast=False, max_skipgrams=
                     return
 
 
+def _gen_skipgrams_worker(obj):
+    """Module-level worker for gen_skipgrams_corpus (must be picklable for
+    ProcessPoolExecutor — a nested closure isn't)."""
+    paths, ofn, fast, max_skipgrams = obj
+    save_skipgrams_from_paths(paths, ofn, fast=fast, max_skipgrams=max_skipgrams)
+
+
 def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
                          min_year=None, max_year=None, num_proc=1, force=False,
                          output_dir=None, fast=False, max_skipgrams=None):
@@ -101,12 +108,9 @@ def gen_skipgrams_corpus(corpus_name, period_len=MODEL_PERIOD_LEN,
         ofn = os.path.join(oroot, period, "skipgrams.txt.gz")
         if not force and os.path.exists(ofn):
             continue
-        objs.append((paths, ofn))
+        objs.append((paths, ofn, fast, max_skipgrams))
 
-    def _do(obj):
-        save_skipgrams_from_paths(obj[0], obj[1], fast=fast, max_skipgrams=max_skipgrams)
-
-    pmap(_do, objs, num_proc=num_proc, desc="Generating skipgrams by period")
+    pmap(_gen_skipgrams_worker, objs, num_proc=num_proc, desc="Generating skipgrams by period")
 
 
 def load_skipgrams(fn, num_skips=None, max_memory_gb=1.0):
@@ -154,10 +158,11 @@ class StreamingSkipgrams:
 
     def _count_lines(self):
         opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
+        n = 0
         with opener as f:
-            for i, _ in enumerate(f):
+            for n, _ in enumerate(f, start=1):
                 pass
-        return i + 1
+        return n
 
     def __iter__(self):
         opener = gzip.open(self.fn, "rb") if self.fn.endswith(".gz") else open(self.fn)
@@ -362,6 +367,14 @@ def _gen_vecnorms_for_model(pathd, words=None, contrasts=None):
     return norms
 
 
+def _gen_vecnorms_worker(args):
+    """Module-level worker so gen_vecnorms's per-run scoring can be
+    parallelized with ProcessPoolExecutor (a nested closure isn't picklable).
+    """
+    pathd, contrasts = args
+    return _gen_vecnorms_for_model(pathd, contrasts=contrasts)
+
+
 def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None,
                  contrasts=None, output_path=None, regenerate_allnorms=True):
     """Generate vector-based word norms aggregated by time period.
@@ -384,7 +397,11 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None,
         if bin_year_by == 100:
             return f"C{(y // 100) + 1}"
         elif bin_year_by == 50:
-            return f"C{(y // 100) + 1}{'e' if int(str(y)[2]) < 5 else 'l'}"
+            # Half-century bin: century number + early/late half, computed
+            # arithmetically (not via string indexing, which breaks for
+            # years < 1000).
+            decade_digit = (y // 10) % 10
+            return f"C{(y // 100) + 1}{'e' if decade_digit < 5 else 'l'}"
         return str(y // bin_year_by * bin_year_by)
 
     paths_df = pd.DataFrame(get_model_paths(model_dir=model_dir))
@@ -406,14 +423,31 @@ def gen_vecnorms(bin_year_by=MODEL_PERIOD_LEN, num_proc=1, model_dir=None,
         for (corpus, ps, pe), cdf in corpus_groups:
             runs = cdf.to_dict("records")
             rows = []
-            for pathd in runs:
-                model_i += 1
-                print(f"  [{model_i}/{total_models}] {period} / {corpus} / {pathd.get('run', 'single')} "
-                      f"...", end=" ", flush=True)
-                model_rows = _gen_vecnorms_for_model(pathd, contrasts=contrasts)
-                rows.extend(model_rows)
-                n_words = len(set(r["word"] for r in model_rows)) if model_rows else 0
-                print(f"{n_words:,} words scored")
+            if num_proc > 1 and len(runs) > 1:
+                # Each run's model is scored independently, so the runs of
+                # a single corpus/period group can be farmed out to workers.
+                print(f"  [{model_i + 1}-{model_i + len(runs)}/{total_models}] "
+                      f"{period} / {corpus} ({len(runs)} runs, {num_proc} workers) ...",
+                      flush=True)
+                model_i += len(runs)
+                for model_rows in pmap(
+                    _gen_vecnorms_worker,
+                    [(pathd, contrasts) for pathd in runs],
+                    num_proc=num_proc,
+                    desc=f"{period}/{corpus}",
+                ):
+                    rows.extend(model_rows)
+                n_words = len(set(r["word"] for r in rows)) if rows else 0
+                print(f"    {n_words:,} words scored (parallel)")
+            else:
+                for pathd in runs:
+                    model_i += 1
+                    print(f"  [{model_i}/{total_models}] {period} / {corpus} / {pathd.get('run', 'single')} "
+                          f"...", end=" ", flush=True)
+                    model_rows = _gen_vecnorms_for_model(pathd, contrasts=contrasts)
+                    rows.extend(model_rows)
+                    n_words = len(set(r["word"] for r in model_rows)) if model_rows else 0
+                    print(f"{n_words:,} words scored")
             if rows:
                 cdf_norms = pd.DataFrame(rows).groupby(["word", "source"]).median(numeric_only=True).reset_index()
                 cdf_norms["corpus"] = corpus

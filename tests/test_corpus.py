@@ -8,6 +8,15 @@ from abstraction.corpus import _camel_to_snake, Corpus, load_corpus, pmap
 FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "test_corpus")
 
 
+def _sleep_return(x):
+    """Module-level (picklable) worker: sleeps longer for smaller x, so a
+    naive as_completed()-ordered implementation would return results out of
+    input order."""
+    import time
+    time.sleep(0.05 * (5 - x))
+    return x
+
+
 class TestCamelToSnake:
     def test_simple(self):
         assert _camel_to_snake("CanonFiction") == "canon_fiction"
@@ -81,3 +90,11 @@ class TestPmap:
     def test_empty(self):
         results = pmap(lambda x: x, [], num_proc=1)
         assert results == []
+
+    def test_num_proc_2_preserves_input_order(self):
+        """pmap must return results in input order even when num_proc > 1:
+        ProcessPoolExecutor's as_completed() yields futures in completion
+        order, which can differ from submission order (regression test for
+        corpus.py's pmap ordering bug)."""
+        results = pmap(_sleep_return, list(range(5)), num_proc=2)
+        assert results == list(range(5))
