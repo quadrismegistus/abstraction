@@ -114,6 +114,15 @@ class TestEstimateCorpusBias:
         coef = result["coefficients"]["biased_low"]
         assert abs(coef - (-0.05)) < 1e-8
 
+    def test_missing_reference_raises(self):
+        """A reference corpus absent from the data raises instead of
+        silently re-basing on another corpus (which once nearly saved an
+        English-referenced table to the French coefficients file)."""
+        df = self._make_match_data()
+        with pytest.raises(ValueError, match="no match-group"):
+            estimate_corpus_bias(df, reference_corpus="not_in_data",
+                                  min_group_overlap=5)
+
     def test_disconnected_corpora_get_no_coefficient(self):
         """Corpora with no comparison path to the reference are reported
         as uncalibrated and excluded from coefficients (no arbitrary values)."""

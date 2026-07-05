@@ -692,14 +692,29 @@ def cmd_score_passages(args):
 
 
 def cmd_estimate_corpus_bias(args):
-    from .corpus_correction import estimate_corpus_bias, save_corpus_bias
+    import os
+    from .config import SCORES_DIR
+    from .corpus_correction import (
+        _LANG_BIAS_FILES, LANG_CH_SOURCES, estimate_corpus_bias,
+        load_match_group_scores_ch, save_corpus_bias)
+    lang = getattr(args, "lang", "en") or "en"
+    if lang == "en":
+        df = None  # default freqs-cache loader
+        reference = args.reference
+    else:
+        df = load_match_group_scores_ch(lang, score_col=args.score_col)
+        # --reference default is the English ecco_tcp; swap in the
+        # language's own reference unless the user overrode it
+        reference = (args.reference if args.reference != "ecco_tcp"
+                     else LANG_CH_SOURCES[lang]["reference"])
     result = estimate_corpus_bias(
+        df=df,
         score_col=args.score_col,
-        reference_corpus=args.reference,
+        reference_corpus=reference,
         min_group_overlap=args.min_overlap,
     )
     if result:
-        save_corpus_bias(result)
+        save_corpus_bias(result, os.path.join(SCORES_DIR, _LANG_BIAS_FILES[lang]))
 
 
 def cmd_gen_vecnorms(args):
@@ -928,8 +943,10 @@ def main():
 
     # estimate-corpus-bias
     p = sub.add_parser("estimate-corpus-bias", help="Estimate corpus bias coefficients from match group comparisons")
+    p.add_argument("--lang", default="en", choices=["en", "fr", "de", "es"],
+                   help="Language arc: en uses the freqs-cache loader; fr/de/es load from CH scores_{lang} (native corpora only)")
     p.add_argument("--score-col", default="Abs-Conc.Median.median", help="Score column to use")
-    p.add_argument("--reference", default="ecco_tcp", help="Reference corpus (bias=0)")
+    p.add_argument("--reference", default="ecco_tcp", help="Reference corpus (bias=0; for non-en langs defaults to the language's own reference)")
     p.add_argument("--min-overlap", type=int, default=10, help="Min match groups per corpus")
 
     # app: start web app servers

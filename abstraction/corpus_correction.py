@@ -79,6 +79,62 @@ def load_match_group_scores(score_col=DEFAULT_SCORE_COL, modernize=False):
     return multi[["group_id", "corpus", "path_freqs", "score"]].reset_index(drop=True)
 
 
+# Per-language CH scores tables, native corpora, and reference corpus.
+# native corpora only: scores_fr/de also contain foreign-language texts
+# from corpora like ecco/txtlab whose names collide with the English
+# coefficients in load_all_corpus_bias()'s merged lookup — a coefficient
+# saved under a colliding name would overwrite the English one.
+LANG_CH_SOURCES = {
+    "fr": {
+        "table": "abstraction.scores_fr",
+        "native_corpora": {"gallica_literary_fictions", "artfl", "french_pd_books"},
+        "reference": "gallica_literary_fictions",
+    },
+    "de": {
+        "table": "abstraction.scores_de",
+        "native_corpora": {"dta", "german_fiction", "german_pd", "de_corp"},
+        "reference": "dta",
+    },
+    "es": {
+        # NOTE: as of 2026-07 only ~3 multi-corpus match groups exist
+        # (spanish_pd_books x impact_es) — too few to estimate.
+        "table": "abstraction.scores_es",
+        "native_corpora": {"spanish_pd_books", "impact_es"},
+        "reference": "spanish_pd_books",
+    },
+}
+
+
+def load_match_group_scores_ch(lang, score_col=DEFAULT_SCORE_COL):
+    """Load per-text scores joined with match groups from ClickHouse,
+    for a non-English language arc. Returns the same shape as
+    load_match_group_scores(): group_id, corpus, score (multi-corpus
+    groups only), restricted to that language's native corpora.
+    """
+    import clickhouse_connect
+
+    src = LANG_CH_SOURCES[lang]
+    client = clickhouse_connect.get_client(
+        host="localhost", port=8123, username="lltk", password="lltk")
+    try:
+        df = client.query_df(f"""
+            SELECT mg.group_id AS group_id,
+                   splitByChar('/', substring(s._id, 2))[1] AS corpus,
+                   s.`{score_col}` AS score
+            FROM {src["table"]} s
+            JOIN (SELECT _id, group_id FROM lltk.match_groups FINAL) mg
+              ON s._id = mg._id
+            WHERE isFinite(s.`{score_col}`)
+        """)
+    finally:
+        client.close()
+    df = df[df["corpus"].isin(src["native_corpora"])]
+    multi = df.groupby("group_id").filter(lambda g: g["corpus"].nunique() > 1)
+    print(f"  {src['table']}: {multi['group_id'].nunique()} multi-corpus groups "
+          f"({len(multi)} texts), corpora: {sorted(multi['corpus'].unique())}")
+    return multi.reset_index(drop=True)
+
+
 def estimate_corpus_bias(
     df=None,
     score_col=DEFAULT_SCORE_COL,
@@ -132,10 +188,14 @@ def estimate_corpus_bias(
             break
 
     if ref_component is None:
-        print(f"  Warning: reference corpus '{reference_corpus}' not found in "
-              f"any component. Using largest component's first corpus.")
-        ref_component = max(components, key=len)
-        reference_corpus = sorted(ref_component)[0]
+        # Refuse rather than silently re-basing on another corpus: a
+        # coefficients file saved against the wrong reference corrupts
+        # every downstream correction.
+        raise ValueError(
+            f"Reference corpus '{reference_corpus}' has no match-group "
+            f"comparisons in this data. Available corpora: "
+            f"{sorted(set(df['corpus']))}"
+        )
 
     uncalibrated = []
     for comp in components:
@@ -286,6 +346,7 @@ _LANG_BIAS_FILES = {
     "en": "corpus_bias_coefficients.json",
     "fr": "corpus_bias_coefficients_fr.json",
     "de": "corpus_bias_coefficients_de.json",
+    "es": "corpus_bias_coefficients_es.json",
 }
 
 
